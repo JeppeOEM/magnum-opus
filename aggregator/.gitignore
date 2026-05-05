@@ -1,0 +1,13 @@
+# Credentials — never commit
+.env
+
+# Build output
+/bin/
+*.out
+*.test
+
+# Coverage profiles
+coverage*.out
+
+# OS
+.DS_Store

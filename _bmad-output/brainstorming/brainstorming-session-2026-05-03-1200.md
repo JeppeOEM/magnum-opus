@@ -817,3 +817,303 @@ coverage:         go test -covermode=atomic | awk '{if ($3+0 < 80) exit 1}'
 ```
 
 Layers 1–3 run on every PR. Layer 4 runs on merge to main only (Docker spin-up cost). Coverage gate on every PR measures Layers 1–3.
+
+---
+
+### Layer 5: Live Exchange Smoke Tests (18 tests, manual trigger only)
+
+Run with `go test -v -tags live ./live/... -timeout 120s` with real API credentials. Never run in CI. Triggered on-demand: before production deployment, after config changes, after exchange outages.
+
+**Excluded by design:** Rate limit recovery (no need to deliberately trigger exchange bans during testing) and KuCoin subscription count boundary (won't be near the 300-symbol limit initially).
+
+**Known gap:** Bybit private feed HMAC auth — no live test. Private feed is out of V1 scope.
+
+| Test | Asserts |
+|---|---|
+| `TestLive_KuCoinTokenFetch` | REST `/api/v1/bullet-public` returns valid WS token and endpoint URL |
+| `TestLive_KuCoinConnect` | WebSocket connects with token; subscription ack received within 5s |
+| `TestLive_KuCoinFirstTick` | First tick received for BTCUSDT within 10s of subscribe |
+| `TestLive_KuCoinPingPong` | Heartbeat ping sent; pong received within configured interval |
+| `TestLive_KuCoinTokenRenewal` | Token TTL overridden to 30s; connector auto-renews via REST; resumes ticks without gap marker |
+| `TestLive_BybitConnect` | WebSocket connects to `wss://stream.bybit.com/v5/public/spot` |
+| `TestLive_BybitSubscribe` | `orderbook.200.BTCUSDT` subscription returns success response |
+| `TestLive_BybitFirstTick` | First orderbook update received within 10s |
+| `TestLive_BybitSubscriptionLimit` | 10 subscriptions succeed on one connection; 11th triggers split to new connection, not error |
+| `TestLive_BybitDeadConnection` | TCP drop simulated via Toxiproxy against real endpoint; connector detects via ping timeout; reconnects; resumes |
+| `TestLive_KuCoinSequenceContinuity` | 30s of ticks recorded; force reconnect; assert sequence tracker does not reset to 0; assert no false gap on first tick after snapshot |
+| `TestLive_MultiSymbolInterleaving` | 10 symbols, 60s; all symbols receive ticks; no symbol's `symbol` field contains another symbol's value; no symbol stale > 10s |
+| `TestLive_RedisLatency` | p99 latency from `exchange_ts` to Redis Stream message ID < 50ms over 60s window |
+| `TestLive_QuestDBPipeline` | 60s live ticks; query QuestDB; row count matches expected; no `ts = 1970`; `exchange_ts` within 5s of `local_ts` |
+| `TestLive_HealthAccuracy` | `/health` polled every 1s for 60s; `connected: true` stable; `symbols_up` matches config; `gaps_last_hour = 0` |
+| `TestLive_GracefulShutdown` | SIGTERM during live tick flow; clean shutdown ≤5s; all in-flight ILP rows in QuestDB; exit 0 |
+| `TestLive_BothExchangesSimultaneous` | KuCoin + Bybit both connected; 5 symbols each; 60s; assert no cross-contamination between exchange tick streams |
+| `TestLive_GapMarkerNotFiredOnCleanSession` | 60s clean session on both exchanges; assert `aggregator_gaps_total` remains 0 throughout |
+
+**Coverage completeness against failure categories:**
+
+| Category | Mock (L1–L4) | Live (L5) |
+|---|---|---|
+| Token fetch + renewal | Controlled mock renewal | Real API token renewal (30s TTL override) |
+| Exchange-side disconnect | Close frame via mock | TCP dead connection via Toxiproxy |
+| Sequence continuity | Controlled seq numbers | Real seq across real reconnect |
+| Multi-symbol correctness | 2 symbols max in mock | 10 symbols, 60s live |
+| Write latency | Not measurable in mock | Real p99 measurement |
+| QuestDB full pipeline | Fake QuestDB | Real rows, real timestamps |
+| Health endpoint accuracy | Simulated state | Real connection state, 60s |
+| Graceful shutdown | Mock exchange load | Real exchange load |
+| Cross-exchange isolation | Single exchange per test | Both exchanges simultaneously |
+| Clean session baseline | N/A | Zero gaps over 60s clean window |
+
+---
+
+### Decision Tree — Coverage Analysis
+
+**Root question: Could wrong or missing data reach Redis or QuestDB?**
+
+Two branches: Wrong data (correct quantity, wrong values) and Missing data (gaps).
+
+#### Gaps Found — 7 missing tests (filled)
+
+| # | Gap | Severity | Test Added |
+|---|---|---|---|
+| G1 | Unknown exchange field silently corrupts state | Medium | `TestParse_UnknownFieldIgnored` [L1] |
+| G2 | JSON field names not validated against schema | Medium | `TestSerialize_FieldNames` [L1] |
+| G3 | [DB #7] doesn't assert correct table name | Low | Extended [DB #7] |
+| G4 | ILP queue depth limit under QuestDB backpressure | High | `TestILPBackpressure_QueueLimit` [L4] |
+| G5 | Unknown symbol subscription error not logged/marked down | High | `TestSymbolNorm_UnknownSymbolLoggedAndMarkedDown` [L3] |
+| G6 | Redis wrong instance not detected at startup | High | `TestStartup_RedisSentinelKeyVerification` [L4b] |
+| G7 | Memory growth not bounded under sustained load | Medium | `TestMemoryGrowth_Bounded` [L4b] |
+
+---
+
+### Pre-mortem Analysis — Structural Testing Holes
+
+**Premise:** 69 tests pass, service ships, data still corrupts. How did it get through?
+
+7 structural holes found. 200-symbol concurrency hole explicitly excluded (does not matter for this scale).
+
+| Hole | Root Cause | Fix |
+|---|---|---|
+| Version gap | Test infra pinned at specific versions, production drifts | `TestVersionParity` [L5 + deploy pre-check] — assert QuestDB + Redis versions match pinned test versions at runtime |
+| Latency-dependent gap marker ordering | Tests use sub-ms local Docker Redis; ordering guarantee breaks at 3ms+ | `TestGapMarkerOrder_UnderLatency` [L4] — Toxiproxy adds 5ms, assert ordering still holds; forces atomic Redis pipeline for gap marker + tick |
+| Quiet fixture problem | Capture sessions are average traffic; peak (10× at exchange open) never tested | 10× stress replay mode in `cmd/capture --stress`; `TestHighThroughput_10x` [L4b] — 60s at 10× speed, assert no backpressure gaps |
+| 24-hour memory leak | No test runs > 5 minutes; 30-day unattended requirement has no test | `TestMemoryGrowth_Bounded` [L4b] — 10 min with continuous level insert/delete, assert sublinear RSS growth; 48h canary deployment gate before production |
+| Library trust | Tests verify aggregator code, not ILP client retry behavior under timeouts | `TestILPClient_NoDoubleCommitOnTimeout` [L4] — fake QuestDB delays response past timeout, assert exactly N rows not 2N |
+| First-30-seconds window | Full stack Docker test starts from replay frame 1, skips connect/subscribe/snapshot startup sequence | Full stack test must include startup: connect → subscribe → snapshot against embedded mock exchange, then begin replay |
+| Credential assumption | Layer 5 uses dev credentials; prod credentials get different error response formats | `TestLive_ErrorResponseFormat` [L5] — trigger one intentional rate limit hit, assert error parsed correctly regardless of format (JSON vs WebSocket close frame) |
+
+**Final test suite totals after all additions:**
+
+| Layer | Count | Trigger |
+|---|---|---|
+| L1 — Pure functions | 16 | Every PR |
+| L2 — State machine | 6 | Every PR |
+| L3 — Mock WS integration | 7 | Every PR |
+| L4 — Fault injection (Docker) | 11 | Merge to main |
+| L4b — Full stack Docker | 13 | Merge to main |
+| L5 — Live exchange | 19 | Manual on-demand |
+| **Total** | **72** | — |
+
+**Non-test deployment gates:**
+- 48h canary run (single symbol pair, RSS sampled every 10 min) before any production deployment
+- `TestVersionParity` runs as deployment pre-check against production infrastructure
+
+---
+
+### Assumption Reversal + Six Thinking Hats — Additions
+
+#### New tests from Assumption Reversal
+
+| Test | Layer | Assumption Challenged |
+|---|---|---|
+| `TestFuzz_IncomingWsFrames` — feed random mutations of valid captured frames (truncated JSON, extra fields, wrong types, null where string expected); assert no panic, no silent corruption | L1 | "Mock WS accurately represents real exchange behaviour" |
+| `TestOrderBook_Invariants` — after every delta, assert: bids strictly descending, asks strictly ascending, no bid >= any ask, no size=0 level in map | L2 | "Race detector catches all concurrency bugs" |
+| `TestDetectGap_LargeSequenceNumber` — parse seq=9007199254740993 and seq=9007199254740994; assert treated as distinct; assert no false gap (float64 precision at 2^53+1) | L1 | "Sequence numbers are always safe as JSON numbers" |
+| `TestCrash_DataLossWindow` — SIGKILL (not SIGTERM) mid-write; restart; assert missing rows ≤ ceil(commit_lag_ms / tick_interval_ms); quantifies actual crash loss window | L4b | "500ms flush = 500ms data loss on crash" (actual loss = commit lag = 1000ms) |
+
+#### Process additions from Six Thinking Hats
+
+- **`TEST_TIMEOUT_MULTIPLIER=2` CI environment variable** — all test deadlines multiply by 2 in CI; parametrized not hardcoded; documented in `TESTING.md`
+- **`TESTING.md` at repo root** — every test documented with: layer, purpose, failure mode it catches; maintained as the authoritative test catalogue
+- **GitHub branch protection required status checks** — L1+L2+L3 required on every PR; L4+L4b required on merge to main; enforced not conventional
+- **Layer 3 chaos mode** — optional `--chaos` flag on mock WS server that randomly delays/duplicates/drops 1% of messages; run as separate `test-chaos` target to find timing-sensitive tests
+
+#### Updated totals (Assumption Reversal + Six Hats only, Chaos Monkey excluded)
+
+| Layer | Count | Trigger |
+|---|---|---|
+| L1 — Pure functions | 18 | Every PR |
+| L2 — State machine | 7 | Every PR |
+| L3 — Mock WS integration | 7 | Every PR |
+| L4 — Fault injection (Docker) | 11 | Merge to main |
+| L4b — Full stack Docker | 14 | Merge to main |
+| L5 — Live exchange | 19 | Manual on-demand |
+| **Total** | **76** | — |
+
+---
+
+### Fixture Architecture — 24-Hour Automated Refresh
+
+Fixtures are **not committed to the repo**. They are living data — refreshed every 24 hours by a scheduled capture job, always reflecting current exchange message formats.
+
+**Capture schedule:** Systemd timer on the dev/staging machine, fires daily at 08:00 UTC (before most market opens). Captures 10 minutes of traffic from both exchanges, 5 symbols each (BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT).
+
+**Refresh cycle:**
+1. `cmd/capture` runs, writes new session files to `/tmp/fixtures-new/`
+2. Verifies capture is valid (minimum frame count per symbol, no parse errors)
+3. Uploads new fixtures to Backblaze B2 bucket `magnum-opus-fixtures/latest/` — **overwrites** previous
+4. Deletes `/tmp/fixtures-new/`
+5. Previous fixture is gone — no accumulation, no stale data
+
+**CI access:** Before running Layer 3 replay and Layer 4b full stack tests, CI downloads the `latest/` fixtures from B2:
+```makefile
+fixtures-pull:
+    rclone sync b2:magnum-opus-fixtures/latest/ ./testdata/fixtures/
+```
+`testdata/fixtures/` is in `.gitignore` — never committed.
+
+**Fixture validation in CI:** If `testdata/fixtures/` is empty or older than 25 hours, CI fails with: "Fixtures stale or missing — run `make fixtures-pull` or check capture job." Forces explicit acknowledgement of missing fixtures rather than silently running without them.
+
+**Failure handling:** If the capture job fails (exchange down, credential issue), the previous fixture remains in B2 (B2 keeps one version back). CI uses the previous version and logs a warning: "Fixtures are N hours old — capture job may have failed."
+
+**Fixture format:** Each file is a `.jsonl` (one JSON line per WebSocket frame + connection event). Filename: `{exchange}-{symbols}-{date}.jsonl`. The `latest/` prefix always contains exactly one file per exchange.
+
+**What fixtures cover that they didn't before:** Because captures run daily at market open (08:00 UTC catches Asian session open for Bybit), the fixture library naturally captures higher-volatility periods. The 24-hour refresh also means exchange protocol changes (new field added, type changed) surface within 24 hours — the capture job would either capture the new format or fail validation, alerting you before CI breaks silently.
+
+---
+
+### Rationalized Final Test Suite
+
+**Constraint:** Tests run on local PC. GitHub Actions used minimally (no paid minutes).
+
+#### Trigger Model
+
+| Trigger | Tests | Where | Time |
+|---|---|---|---|
+| Pre-commit hook | L1 only | Local | ~2s |
+| Pre-push hook | L1 + L2 + L3 | Local | ~30s |
+| `make test-all` (pre-release) | L1 + L2 + L3 + L4 + L4b | Local | ~10min |
+| GitHub Actions (on push) | L1 + L2 only | GitHub | ~45s, free tier |
+| Manual on-demand | L5 live exchange | Local | ~2min |
+
+#### Final Test Catalogue — 61 Tests
+
+**L1 — Pure functions (19 tests, pre-commit + GitHub Actions)**
+
+| Test | Failure mode caught |
+|---|---|
+| `TestApplyDelta_AddLevel` | New level insertion |
+| `TestApplyDelta_UpdateLevel` | Level size update |
+| `TestApplyDelta_DeleteLevel` | size=0 removes level |
+| `TestApplyDelta_DeleteNonExistent` | Delete non-existent = no-op |
+| `TestSortBids_DescendingPrice` | Bid ordering |
+| `TestSortAsks_AscendingPrice` | Ask ordering |
+| `TestDetectGap_FirstTick` | False gap on connect |
+| `TestDetectGap_ContiguousSeq` | No gap on prev+1 |
+| `TestDetectGap_MissedTicks` | Correct gap detection |
+| `TestDetectGap_Duplicate` | Duplicate seq = no gap |
+| `TestDetectGap_Wrap` | uint32 rollover = no gap |
+| `TestDetectGap_LargeSequenceNumber` | float64 precision loss at 2^53+1 |
+| `TestNormalizeSymbol_KuCoin` | BTC-USDT → BTCUSDT |
+| `TestNormalizeSymbol_Bybit` | Already normalized unchanged |
+| `TestPriceStringToKey` | String price map key consistency |
+| `TestSerialize_FieldNames` | JSON field names match schema |
+| `TestFuzz_IncomingWsFrames` | Unknown/malformed exchange frames |
+| `TestConfig_UnknownSymbolValidation` | Unknown symbol logged, health marked down |
+| `TestNormalizeSymbol_KeyFormat` | Stream key format, no raw exchange format leaks |
+
+**L2 — State machine (7 tests, pre-commit + GitHub Actions)**
+
+| Test | Failure mode caught |
+|---|---|
+| `TestOrderBook_ApplySnapshot` | Full book reset, prior levels cleared |
+| `TestOrderBook_ApplyDeltaSequence` | 10 sequential deltas → correct state |
+| `TestOrderBook_ReconnectMerge` | Snapshot at seq N, buffered N-5→N+10, exactly N+1→N+10 replayed |
+| `TestOrderBook_MidStreamSnapshot` | Unprompted snapshot resets book, no gap |
+| `TestOrderBook_Invariants` | After every delta: bids descending, asks ascending, no bid≥ask, no size=0 |
+| `TestGapTracker_InternalBufferDrop` | gap_cause = internal_buffer_overflow |
+| `TestGapTracker_ExternalDisconnect` | gap_cause = external_disconnect |
+
+**L3 — Mock WS integration (6 tests, pre-push local)**
+
+| Test | Failure mode caught |
+|---|---|
+| `TestKuCoinConnector_ConnectAndReceiveTick` | Full round-trip through mock WS |
+| `TestKuCoinConnector_TokenRenewal` | Expired token triggers REST renewal, resumes without gap |
+| `TestBybitConnector_SubscriptionLimit` | 11th topic splits to new connection, not error |
+| `TestReconnectWithBackoff` | 5 disconnects → delays 1s/2s/4s/8s/16s |
+| `TestSnapshotDeltaMerge_Integration` | Full disconnect+snapshot+buffer replay end-to-end |
+| `TestGapMarker_PublishedBeforeTick` | Gap marker message ID < next tick message ID |
+
+**L4 — Fault injection Docker (7 tests, `make test-all` local)**
+
+| Test | Failure mode caught |
+|---|---|
+| `TestRedisBackpressure_DropAndGapMarker` | Slow Redis → buffer overflow → gap marker with correct seq range |
+| `TestQuestDBWALSuspension_AutoRecovery` | WAL suspended → detected within 30s → RESUME WAL issued |
+| `TestGracefulShutdown_FlushBatch` | SIGTERM mid-batch → all rows in QuestDB → exit 0 |
+| `TestReconnectStorm_SingleGoroutine` | 10 rapid disconnects → exactly 1 active connection always |
+| `TestRaceDetector_OrderBook` | Concurrent read/write under -race → zero races |
+| `TestRaceDetector_ReconnectBuffer` | Reconnect + delta concurrent under -race → zero races |
+| `TestILPClient_NoDoubleCommitOnTimeout` | ILP timeout → retry → assert N rows not 2N |
+
+**L4b — Full stack Docker (8 tests, `make test-all` local)**
+
+| Test | Failure mode caught |
+|---|---|
+| `[DB #2] Field value round-trip` | Timestamp units, price precision, field mapping end-to-end |
+| `[DB #3] Timestamp ordering` | No out-of-order rows past commit lag, no 1970 timestamps |
+| `[DB #5] Batch boundary correctness` | No duplicate rows on flush |
+| `[DB #6] Gap rows in QuestDB` | Gap marker rows persisted with correct is_gap, seq_before, seq_after |
+| `[DB #8] Concurrent symbol isolation` | No cross-contamination between symbols |
+| `[DB #10] QuestDB restart recovery` | Aggregator reconnects, resumes writes, gap markers for downtime |
+| `[Redis #4] Full pipeline message content` | Field-for-field Redis message matches WS frame |
+| `TestStartup_RedisSentinelKeyVerification` | Wrong Redis instance detected at startup |
+
+**L5 — Live exchange (14 tests, manual local)**
+
+| Test | What it verifies |
+|---|---|
+| `TestLive_KuCoinTokenFetch` | Real REST token fetch |
+| `TestLive_KuCoinConnect` | Real WS connect with token |
+| `TestLive_KuCoinFirstTick` | First tick within 10s |
+| `TestLive_KuCoinPingPong` | Heartbeat with real exchange |
+| `TestLive_KuCoinTokenRenewal` | 30s TTL override → real renewal path |
+| `TestLive_BybitConnect` | Real WS connect |
+| `TestLive_BybitSubscribe` | Subscription ack from real exchange |
+| `TestLive_BybitFirstTick` | First tick within 10s |
+| `TestLive_BybitSubscriptionLimit` | 11th topic splits on real connection |
+| `TestLive_BybitDeadConnection` | TCP drop via Toxiproxy → real reconnect |
+| `TestLive_QuestDBPipeline` | Real timestamps, real fields, 60s end-to-end |
+| `TestLive_HealthAccuracy` | /health correct under real load, 60s |
+| `TestLive_GracefulShutdown` | SIGTERM under real exchange load |
+| `TestLive_GapMarkerNotFiredOnCleanSession` | Zero gaps over clean 60s window |
+
+#### Dismissed Tests — Rationale
+
+| Dismissed | Reason |
+|---|---|
+| `TestHealthEndpoint_Consistency` [L4] | L3 mock tests cover health logic; real load overkill |
+| `TestWrongStreamKey_NeverOccurs` [L4] | Moved to L1 as `TestNormalizeSymbol_KeyFormat` |
+| `TestGapMarkerOrder_AfterRedisReconnect` [L4] | Redundant — covered by L3 + `TestGapMarkerOrder_UnderLatency` |
+| `TestILPBackpressure_QueueLimit` [L4] | Overlaps with `TestRedisBackpressure_DropAndGapMarker` |
+| `[DB #1] Row count exactness` [L4b] | Subsumed by `[DB #2]` field round-trip |
+| `[DB #4] WAL suspension full stack` [L4b] | Duplicates L4 WAL test |
+| `[DB #7] Schema validation` [L4b] | Covered by L1 field names test + QuestDB rejection caught by [DB #2] |
+| `[DB #9] Graceful shutdown full stack` [L4b] | Duplicates L4 graceful shutdown test |
+| `[Redis #1] Stream persistence` [L4b] | Tests Redis AOF config not aggregator code — operational runbook item |
+| `[Redis #3] Consumer group offset` [L4b] | Candle Service concern, not aggregator |
+| `TestCrash_DataLossWindow` [L4b] | Insight captured in TESTING.md as known bound; not a test |
+| `TestMemoryGrowth_Bounded` [L4b] | Covered by 48h canary gate |
+| `TestLive_KuCoinSequenceContinuity` [L5] | Covered by `TestSnapshotDeltaMerge_Integration` [L3] |
+| `TestLive_MultiSymbolInterleaving` [L5] | Covered by `[DB #8]` concurrent symbol isolation |
+| `TestLive_RedisLatency` [L5] | Flaky by nature (network variance); better as periodic manual measurement |
+| `TestLive_BothExchangesSimultaneous` [L5] | `[DB #8]` covers isolation; operational complexity not worth it |
+| `TestVersionParity` [L5] | Replaced by `make verify-versions` deployment pre-check script |
+| `TestGapMarkerOrder_UnderLatency` [L4] | Good idea but adds Toxiproxy complexity; ordering guarantee enforced by atomic pipeline in code |
+
+#### Non-Test Deployment Gates
+
+- **48h canary** — single symbol pair, RSS sampled every 10 min, before any production deployment
+- **`make verify-versions`** — checks QuestDB + Redis versions match pinned test versions
+- **Fixture freshness check** — CI fails if B2 fixtures > 25 hours old
