@@ -61,7 +61,7 @@ development_status:
   2-3-kucoin-token-auto-renewal: review
   2-4-bybit-connection-multiplexer: done
   2-5-bybit-websocket-feed-adapter: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
 
   # ─── Epic 3: Data Capture Pipeline & Gap Guarantees ────────────────────────
   epic-3: backlog
