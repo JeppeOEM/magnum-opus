@@ -118,6 +118,9 @@ func (c *Conn) keepalive(ctx context.Context) {
 			err := c.conn.Ping(pongCtx)
 			cancel()
 			if err != nil {
+				if ctx.Err() != nil {
+					return // keepalive ctx was cancelled by Close() — not a peer failure
+				}
 				c.dropped.Store(true)
 				// Non-blocking send: if the channel already has a pending reconnect,
 				// skip — the receiver will handle the existing event.

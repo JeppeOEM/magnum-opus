@@ -1,6 +1,6 @@
 # Story 2.1: Exchange Interface & WebSocket Transport Layer
 
-**Status:** review
+**Status:** done
 **Epic:** 2 — Exchange Feed Connectivity
 **Story ID:** 2.1
 **Story Key:** `2-1-exchange-interface-and-websocket-transport-layer`
@@ -270,6 +270,14 @@ None — no external debug artifacts.
 - Added `dropped atomic.Bool` field to `Conn`; keepalive sets it on ping failure so `Close()` can choose `CloseNow()` (fast, no handshake) on a dead connection vs `Close(StatusNormalClosure, "")` on a live one. This was required because `coder/websocket`'s close handshake has a 5s internal timeout that caused `TestConn_ReconnectNonBlockingWhenFull` to exceed its 2s deadline.
 - Added `var _ exchange.Exchange = (*Adapter)(nil)` compile-time assertion to `kucoin/kucoin.go` production code (not test file) — gates the build if Adapter drifts from the interface.
 - All 6 L3 transport tests pass; all 3 L1 exchange compile tests pass; `make test-l1` green.
+
+### Review Findings
+
+- [x] [Review][Patch] Context cancel mid-Ping falsely marks `dropped=true` — when `Close()` fires while keepalive is in `c.conn.Ping(pongCtx)`, the context cancel causes Ping to fail with a non-nil error; `dropped.Store(true)` fires and `CloseNow()` is used on a live connection instead of the graceful `Close(StatusNormalClosure, "")`. Fix: check `ctx.Err() != nil` before `dropped.Store(true)` in keepalive. [aggregator/internal/exchange/transport/conn.go:118]
+- [x] [Review][Defer] Close() blocks up to 5s when connection dies between pings [aggregator/internal/exchange/transport/conn.go:96] — deferred, pre-existing behavior (now narrowed by the fix; not a regression)
+- [x] [Review][Defer] Subscribe()/Close() concurrent channel-close race in kucoin.go — deferred, pre-existing issue not in scope of this diff
+- [x] [Review][Defer] Conn.Close() not idempotent; CloseNow()/Close() errors silently discarded [aggregator/internal/exchange/transport/conn.go:96] — deferred, design concern
+- [x] [Review][Defer] fetchToken calls clock.Now() twice with no atomicity [aggregator/internal/exchange/kucoin/token.go:62,117] — deferred, test-only concern, no production risk
 
 ### File List
 
