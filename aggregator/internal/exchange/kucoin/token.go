@@ -36,7 +36,7 @@ func (t tokenData) wsURL() string {
 	if t.token == "" {
 		return t.endpoint
 	}
-	return t.endpoint + "?token=" + t.token + "&connectId=" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	return t.endpoint + "?token=" + t.token + "&connectId=" + nextMsgID()
 }
 
 // expiresAt returns when the token expires (24h after fetch).
@@ -58,8 +58,8 @@ type tokenAPIResponse struct {
 
 // fetchToken obtains a KuCoin WebSocket token via the private bullet endpoint.
 // apiBase allows overriding the base URL for tests.
-func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg config.KuCoinConfig) (tokenData, error) {
-	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg config.KuCoinConfig, clock Clock) (tokenData, error) {
+	ts := strconv.FormatInt(clock.Now().UnixMilli(), 10)
 	method := "POST"
 	path := bulletPrivatePath
 
@@ -114,7 +114,7 @@ func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg co
 		token:        apiResp.Data.Token,
 		pingInterval: time.Duration(srv.PingInterval) * time.Millisecond,
 		pingTimeout:  time.Duration(srv.PingTimeout) * time.Millisecond,
-		fetchedAt:    time.Now(),
+		fetchedAt:    clock.Now(),
 	}, nil
 }
 

@@ -18,10 +18,16 @@ import (
 )
 
 const (
-	subBatchSize   = 100
-	tickBuf        = 4096
-	signalBuf      = 256
+	subBatchSize = 100
+	tickBuf      = 4096
+	signalBuf    = 256
 )
+
+// Clock abstracts time.Now() so the adapter can be driven deterministically in tests.
+// The composition root supplies a real wall-clock implementation; tests supply a MockClock.
+type Clock interface {
+	Now() time.Time
+}
 
 // msgIDCounter produces unique message IDs scoped to the current process.
 var msgIDCounter atomic.Int64
@@ -83,15 +89,20 @@ type Adapter struct {
 	// Defaults to 30s; override in tests.
 	confirmTimeout time.Duration
 
+	clk    Clock
 	cancel context.CancelFunc
 	wg     sync.WaitGroup // tracks runLoop only
 }
 
-// New returns a KuCoin adapter using the given credentials and optional HTTP client.
+// New returns a KuCoin adapter. clk must not be nil; the composition root supplies
+// a real wall-clock and tests supply a testutil.MockClock.
 // httpClient may be nil (http.DefaultClient is used).
-func New(cfg config.KuCoinConfig, httpClient *http.Client) *Adapter {
+func New(cfg config.KuCoinConfig, httpClient *http.Client, clk Clock) *Adapter {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
+	}
+	if clk == nil {
+		panic("kucoin.New: clk must not be nil")
 	}
 	return &Adapter{
 		name:             "kucoin",
@@ -105,13 +116,14 @@ func New(cfg config.KuCoinConfig, httpClient *http.Client) *Adapter {
 		pendingPings:     make(map[string]chan struct{}),
 		reconnectTrigger: make(chan struct{}, 1),
 		confirmTimeout:   30 * time.Second,
+		clk:              clk,
 	}
 }
 
 // newWithAPIBase creates an Adapter that overrides the KuCoin REST API base URL.
 // Used in tests to point at a local mock server instead of api.kucoin.com.
-func newWithAPIBase(cfg config.KuCoinConfig, httpClient *http.Client, apiBase string) *Adapter {
-	a := New(cfg, httpClient)
+func newWithAPIBase(cfg config.KuCoinConfig, httpClient *http.Client, apiBase string, clk Clock) *Adapter {
+	a := New(cfg, httpClient, clk)
 	a.apiBase = apiBase
 	return a
 }
@@ -123,7 +135,7 @@ func (a *Adapter) Signals() <-chan exchange.Signal { return a.signals }
 // Connect fetches a KuCoin WebSocket token, dials the connection, and starts
 // background goroutines. ctx controls the full adapter lifetime.
 func (a *Adapter) Connect(ctx context.Context) error {
-	tok, err := fetchToken(ctx, a.httpClient, a.apiBase, a.cfg)
+	tok, err := fetchToken(ctx, a.httpClient, a.apiBase, a.cfg, a.clk)
 	if err != nil {
 		return fmt.Errorf("kucoin: fetch token: %w", err)
 	}
@@ -228,7 +240,7 @@ func (a *Adapter) runLoop(adapterCtx context.Context, conn *transport.Conn, tok 
 			if adapterCtx.Err() != nil {
 				return
 			}
-			newTok, err := fetchToken(adapterCtx, a.httpClient, a.apiBase, a.cfg)
+			newTok, err := fetchToken(adapterCtx, a.httpClient, a.apiBase, a.cfg, a.clk)
 			if err != nil {
 				slog.Error("kucoin: reconnect token fetch", "attempt", attempt, "err", err)
 				sleepBackoff(adapterCtx, attempt)
@@ -321,7 +333,7 @@ func (a *Adapter) handleAck(msgID string) {
 }
 
 func (a *Adapter) handleMarketData(msg wireMessage) {
-	tsLocal := time.Now().UnixNano()
+	tsLocal := a.clk.Now().UnixNano()
 
 	switch {
 	case isL2Topic(msg.Topic):
@@ -355,7 +367,7 @@ func (a *Adapter) handleMarketData(msg wireMessage) {
 			Symbol:     trade.Symbol,
 			Seq:        trade.Seq,
 			TsExchange: trade.TsExchange,
-			TsLocal:    time.Now().UnixNano(),
+			TsLocal:    tsLocal,
 			Side:       trade.Side,
 			Price:      trade.Price,
 			Size:       trade.Size,

@@ -3,8 +3,7 @@ module github.com/mrqdt/magnum-opus/aggregator
 go 1.24
 
 // Direct dependencies — run `make check-deps` before updating any entry.
-// Re-verification command is documented in DEPS.md.
-// gorilla/websocket is prohibited — use nhooyr.io/websocket (nhooyr is actively maintained).
+// Re-verification command and prohibited alternatives are documented in DEPS.md.
 require (
 	github.com/prometheus/client_golang v1.23.2 // verified: 2026-05-05
 	github.com/questdb/go-questdb-client/v3 v3.2.0 // verified: 2026-05-05

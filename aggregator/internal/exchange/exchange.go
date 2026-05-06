@@ -47,7 +47,7 @@ type Tick struct {
 	Symbol     symbol.Symbol
 	Seq        uint64
 	TsExchange int64     // Unix nanoseconds from the exchange timestamp field
-	TsLocal    int64     // Unix nanoseconds at receipt (time.Now().UnixNano())
+	TsLocal    int64     // Unix nanoseconds at receipt, captured by the exchange adapter
 	Side       string    // "bid" or "ask"; empty string for trade events
 	Price      string    // exact string from wire, e.g. "29500.50"
 	Size       string    // exact string from wire; "0" means level removed (OB updates only)
