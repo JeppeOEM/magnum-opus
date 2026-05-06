@@ -508,7 +508,7 @@ func (m *Mux) sendSymbolSubscriptions(ctx context.Context, s *slot, syms []strin
 
 // pingLoop sends application-level pings on a fixed interval and waits for pong.
 // If no pong arrives within pingTimeout, it closes the connection (triggering
-// runSlot to reconnect via Reconnect()). Exits when ctx is cancelled.
+// runSlot to reconnect via the innerDone path). Exits when ctx is cancelled.
 func (m *Mux) pingLoop(ctx context.Context, s *slot) {
 	ticker := time.NewTicker(m.pingInterval)
 	defer ticker.Stop()
@@ -521,15 +521,21 @@ func (m *Mux) pingLoop(ctx context.Context, s *slot) {
 
 		conn := s.getConn()
 		if err := conn.Write(ctx, map[string]string{"op": "ping"}); err != nil {
+			// Write failed — close the connection so readLoop also exits,
+			// allowing runSlot to reconnect.
+			conn.Close()
 			return
 		}
 
+		pongTimer := time.NewTimer(m.pingTimeout)
 		select {
 		case <-ctx.Done():
+			pongTimer.Stop()
 			return
 		case <-s.pongCh:
+			pongTimer.Stop()
 			// pong received; continue to next ping interval
-		case <-time.After(m.pingTimeout):
+		case <-pongTimer.C:
 			slog.Warn("bybit mux: pong timeout, closing connection", "slot", s.idx)
 			s.getConn().Close()
 			return

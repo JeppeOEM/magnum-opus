@@ -1,6 +1,6 @@
 # generated: 2026-05-05
 # last_updated: 2026-05-06
-# updated: epic-1-retrospective → done; epic-2 → in-progress; 2-1 → done; 2-2 → review; 2-3 → ready-for-dev
+# updated: 2-5-bybit-websocket-feed-adapter → done (post-review patches applied 2026-05-06)
 # project: magnum-opus
 # project_key: NOKEY
 # tracking_system: file-system
@@ -60,7 +60,7 @@ development_status:
   2-2-kucoin-websocket-feed-adapter: done
   2-3-kucoin-token-auto-renewal: review
   2-4-bybit-connection-multiplexer: done
-  2-5-bybit-websocket-feed-adapter: review
+  2-5-bybit-websocket-feed-adapter: done
   epic-2-retrospective: optional
 
   # ─── Epic 3: Data Capture Pipeline & Gap Guarantees ────────────────────────

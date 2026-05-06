@@ -1,6 +1,6 @@
 # Story 2.5: Bybit WebSocket Feed Adapter
 
-**Status:** review
+**Status:** done
 **Epic:** 2 — Exchange Feed Connectivity
 **Story ID:** 2.5
 **Story Key:** `2-5-bybit-websocket-feed-adapter`
@@ -66,7 +66,7 @@ So that Bybit market data flows correctly across all 20 connections.
   - [x] `parser.go` is pure: no IO, no `time.Now()` calls, no global state
 
 - [x] Create fixture files for L3 parser tests (AC: 2)
-  - [ ] Create `aggregator/internal/exchange/bybit/testdata/fixtures/l2_snapshot_btcusdt.json`:
+  - [x] Create `aggregator/internal/exchange/bybit/testdata/fixtures/l2_snapshot_btcusdt.json`:
     ```json
     {
       "topic": "orderbook.1.BTCUSDT",
@@ -308,6 +308,7 @@ aggregator/internal/exchange/bybit/mux/
 - **3 fixture files** for L3 parser tests (snapshot, delta, trade)
 - **7 L3 tests**: 4 parser (fixture-based) + 3 integration (tick receive, ping/pong, ping timeout)
 - All tiers green: L1 (time.Now() ban pass), L2 (6 mux tests), L3 (7 bybit + 9 kucoin/transport)
+- Code review (3 adversarial agents) applied 3 patches: (1) nil adapterCtx guard in Subscribe → returns error instead of panic; (2) time.After goroutine leak in pingLoop → replaced with time.NewTimer + Stop(); (3) pingLoop write error now closes conn before returning so readLoop also exits and runSlot reconnects.
 
 ### File List
 
@@ -325,3 +326,4 @@ aggregator/internal/exchange/bybit/mux/
 ### Change Log
 
 - Implemented story 2.5: Bybit WebSocket Feed Adapter — mux ping/pong, L2/trade parser, adapter, 7 L3 tests (Date: 2026-05-06)
+- Code review patches: nil adapterCtx guard, time.NewTimer in pingLoop, conn.Close on write error (Date: 2026-05-06)

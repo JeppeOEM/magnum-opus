@@ -6,6 +6,7 @@ package bybit
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -81,6 +82,10 @@ func (a *Adapter) Subscribe(syms []string, feeds []exchange.FeedType) error {
 	a.mu.Lock()
 	adapterCtx := a.adapterCtx
 	a.mu.Unlock()
+
+	if adapterCtx == nil {
+		return fmt.Errorf("bybit: Connect must be called before Subscribe")
+	}
 
 	factory := func(ctx context.Context) (mux.Conn, error) {
 		return transport.Dial(ctx, a.bybitURL, transport.Options{
