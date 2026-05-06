@@ -224,9 +224,21 @@ func TestMux_SingleConnectionDrop(t *testing.T) {
 	}
 
 	require.NotEmpty(t, signals, "expected NeedsSnapshot signals for slot 1")
+
+	// Build a set of non-slot-1 syms to verify isolation.
+	otherSyms := make(map[string]bool)
+	for _, sym := range m.slots[0].syms {
+		otherSyms[sym] = true
+	}
+	for _, sym := range m.slots[2].syms {
+		otherSyms[sym] = true
+	}
+
 	for _, sig := range signals {
 		assert.Equal(t, exchange.SignalNeedsSnapshot, sig.Type)
 		assert.Equal(t, "disconnect", sig.Reason)
+		// symbol.Normalize("bybit", "SYM0000") falls through to Symbol("SYM0000") for test syms.
+		assert.False(t, otherSyms[string(sig.Symbol)], "slot 0/2 sym must not be signalled: %s", sig.Symbol)
 	}
 	assert.Equal(t, len(slot1.syms), len(signals), "signal count must match slot 1 sym count")
 }
@@ -407,15 +419,13 @@ func TestMux_SpuriousAck(t *testing.T) {
 	// Push a spurious ack with an unknown req_id.
 	conn.Push(wireMsg{Op: "subscribe", ReqID: "9999999", Success: true})
 
-	// Give readLoop time to process.
-	time.Sleep(50 * time.Millisecond)
-
-	s := m.slots[0]
-	s.mu.Lock()
-	confirmedCount := len(s.confirmed)
-	s.mu.Unlock()
-
-	assert.Equal(t, 0, confirmedCount, "spurious ack must not confirm any symbol")
+	// Verify confirmed stays empty even after the readLoop has had time to process.
+	assert.Never(t, func() bool {
+		s := m.slots[0]
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.confirmed) > 0
+	}, 100*time.Millisecond, 5*time.Millisecond, "spurious ack must not confirm any symbol")
 }
 
 // TestMux_Close verifies that Close() completes quickly and closes the Ticks channel.
@@ -431,9 +441,17 @@ func TestMux_Close(t *testing.T) {
 
 	require.NoError(t, m.Connect(ctx))
 
-	// Drain writes so readLoop doesn't block waiting for channel space.
+	// Drain writes so the write call in sendSymbolSubscriptions doesn't block.
+	// The goroutine exits when drainCancel fires.
+	drainCtx, drainCancel := context.WithCancel(context.Background())
+	t.Cleanup(drainCancel)
 	go func() {
-		for range conn.writeCh {
+		for {
+			select {
+			case <-conn.writeCh:
+			case <-drainCtx.Done():
+				return
+			}
 		}
 	}()
 

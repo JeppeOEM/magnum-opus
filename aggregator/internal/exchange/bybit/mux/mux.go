@@ -114,9 +114,9 @@ type Mux struct {
 	ticks   chan exchange.Tick
 	signals chan exchange.Signal
 
-	adapterCtx context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 
 	confirmTimeout time.Duration
 }
@@ -147,7 +147,6 @@ func (m *Mux) Connect(ctx context.Context) error {
 	}
 
 	adapterCtx, cancel := context.WithCancel(ctx)
-	m.adapterCtx = adapterCtx
 	m.cancel = cancel
 
 	m.slots = make([]*slot, nSlots)
@@ -197,13 +196,16 @@ func (m *Mux) Connect(ctx context.Context) error {
 }
 
 // Close cancels the adapter context, waits for all goroutines, then closes channels.
+// Safe to call more than once.
 func (m *Mux) Close() error {
 	if m.cancel != nil {
 		m.cancel()
 	}
 	m.wg.Wait()
-	close(m.ticks)
-	close(m.signals)
+	m.closeOnce.Do(func() {
+		close(m.ticks)
+		close(m.signals)
+	})
 	return nil
 }
 
@@ -326,13 +328,7 @@ func (m *Mux) confirmWatcher(ctx context.Context, s *slot) {
 		s.mu.Lock()
 		var unconfirmed []string
 		for _, sym := range s.syms {
-			if _, pending := s.pendingAcks[findReqForSym(s, sym)]; pending {
-				unconfirmed = append(unconfirmed, sym)
-			}
-		}
-		// Also pick up any pendingAcks entries directly.
-		if len(unconfirmed) == 0 {
-			for _, sym := range s.pendingAcks {
+			if findReqForSym(s, sym) != "" {
 				unconfirmed = append(unconfirmed, sym)
 			}
 		}
@@ -369,10 +365,8 @@ func findReqForSym(s *slot, sym string) string {
 func (m *Mux) emitNeedsSnapshot(s *slot) {
 	s.mu.Lock()
 	var confirmed []string
-	for sym, ok := range s.confirmed {
-		if ok {
-			confirmed = append(confirmed, sym)
-		}
+	for sym := range s.confirmed {
+		confirmed = append(confirmed, sym)
 	}
 	s.mu.Unlock()
 
@@ -422,6 +416,12 @@ func (m *Mux) sendSymbolSubscriptions(ctx context.Context, s *slot, syms []strin
 				"args":   []string{topic},
 			}
 			s.mu.Lock()
+			// Clear any stale reqIDs for this sym from previous retry cycles.
+			for id, pendingSym := range s.pendingAcks {
+				if pendingSym == sym {
+					delete(s.pendingAcks, id)
+				}
+			}
 			s.pendingAcks[reqID] = sym
 			s.mu.Unlock()
 
