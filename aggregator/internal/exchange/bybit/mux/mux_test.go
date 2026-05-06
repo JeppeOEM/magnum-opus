@@ -62,20 +62,27 @@ func (f *fakeConn) Drop() { f.Close() }
 // Push injects a message into the connection's read stream.
 func (f *fakeConn) Push(msg any) { f.readCh <- msg }
 
-// ackAll drains writeCh and sends success acks back on pushCh for each subscribe write seen.
+// ackAll drains writeCh and sends success acks back for each subscribe write seen.
+// Ping messages (op=="ping") are silently discarded — they should not appear in L2
+// tests since pingInterval is set to 24h, but this guard prevents flakiness.
 func ackAll(t *testing.T, conn *fakeConn, count int) {
 	t.Helper()
-	for i := 0; i < count; i++ {
+	acked := 0
+	for acked < count {
 		var msg map[string]any
 		select {
 		case raw := <-conn.writeCh:
 			b, _ := json.Marshal(raw)
 			_ = json.Unmarshal(b, &msg)
 		case <-time.After(2 * time.Second):
-			t.Fatalf("ackAll: timed out waiting for write %d/%d", i+1, count)
+			t.Fatalf("ackAll: timed out waiting for write %d/%d", acked+1, count)
+		}
+		if op, _ := msg["op"].(string); op == "ping" {
+			continue // discard ping; wait for a subscribe
 		}
 		reqID, _ := msg["req_id"].(string)
 		conn.Push(wireMsg{Op: "subscribe", ReqID: reqID, Success: true})
+		acked++
 	}
 }
 
@@ -122,6 +129,7 @@ func TestMux_SymbolPartitioning(t *testing.T) {
 
 	m := New(syms, []exchange.FeedType{exchange.FeedTypeOrderBook}, factory)
 	m.maxTopics = 10
+	m.pingInterval = 24 * time.Hour // prevent pings from firing during test
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -162,6 +170,7 @@ func TestMux_SingleConnectionDrop(t *testing.T) {
 	m := New(syms, []exchange.FeedType{exchange.FeedTypeOrderBook}, factory)
 	m.maxTopics = 10
 	m.confirmTimeout = 5 * time.Second // generous — not testing timeout here
+	m.pingInterval = 24 * time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -261,6 +270,7 @@ func TestMux_ConcurrentDrop(t *testing.T) {
 	m := New(syms, []exchange.FeedType{exchange.FeedTypeOrderBook}, factory)
 	m.maxTopics = 10
 	m.confirmTimeout = 5 * time.Second
+	m.pingInterval = 24 * time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -356,6 +366,7 @@ func TestMux_UnconfirmedTimeout(t *testing.T) {
 	m := New([]string{"BTCUSDT"}, []exchange.FeedType{exchange.FeedTypeOrderBook}, factory)
 	m.maxTopics = 10
 	m.confirmTimeout = 50 * time.Millisecond // short for test
+	m.pingInterval = 24 * time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -402,6 +413,7 @@ func TestMux_SpuriousAck(t *testing.T) {
 	m := New([]string{"BTCUSDT"}, []exchange.FeedType{exchange.FeedTypeOrderBook}, factory)
 	m.maxTopics = 10
 	m.confirmTimeout = 30 * time.Second
+	m.pingInterval = 24 * time.Hour
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -436,6 +448,7 @@ func TestMux_Close(t *testing.T) {
 	m := New([]string{"BTCUSDT"}, []exchange.FeedType{exchange.FeedTypeOrderBook}, factory)
 	m.maxTopics = 10
 	m.confirmTimeout = 30 * time.Second
+	m.pingInterval = 24 * time.Hour
 
 	ctx := context.Background()
 

@@ -1,0 +1,15 @@
+{
+  "id": "",
+  "type": "message",
+  "topic": "/market/level2:BTC-USDT",
+  "subject": "trade.l2update",
+  "data": {
+    "sequenceStart": 100,
+    "sequenceEnd": 101,
+    "changes": {
+      "bids": [["29500.50", "1.5", 100]],
+      "asks": [["29501.00", "0", 101]]
+    },
+    "time": 1620000000000
+  }
+}

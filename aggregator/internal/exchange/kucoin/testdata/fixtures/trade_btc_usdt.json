@@ -1,0 +1,15 @@
+{
+  "id": "",
+  "type": "message",
+  "topic": "/market/match:BTC-USDT",
+  "subject": "trade.l3match",
+  "data": {
+    "sequence": "1627940716440",
+    "price": "29500.00",
+    "size": "0.1",
+    "side": "buy",
+    "time": "1620000000000000000",
+    "tradeId": "test-trade-001",
+    "symbol": "BTC-USDT"
+  }
+}

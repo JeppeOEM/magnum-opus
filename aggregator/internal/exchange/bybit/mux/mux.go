@@ -47,6 +47,12 @@ func nextMsgID() string {
 	return fmt.Sprintf("%d", n)
 }
 
+// MsgCallback is invoked by the mux for each incoming market data frame.
+// topic is the Bybit topic string (e.g. "orderbook.1.BTCUSDT"),
+// ts is the outer millisecond timestamp from the wire envelope,
+// msgType is "snapshot" or "delta", and data is the raw inner payload.
+type MsgCallback func(topic string, ts int64, msgType string, data json.RawMessage)
+
 // wireMsg is the subset of Bybit control-plane message fields the mux needs.
 type wireMsg struct {
 	Op      string          `json:"op"`
@@ -54,6 +60,10 @@ type wireMsg struct {
 	Success bool            `json:"success"`
 	RetMsg  string          `json:"ret_msg"`
 	Data    json.RawMessage `json:"data,omitempty"`
+	// market data envelope fields
+	Topic string `json:"topic,omitempty"`
+	Type  string `json:"type,omitempty"`
+	Ts    int64  `json:"ts,omitempty"`
 }
 
 // slot holds one WebSocket connection and the symbols assigned to it.
@@ -69,6 +79,8 @@ type slot struct {
 	pendingAcks map[string]string // reqID → raw sym
 
 	confirmTimeout time.Duration
+
+	pongCh chan struct{} // receives signal when pong arrives; buffered 1
 }
 
 func newSlot(idx int, syms []string, conn Conn, timeout time.Duration) *slot {
@@ -79,6 +91,7 @@ func newSlot(idx int, syms []string, conn Conn, timeout time.Duration) *slot {
 		confirmed:      make(map[string]bool),
 		pendingAcks:    make(map[string]string),
 		confirmTimeout: timeout,
+		pongCh:         make(chan struct{}, 1),
 	}
 }
 
@@ -119,6 +132,10 @@ type Mux struct {
 	closeOnce sync.Once
 
 	confirmTimeout time.Duration
+
+	pingInterval time.Duration
+	pingTimeout  time.Duration
+	onMsg        MsgCallback
 }
 
 // New creates a Mux. factory is called once per slot when Connect is called
@@ -132,6 +149,36 @@ func New(syms []string, feeds []exchange.FeedType, factory ConnFactory) *Mux {
 		ticks:          make(chan exchange.Tick, tickBuf),
 		signals:        make(chan exchange.Signal, signalBuf),
 		confirmTimeout: defaultConfirmTimeout,
+		pingInterval:   10 * time.Second,
+		pingTimeout:    20 * time.Second,
+	}
+}
+
+// WithMsgCallback registers a callback that is invoked for each incoming market
+// data frame. Call before Connect. Not safe for concurrent use.
+func (m *Mux) WithMsgCallback(fn MsgCallback) {
+	m.onMsg = fn
+}
+
+// WithPingInterval overrides the default 10-second application-level ping interval.
+// Call before Connect. Primarily used in tests to shorten the interval.
+func (m *Mux) WithPingInterval(d time.Duration) {
+	m.pingInterval = d
+}
+
+// WithPingTimeout overrides the default 20-second pong wait timeout.
+// Call before Connect. Primarily used in tests.
+func (m *Mux) WithPingTimeout(d time.Duration) {
+	m.pingTimeout = d
+}
+
+// SendTick delivers a tick to the output channel.
+// Non-blocking: drops with a warning if the channel is full.
+func (m *Mux) SendTick(t exchange.Tick) {
+	select {
+	case m.ticks <- t:
+	default:
+		slog.Warn("bybit mux: ticks channel full, dropping tick", "sym", t.Symbol)
 	}
 }
 
@@ -217,26 +264,42 @@ func (m *Mux) runSlot(ctx context.Context, s *slot) {
 
 		connCtx, connCancel := context.WithCancel(ctx)
 		var inner sync.WaitGroup
-		inner.Add(1)
+		inner.Add(2)
+		innerDone := make(chan struct{})
 		go func() {
 			defer inner.Done()
 			m.readLoop(connCtx, s)
 		}()
+		go func() {
+			defer inner.Done()
+			m.pingLoop(connCtx, s)
+		}()
+		go func() { inner.Wait(); close(innerDone) }()
 
 		select {
 		case <-ctx.Done():
 			connCancel()
-			inner.Wait()
+			<-innerDone
 			conn.Close()
 			return
 
 		case <-conn.Reconnect():
 			slog.Info("bybit mux: connection dropped", "slot", s.idx)
-		}
+			connCancel()
+			<-innerDone
+			conn.Close()
 
-		connCancel()
-		inner.Wait()
-		conn.Close()
+		case <-innerDone:
+			// readLoop or pingLoop exited without a Reconnect() signal —
+			// e.g. application-level pong timeout closed the connection.
+			if ctx.Err() != nil {
+				connCancel()
+				return
+			}
+			connCancel()
+			conn.Close()
+			slog.Info("bybit mux: connection goroutines exited, reconnecting", "slot", s.idx)
+		}
 
 		// Emit NeedsSnapshot for all confirmed symbols on this slot.
 		m.emitNeedsSnapshot(s)
@@ -294,8 +357,15 @@ func (m *Mux) dispatch(s *slot, msg wireMsg) {
 		} else {
 			slog.Warn("bybit mux: subscribe nack", "slot", s.idx, "req_id", msg.ReqID, "ret_msg", msg.RetMsg)
 		}
-	// Market data messages (op=="snapshot", "delta", etc.) are ignored here;
-	// Story 2.5 wires in the parser callback.
+	case "pong":
+		select {
+		case s.pongCh <- struct{}{}:
+		default:
+		}
+	default:
+		if msg.Topic != "" && m.onMsg != nil {
+			m.onMsg(msg.Topic, msg.Ts, msg.Type, msg.Data)
+		}
 	}
 }
 
@@ -434,6 +504,37 @@ func (m *Mux) sendSymbolSubscriptions(ctx context.Context, s *slot, syms []strin
 		}
 	}
 	return nil
+}
+
+// pingLoop sends application-level pings on a fixed interval and waits for pong.
+// If no pong arrives within pingTimeout, it closes the connection (triggering
+// runSlot to reconnect via Reconnect()). Exits when ctx is cancelled.
+func (m *Mux) pingLoop(ctx context.Context, s *slot) {
+	ticker := time.NewTicker(m.pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		conn := s.getConn()
+		if err := conn.Write(ctx, map[string]string{"op": "ping"}); err != nil {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.pongCh:
+			// pong received; continue to next ping interval
+		case <-time.After(m.pingTimeout):
+			slog.Warn("bybit mux: pong timeout, closing connection", "slot", s.idx)
+			s.getConn().Close()
+			return
+		}
+	}
 }
 
 // topicPrefix maps a FeedType to the Bybit topic prefix string.

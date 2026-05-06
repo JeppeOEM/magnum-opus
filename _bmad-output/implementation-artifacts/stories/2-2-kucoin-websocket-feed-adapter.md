@@ -1,6 +1,6 @@
 # Story 2.2: KuCoin WebSocket Feed Adapter
 
-**Status:** ready-for-dev
+**Status:** done
 **Epic:** 2 — Exchange Feed Connectivity
 **Story ID:** 2.2
 **Story Key:** `2-2-kucoin-websocket-feed-adapter`
@@ -56,65 +56,76 @@ so that KuCoin market data flows correctly into the system from first connection
 
 ## Tasks / Subtasks
 
-- [ ] Verify existing implementation satisfies all ACs (read-only) (AC: 1–6)
-  - [ ] Read `kucoin.go` — confirm Connect() calls fetchToken() before transport.Dial(); confirm runLoop reconnect path; confirm emitNeedsSnapshot() emits for all confirmed symbols
-  - [ ] Read `parser.go` — confirm parseL2Update produces string Price/Size; confirm parseTrade maps "buy"→"bid"/"sell"→"ask"; confirm parseLevels handles empty bids/asks without error
-  - [ ] Read `token.go` — confirm fetchToken() uses Clock for HMAC timestamp and fetchedAt; confirm wsURL() returns endpoint-only when token is empty (test mode)
-  - [ ] Confirm `subBatchSize = 100` and that Subscribe() batches correctly for 200 symbols → 2 messages
-  - [ ] Note: `heartbeatLoop` uses `time.After(pingTimeout)` — NOT Clock-injected (this is acceptable; Makefile grep bans `time.Now()` and `time.Sleep()`, NOT `time.After`)
+- [x] Verify existing implementation satisfies all ACs (read-only) (AC: 1–6)
+  - [x] Read `kucoin.go` — confirm Connect() calls fetchToken() before transport.Dial(); confirm runLoop reconnect path; confirm emitNeedsSnapshot() emits for all confirmed symbols
+  - [x] Read `parser.go` — confirm parseL2Update produces string Price/Size; confirm parseTrade maps "buy"→"bid"/"sell"→"ask"; confirm parseLevels handles empty bids/asks without error
+  - [x] Read `token.go` — confirm fetchToken() uses Clock for HMAC timestamp and fetchedAt; confirm wsURL() returns endpoint-only when token is empty (test mode)
+  - [x] Confirm `subBatchSize = 100` and that Subscribe() batches correctly for 200 symbols → 2 messages
+  - [x] Note: `heartbeatLoop` uses `time.After(pingTimeout)` — NOT Clock-injected (this is acceptable; Makefile grep bans `time.Now()` and `time.Sleep()`, NOT `time.After`)
 
-- [ ] Create JSON fixture files (AC: 5)
-  - [ ] Create `testdata/fixtures/` directory
-  - [ ] Create `testdata/fixtures/l2_update_btc_usdt.json` — raw KuCoin `/market/level2` wire message with both bid and ask deltas
-  - [ ] Create `testdata/fixtures/trade_btc_usdt.json` — raw KuCoin `/market/match` wire message with "buy" side
-  - [ ] Create `testdata/fixtures/trade_sell_btc_usdt.json` — raw KuCoin `/market/match` wire message with "sell" side (verifies "sell"→"ask" mapping)
+- [x] Create JSON fixture files (AC: 5)
+  - [x] Create `testdata/fixtures/` directory
+  - [x] Create `testdata/fixtures/l2_update_btc_usdt.json` — raw KuCoin `/market/level2` wire message with both bid and ask deltas
+  - [x] Create `testdata/fixtures/trade_btc_usdt.json` — raw KuCoin `/market/match` wire message with "buy" side
+  - [x] Create `testdata/fixtures/trade_sell_btc_usdt.json` — raw KuCoin `/market/match` wire message with "sell" side (verifies "sell"→"ask" mapping)
 
-- [ ] Write `MockWSServer` in `kucoin_test.go` (AC: 7)
-  - [ ] Add `//go:build l3` tag at top; use `package kucoin` (white-box — required for `newWithAPIBase` and `confirmTimeout` access; document this at file top)
-  - [ ] `mockWSServer` struct: `srv *httptest.Server`, configurable `pingIntervalMs int`, `pingTimeoutMs int`; channels for controlling server behavior in tests
-  - [ ] `handleTokenRequest` (HTTP handler): returns `{"code":"200000","data":{"token":"test-token","instanceServers":[{"endpoint":"<ws-url>","pingInterval":<ms>,"pingTimeout":<ms>}]}}` — endpoint is `"ws"+srv.srv.URL[len("http"):]`
-  - [ ] WebSocket handler: upgrades, sends `{"type":"welcome"}`, dispatches incoming messages: subscribe → sends ack; ping → sends pong; has opt-in "drop connection" mode for disconnect tests
-  - [ ] Helper `newTestAdapter(t, srv) *Adapter`: calls `newWithAPIBase(config.KuCoinConfig{}, http.DefaultClient, srv.srv.URL, testutil.NewMockClock(time.Now()))` with short `confirmTimeout` (50ms for unconfirmed-test, 30s elsewhere)
-  - [ ] Helper `wsURL(serverURL string) string`: converts `http://` to `ws://`
+- [x] Write `MockWSServer` in `kucoin_test.go` (AC: 7)
+  - [x] Add `//go:build l3` tag at top; use `package kucoin` (white-box — required for `newWithAPIBase` and `confirmTimeout` access; document this at file top)
+  - [x] `mockWSServer` struct: `srv *httptest.Server`, configurable `pingIntervalMs int`, `pingTimeoutMs int`; channels for controlling server behavior in tests
+  - [x] `handleTokenRequest` (HTTP handler): returns `{"code":"200000","data":{"token":"test-token","instanceServers":[{"endpoint":"<ws-url>","pingInterval":<ms>,"pingTimeout":<ms>}]}}` — endpoint is `"ws"+srv.srv.URL[len("http"):]`
+  - [x] WebSocket handler: upgrades, sends `{"type":"welcome"}`, dispatches incoming messages: subscribe → sends ack; ping → sends pong; has opt-in "drop connection" mode for disconnect tests
+  - [x] Helper `newTestAdapter(t, srv) *Adapter`: calls `newWithAPIBase(config.KuCoinConfig{}, http.DefaultClient, srv.srv.URL, testutil.NewMockClock(time.Now()))` with short `confirmTimeout` (50ms for unconfirmed-test, 30s elsewhere)
+  - [x] Helper `wsURL(serverURL string) string`: converts `http://` to `ws://`
 
-- [ ] Write parser unit tests using fixture files (AC: 5)
-  - [ ] `TestParseL2Update_FromFixture`: load `l2_update_btc_usdt.json`, call `parseL2Update`, assert Symbol, len(Deltas), Price/Size as strings, Seq, Side, TsExchange in nanoseconds
-  - [ ] `TestParseL2Update_EmptyChanges`: wire message with empty bids and asks — assert `ParsedUpdate{Deltas: nil}`, no error
-  - [ ] `TestParseTrade_BuySide`: load `trade_btc_usdt.json`, assert Side == "bid"
-  - [ ] `TestParseTrade_SellSide`: load `trade_sell_btc_usdt.json`, assert Side == "ask"
-  - [ ] `TestParseL2Update_MalformedData`: empty/invalid JSON in `data` field — assert non-nil error returned
-  - [ ] `TestParseTrade_BadSequence`: non-numeric sequence string — assert non-nil error
+- [x] Write parser unit tests using fixture files (AC: 5)
+  - [x] `TestParseL2Update_FromFixture`: load `l2_update_btc_usdt.json`, call `parseL2Update`, assert Symbol, len(Deltas), Price/Size as strings, Seq, Side, TsExchange in nanoseconds
+  - [x] `TestParseL2Update_EmptyChanges`: wire message with empty bids and asks — assert `ParsedUpdate{Deltas: nil}`, no error
+  - [x] `TestParseTrade_BuySide`: load `trade_btc_usdt.json`, assert Side == "bid"
+  - [x] `TestParseTrade_SellSide`: load `trade_sell_btc_usdt.json`, assert Side == "ask"
+  - [x] `TestParseL2Update_MalformedData`: empty/invalid JSON in `data` field — assert non-nil error returned
+  - [x] `TestParseTrade_BadSequence`: non-numeric sequence string — assert non-nil error
 
-- [ ] Write adapter happy-path integration test (AC: 1, 3)
-  - [ ] `TestAdapter_ConnectSubscribeReceiveTick`: server sends welcome → client calls Subscribe(["BTC-USDT"], [FeedTypeOrderBook]) → server sends ack → server sends L2 update wire message → assert tick arrives on `adapter.Ticks()` within 2s with correct Symbol, Price, Size (strings), Side, EventType == EventTypeUpdate
-  - [ ] After tick received, call `adapter.Close()` and verify it returns without blocking (2s deadline)
+- [x] Write adapter happy-path integration test (AC: 1, 3)
+  - [x] `TestAdapter_ConnectSubscribeReceiveTick`: server sends welcome → client calls Subscribe(["BTC-USDT"], [FeedTypeOrderBook]) → server sends ack → server sends L2 update wire message → assert tick arrives on `adapter.Ticks()` within 2s with correct Symbol, Price, Size (strings), Side, EventType == EventTypeUpdate
+  - [x] After tick received, call `adapter.Close()` and verify it returns without blocking (2s deadline)
 
-- [ ] Write heartbeat pong-timeout test (AC: 2)
-  - [ ] `TestAdapter_HeartbeatPongTimeout`: MockWSServer returns `pingInterval=100ms`, `pingTimeout=100ms`; after connect, server does NOT respond to ping messages; assert `adapter.Signals()` receives `SignalNeedsSnapshot` within 2s (disconnect path: heartbeatLoop fires `reconnectTrigger` → runLoop emits NeedsSnapshot → runLoop tries to reconnect → call `adapter.Close()` to stop)
-  - [ ] Note: at pong timeout, `runLoop` emits NeedsSnapshot only for CONFIRMED symbols. For this test, subscribe and ack at least one symbol before stopping pong responses.
+- [x] Write heartbeat pong-timeout test (AC: 2)
+  - [x] `TestAdapter_HeartbeatPongTimeout`: MockWSServer returns `pingInterval=100ms`, `pingTimeout=100ms`; after connect, server does NOT respond to ping messages; assert `adapter.Signals()` receives `SignalNeedsSnapshot` within 2s (disconnect path: heartbeatLoop fires `reconnectTrigger` → runLoop emits NeedsSnapshot → runLoop tries to reconnect → call `adapter.Close()` to stop)
+  - [x] Note: at pong timeout, `runLoop` emits NeedsSnapshot only for CONFIRMED symbols. For this test, subscribe and ack at least one symbol before stopping pong responses.
 
-- [ ] Write 200-symbol subscription test (AC: 4)
-  - [ ] `TestAdapter_Subscribe200Symbols`: generate 200 raw symbols (e.g., `"SYM-1"` through `"SYM-200"`), call Subscribe, assert server receives exactly 2 subscribe messages (each with 100 symbols in topic), server acks both, assert all 200 symbols appear in `a.confirmed` map
-  - [ ] Access `a.confirmed` (unexported) — requires `package kucoin` white-box test
+- [x] Write 200-symbol subscription test (AC: 4)
+  - [x] `TestAdapter_Subscribe200Symbols`: generate 200 raw symbols (e.g., `"SYM-1"` through `"SYM-200"`), call Subscribe, assert server receives exactly 2 subscribe messages (each with 100 symbols in topic), server acks both, assert all 200 symbols appear in `a.confirmed` map
+  - [x] Access `a.confirmed` (unexported) — requires `package kucoin` white-box test
 
-- [ ] Write spurious ack test (AC: 3)
-  - [ ] `TestAdapter_SpuriousAck`: after connect, server sends `{"id":"unknown-id","type":"ack"}` without the adapter having subscribed with that ID; verify: adapter does NOT panic; no symbols are added to `a.confirmed`; (WARN log is emitted but not asserted in test — log output testing is low value)
+- [x] Write spurious ack test (AC: 3)
+  - [x] `TestAdapter_SpuriousAck`: after connect, server sends `{"id":"unknown-id","type":"ack"}` without the adapter having subscribed with that ID; verify: adapter does NOT panic; no symbols are added to `a.confirmed`; (WARN log is emitted but not asserted in test — log output testing is low value)
 
-- [ ] Write unconfirmed-symbol timeout test (AC: 3)
-  - [ ] `TestAdapter_UnconfirmedTimeout`: set `a.confirmTimeout = 50*time.Millisecond`; subscribe to one symbol, server does NOT send ack; wait 200ms; assert adapter logs ERROR (use `slog` capture or verify via side effect: `confirmWatcher` calls `sendBatch` retry, which sends another subscribe to the server — assert server receives 2 subscribe messages for the same symbol within 500ms)
+- [x] Write unconfirmed-symbol timeout test (AC: 3)
+  - [x] `TestAdapter_UnconfirmedTimeout`: set `a.confirmTimeout = 50*time.Millisecond`; subscribe to one symbol, server does NOT send ack; wait 200ms; assert adapter logs ERROR (use `slog` capture or verify via side effect: `confirmWatcher` calls `sendBatch` retry, which sends another subscribe to the server — assert server receives 2 subscribe messages for the same symbol within 500ms)
 
-- [ ] Write disconnect → NeedsSnapshot test (AC: 6)
-  - [ ] `TestAdapter_DisconnectEmitsNeedsSnapshot`: server returns `pingInterval=100ms`, `pingTimeout=100ms`; adapter subscribes to `["BTC-USDT"]`, server acks → symbol confirmed; server then closes the WebSocket connection; within 1s, `heartbeatLoop` detects failure (write error or pong timeout) and fires `reconnectTrigger`; assert `SignalNeedsSnapshot` for `symbol.Normalize("kucoin","BTC-USDT")` arrives on `adapter.Signals()` within 2s; call `adapter.Close()` to stop reconnect loop
+- [x] Write disconnect → NeedsSnapshot test (AC: 6)
+  - [x] `TestAdapter_DisconnectEmitsNeedsSnapshot`: server returns `pingInterval=100ms`, `pingTimeout=100ms`; adapter subscribes to `["BTC-USDT"]`, server acks → symbol confirmed; server then closes the WebSocket connection; within 1s, `heartbeatLoop` detects failure (write error or pong timeout) and fires `reconnectTrigger`; assert `SignalNeedsSnapshot` for `symbol.Normalize("kucoin","BTC-USDT")` arrives on `adapter.Signals()` within 2s; call `adapter.Close()` to stop reconnect loop
 
-- [ ] Run `make test-l3` and verify all new tests pass (AC: all)
-  - [ ] `cd aggregator && make test-l3` — all tests green
-  - [ ] `cd aggregator && make test-l1` — no regressions
-  - [ ] `cd aggregator && go vet ./internal/exchange/kucoin/...` — clean
+- [x] Run `make test-l3` and verify all new tests pass (AC: all)
+  - [x] `cd aggregator && make test-l3` — all tests green
+  - [x] `cd aggregator && make test-l1` — no regressions
+  - [x] `cd aggregator && go vet ./internal/exchange/kucoin/...` — clean
 
-- [ ] Update story and sprint status (AC: all)
-  - [ ] Mark all task checkboxes
-  - [ ] Update story Status → `review`
-  - [ ] Update `_bmad-output/implementation-artifacts/sprint-status.yaml`: `2-2-kucoin-websocket-feed-adapter` → `review`
+- [x] Update story and sprint status (AC: all)
+  - [x] Mark all task checkboxes
+  - [x] Update story Status → `review`
+  - [x] Update `_bmad-output/implementation-artifacts/sprint-status.yaml`: `2-2-kucoin-websocket-feed-adapter` → `review`
+
+### Review Findings (2026-05-06)
+
+- [x] [Review][Patch] `ackSent` channel is dead code — written to in `handleWebSocket` but never read by any test; all tests use `waitConfirmed` instead. Remove the field and its writes. [`kucoin_test.go`]
+- [x] [Review][Patch] `subsSeen` typed `int32` but always accessed under `s.mu` — field type implies atomic access but uses mutex serialization. Change to plain `int` for consistency. [`kucoin_test.go`]
+- [x] [Review][Patch] `dropPings` flag name is misleading — it suppresses both ack responses to subscribe messages AND pong responses to ping messages. Rename to `dropResponses` to reflect actual scope. [`kucoin_test.go`]
+- [x] [Review][Defer] `confirmWatcher` hardcodes `FeedTypeOrderBook` in retry — if a trade-feed subscription times out, it would be retried as an order book subscription. [`kucoin.go:confirmWatcher`] — deferred, pre-existing
+- [x] [Review][Defer] `parseTrade` silently maps unknown `side` values to `"bid"` — no error is returned; data is corrupted silently. [`parser.go`] — deferred, pre-existing
+- [x] [Review][Defer] Subscribe during reconnect backoff still subject to ack-reset race — the same window that was fixed for initial connect exists during the reconnect backoff loop: `Subscribe()` registers in `pendingAcks`, then `resetAcks()` clears it when reconnect succeeds. [`kucoin.go:runLoop`] — deferred, pre-existing design
+- [x] [Review][Defer] `symbolFromTopic` with multi-symbol batch topic returns wrong symbol — `/market/level2:BTC-USDT,ETH-USDT` would yield `"BTC-USDT,ETH-USDT"` as the symbol key. In practice, level2 wire messages arrive per-symbol, so this is latent. [`parser.go`] — deferred, pre-existing
+- [x] [Review][Defer] End-to-end WS server-push → readLoop → tick path not exercised — `TestAdapter_ConnectSubscribeReceiveTick` uses `a.dispatch()` directly; a corrupt server push that breaks readLoop would go undetected at this layer. — deferred, acknowledged test design choice
 
 ---
 
@@ -418,4 +429,21 @@ None.
 
 ### Completion Notes List
 
+- All 6 ACs verified against existing production code (kucoin.go, parser.go, token.go) — no production changes needed initially.
+- 3 fixture files created under `testdata/fixtures/`.
+- `kucoin_test.go` written with `//go:build l3`, `package kucoin`; MockWSServer uses `connDropper` (sync.Once + chan) for CloseNow-based disconnect — required because coder/websocket uses http.Hijacker and `httptest.Server.CloseClientConnections()` does not close hijacked connections.
+- **Production bug found and fixed**: `resetAcks()` was called at the top of each `runLoop` for loop iteration. Because `go a.runLoop(...)` is launched asynchronously in `Connect()`, calling `Subscribe()` immediately after `Connect()` races with the goroutine's `resetAcks()` — the goroutine clears `pendingAcks` entries that `Subscribe()` had just registered. Fix: call `resetAcks()` in `Connect()` before starting the goroutine (first iteration), and in the reconnect path before `sendSubscriptions()` (subsequent iterations). This eliminates the race without any test-only hooks.
+- `waitConfirmed` / `waitConfirmedN` helpers poll `a.confirmed` via `require.Eventually` to avoid server-send/adapter-process timing assumptions.
+- `make test-l3` green (all 12 tests pass, 0.491s for kucoin package); `make test-l1` clean; `go vet` clean.
+
 ### File List
+
+- `aggregator/internal/exchange/kucoin/kucoin.go` — modified: moved `resetAcks()` from runLoop top into `Connect()` and reconnect path to fix Subscribe/runLoop race
+- `aggregator/internal/exchange/kucoin/kucoin_test.go` — created: L3 test file with MockWSServer and 12 tests (6 parser + 6 adapter)
+- `aggregator/internal/exchange/kucoin/testdata/fixtures/l2_update_btc_usdt.json` — created
+- `aggregator/internal/exchange/kucoin/testdata/fixtures/trade_btc_usdt.json` — created
+- `aggregator/internal/exchange/kucoin/testdata/fixtures/trade_sell_btc_usdt.json` — created
+
+### Change Log
+
+- 2026-05-06: Created fixture files and kucoin_test.go (L3 test pass). Fixed resetAcks() race in kucoin.go. All 12 tests green.

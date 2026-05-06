@@ -214,6 +214,12 @@ _Critical implementation rules for AI agents. Each rule here is non-obvious — 
 
 ---
 
+## Workflow Rules
+
+- **No separately-billed features:** Never suggest or invoke `/ultrareview` or any feature that is billed separately from the standard Claude Code session. Use only in-session skills (e.g. `bmad-code-review`).
+
+---
+
 ## Usage Guidelines
 
 **For AI agents:** Read this file before writing any code. Follow all rules exactly. When in doubt, prefer the more restrictive interpretation. Flag any rule that conflicts with a framework or library default.
