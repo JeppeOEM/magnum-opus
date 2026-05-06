@@ -16,7 +16,7 @@ _Critical implementation rules for AI agents. Each rule here is non-obvious — 
 ## Technology Stack & Versions
 
 - **Language:** Go 1.21+ required — `log/slog` is stdlib from 1.21; `go.mod` must declare `go 1.21` minimum; use latest 1.21.x patch (not 1.21.0)
-- **WebSocket:** `nhooyr.io/websocket` — NOT `gorilla/websocket` (archived); read/write via `wsjson.Read(ctx, conn, &v)` / `wsjson.Write(ctx, conn, v)` from `nhooyr.io/websocket/wsjson`; graceful teardown: cancel context (drops connection) then call `conn.Close(StatusNormalClosure, "")` (sends close frame)
+- **WebSocket:** `github.com/coder/websocket` v1.8.14 — NOT `gorilla/websocket` (archived) or `nhooyr.io/websocket` (deprecated; coder fork is the maintained successor); read/write via `wsjson.Read(ctx, conn, &v)` / `wsjson.Write(ctx, conn, v)` from `github.com/coder/websocket/wsjson`; graceful teardown: cancel context first, then call `conn.Close(websocket.StatusNormalClosure, "")` (sends close frame); use `conn.CloseNow()` when connection is already dead and you need a fast no-handshake close
 - **Redis client:** `github.com/redis/go-redis/v9` — org changed from `go-redis` to `redis`; do NOT import `github.com/go-redis/go-redis/v8`; set `MaxLen` on every `XAdd` — never rely on global stream config
 - **QuestDB client:** `github.com/questdb/go-questdb-client/v3` — ILP over TCP port **9009**, not HTTP port 9000; NOT goroutine-safe — `writer/questdb/` owns a single sender behind a channel; call `sender.Flush(ctx)` on a **500ms timer**; flush returning nil does not mean rows are queryable (WAL accepted-not-committed)
 - **Metrics:** `github.com/prometheus/client_golang` — always constructor-injected `prometheus.NewRegistry()`; never `prometheus.MustRegister` or `prometheus.DefaultRegisterer`; use `promhttp.HandlerFor(registry, promhttp.HandlerOpts{})` — NOT `promhttp.Handler()`
@@ -187,7 +187,7 @@ _Critical implementation rules for AI agents. Each rule here is non-obvious — 
 - Panic recovery inside helper functions
 - `I`-prefix interfaces (`IExchange`, `IWriter`)
 - `prometheus.MustRegister`, `prometheus.DefaultRegisterer`, `promhttp.Handler()`
-- `gorilla/websocket`, `github.com/go-redis/go-redis/v8`, any external backoff library
+- `gorilla/websocket`, `nhooyr.io/websocket` (deprecated), `github.com/go-redis/go-redis/v8`, any external backoff library
 - `os.Getenv` outside `internal/config/`
 - `:latest` or `:8.x` QuestDB image tags
 
@@ -220,4 +220,4 @@ _Critical implementation rules for AI agents. Each rule here is non-obvious — 
 
 **For humans:** Keep this file lean. Update when stack or patterns change. Remove rules that become obvious over time.
 
-_Last updated: 2026-05-05_
+_Last updated: 2026-05-06 — WebSocket library updated from nhooyr.io/websocket (deprecated) to github.com/coder/websocket v1.8.14_

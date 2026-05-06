@@ -12,7 +12,6 @@ import (
 // AC: "interface names follow noun/noun+er pattern (Exchange, not IExchange)"
 // AC: "exchange.go defines the Exchange interface only — no implementations"
 func TestExchangeInterfaceNaming(t *testing.T) {
-	t.Skip("ATDD scaffold — activate when story 2.1 implementation is complete")
 
 	// Verify the Exchange interface is exported and follows noun naming.
 	// This is a compile-time check: if Exchange doesn't exist, the build fails.
@@ -29,7 +28,6 @@ func TestExchangeInterfaceNaming(t *testing.T) {
 // These values are downstream contracts — changing them breaks the Candle Service.
 // AC: event_type values must be "update", "trade" (from QuestDB schema)
 func TestEventTypeStringValues(t *testing.T) {
-	t.Skip("ATDD scaffold — activate when story 2.1 implementation is complete")
 
 	tests := []struct {
 		name     string
@@ -53,7 +51,6 @@ func TestEventTypeStringValues(t *testing.T) {
 // AC: "price and size are always string — never float64"
 // This test fails to compile if Price or Size are changed to non-string types.
 func TestTickFieldTypes(t *testing.T) {
-	t.Skip("ATDD scaffold — activate when story 2.1 implementation is complete")
 
 	// Compile-time field type assertion: assigning string literals must compile.
 	_ = exchange.Tick{

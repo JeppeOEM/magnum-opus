@@ -5,6 +5,7 @@ package transport
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -38,6 +39,7 @@ type Conn struct {
 	pongTimeout  time.Duration
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
+	dropped      atomic.Bool // true once keepalive detects connection is dead
 }
 
 // Dial establishes a WebSocket connection to url and starts the keepalive goroutine.
@@ -86,12 +88,19 @@ func (c *Conn) Write(ctx context.Context, v any) error {
 func (c *Conn) Reconnect() <-chan struct{} { return c.reconnectCh }
 
 // Close cancels the keepalive context, waits for the keepalive goroutine to exit,
-// then closes the underlying connection with StatusNormalClosure.
-// Teardown order: cancel ctx first, then conn.Close — never the reverse.
+// then closes the underlying connection.
+// If the keepalive detected a dead connection, CloseNow() is used (no handshake —
+// the peer is already gone). Otherwise Close(StatusNormalClosure, "") sends the
+// close frame for a graceful teardown.
+// Teardown order: cancel ctx first, then close — never the reverse.
 func (c *Conn) Close() {
 	c.cancel()
 	c.wg.Wait()
-	c.conn.Close(websocket.StatusNormalClosure, "")
+	if c.dropped.Load() {
+		c.conn.CloseNow()
+	} else {
+		c.conn.Close(websocket.StatusNormalClosure, "")
+	}
 }
 
 // keepalive sends pings at the configured interval and fires reconnectCh when no pong
@@ -109,6 +118,7 @@ func (c *Conn) keepalive(ctx context.Context) {
 			err := c.conn.Ping(pongCtx)
 			cancel()
 			if err != nil {
+				c.dropped.Store(true)
 				// Non-blocking send: if the channel already has a pending reconnect,
 				// skip — the receiver will handle the existing event.
 				select {
