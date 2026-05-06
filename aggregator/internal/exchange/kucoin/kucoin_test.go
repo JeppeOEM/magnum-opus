@@ -517,7 +517,8 @@ func TestTokenRenewal_HappyPath(t *testing.T) {
 	a.renewalCheckInterval = 1 * time.Millisecond
 	a.renewalLeadTime = 30 * time.Minute
 
-	clk := a.clk.(*testutil.MockClock)
+	clk, ok := a.clk.(*testutil.MockClock)
+	require.True(t, ok, "expected MockClock")
 
 	require.NoError(t, a.Connect(context.Background()))
 	require.NoError(t, a.Subscribe([]string{"BTC-USDT"}, []exchange.FeedType{exchange.FeedTypeOrderBook}))
@@ -548,7 +549,8 @@ func TestTokenRenewal_RetryThenSucceed(t *testing.T) {
 	a.renewalLeadTime = 30 * time.Minute
 	a.renewalMaxAttempts = 3
 
-	clk := a.clk.(*testutil.MockClock)
+	clk, ok := a.clk.(*testutil.MockClock)
+	require.True(t, ok, "expected MockClock")
 
 	require.NoError(t, a.Connect(context.Background()))
 
@@ -579,7 +581,8 @@ func TestTokenRenewal_ExhaustRetries(t *testing.T) {
 	a.renewalLeadTime = 30 * time.Minute
 	a.renewalMaxAttempts = 1 // single attempt → no inter-attempt sleep → fast test
 
-	clk := a.clk.(*testutil.MockClock)
+	clk, ok := a.clk.(*testutil.MockClock)
+	require.True(t, ok, "expected MockClock")
 
 	require.NoError(t, a.Connect(context.Background()))
 	initialCount := srv.getTokenRequestCount()

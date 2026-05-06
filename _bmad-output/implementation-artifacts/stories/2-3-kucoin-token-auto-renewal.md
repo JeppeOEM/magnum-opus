@@ -1,6 +1,6 @@
 # Story 2.3: KuCoin Token Auto-Renewal
 
-**Status:** review
+**Status:** done
 **Epic:** 2 — Exchange Feed Connectivity
 **Story ID:** 2.3
 **Story Key:** `2-3-kucoin-token-auto-renewal`
@@ -67,6 +67,19 @@ so that the feed never silently drops due to token expiry during sustained opera
   - [x] **`TestTokenRenewal_HappyPath`**: set `renewalCheckInterval = 1ms`, `renewalLeadTime = 30min`; mock server serves two successful token responses; advance MockClock by 23.5h; use `require.Eventually` polling `a.tokMu.RLock() / a.tok.fetchedAt` to confirm a new token was stored
   - [x] **`TestTokenRenewal_RetryThenSucceed`**: configure mock server to fail 1 time then succeed; advance clock past renewal threshold; verify `a.tok` updated after retry
   - [x] **`TestTokenRenewal_ExhaustRetries`**: configure mock server to always fail; `renewalMaxAttempts = 1` (no inter-attempt sleep); advance clock past threshold; verify token request count rises above initial+maxAttempts (showing reconnect started)
+
+### Review Findings
+
+- [x] [Review][Patch] `time.After` goroutine leak in backoff sleep [token.go:tokenRenewalLoop] — `select { case <-time.After(d): }` leaks a timer goroutine for `d` (up to 60s) when ctx.Done fires first; replace with `time.NewTimer(d)` + explicit Stop()
+- [x] [Review][Patch] Post-exhaustion spin: renewal loop re-enters retry on every tick after `fireTrigger()` [token.go:tokenRenewalLoop] — after `fireTrigger()` + `continue`, next tick sees `renewalDue=true` (old token still stale), hammers token endpoint `renewalMaxAttempts` times per `renewalCheckInterval` until reconnect completes; fix: change `continue` to `return`
+- [x] [Review][Patch] `renewalMaxAttempts=0` writes zero-value token on success path [token.go:tokenRenewalLoop] — if `renewalMaxAttempts` is 0 the retry loop body never runs; `err` stays nil and the zero `tokenData` is written to `a.tok` under the write lock; add guard before the loop
+- [x] [Review][Patch] Completion note falsely states goroutine exits after exhaustion [stories/2-3-kucoin-token-auto-renewal.md:136] — code uses `continue` not `return`; goroutine keeps running; the D1 "limitation" note in Dev Agent Record is factually incorrect
+- [x] [Review][Patch] Unchecked type assertion on MockClock in renewal tests [kucoin_test.go] — `a.clk.(*testutil.MockClock)` without `, ok` form panics confusingly if clock type changes; use safe assertion
+- [x] [Review][Defer] Double `Connect()` goroutine leak [kucoin.go:Connect] — deferred, pre-existing: same pattern exists for runLoop; needs global fix
+- [x] [Review][Defer] Real wall-clock sleep in `TestTokenRenewal_RetryThenSucceed` [kucoin_test.go] — deferred: `backoff.Duration` returns a real-time duration consumed by `time.After`; MockClock cannot short-circuit; architectural trade-off; test passes
+- [x] [Review][Defer] `TestTokenRenewal_ExhaustRetries` assertion conflates renewal and reconnect requests [kucoin_test.go] — deferred: correct behavior, test passes; tightening is cosmetic
+- [x] [Review][Defer] No concurrent test for `tokMu` atomicity under simultaneous renewal + read [kucoin_test.go] — deferred: production code is correct; gap in test coverage only
+- [x] [Review][Defer] No inter-exhaustion-cycle backoff [token.go] — deferred: moot after post-exhaustion-spin patch; becomes a return path
   - [x] **`TestTokenRenewal_ContextCancel`**: confirm renewal goroutine exits cleanly when ctx is cancelled before threshold — `Close()` returns within 500ms
 
 ---
@@ -133,7 +146,8 @@ claude-sonnet-4-6
 - Extended `mockWSServer` with `tokenFails int` / `tokenRequestCount int` for test control; modified `handleToken` to decrement/check `tokenFails`.
 - Added 4 L3 tests: HappyPath (MockClock advance triggers renewal), RetryThenSucceed (1 failure then success), ExhaustRetries (always-fail → reconnect), ContextCancel (Close within 500ms).
 - All 16 L3 tests pass (12 existing + 4 new); `make test-l1` green; `go vet` clean.
-- Known limitation: after a renewal-exhaustion-triggered reconnect, the `tokenRenewalLoop` goroutine has exited. The fresh token from reconnect has a 24h window but no running renewal goroutine. Deferred to a future story.
+- Review patches applied (2026-05-06): (1) `renewalMaxAttempts <= 0` guard added at top of `tokenRenewalLoop`; (2) `time.After` goroutine leak fixed — backoff sleep now uses `time.NewTimer` + explicit `Stop()`; (3) post-exhaustion spin fixed — changed `continue` to `return` after `fireTrigger()` so goroutine exits cleanly; (4) unchecked `MockClock` type assertions in tests fixed to safe `, ok` form.
+- Known limitation: after a renewal-exhaustion-triggered reconnect, `tokenRenewalLoop` has returned. The fresh token from reconnect has a 24h window but no running renewal goroutine to catch the next expiry. Deferred to a future story.
 
 ### File List
 
@@ -144,3 +158,4 @@ claude-sonnet-4-6
 ## Change Log
 
 - 2026-05-06: Implemented Story 2.3 — KuCoin token auto-renewal. Fixed fetchToken clock bug, added tokenRenewalLoop with backoff retries, 4 L3 tests green.
+- 2026-05-06: Applied 5 code review patches — time.After goroutine leak, post-exhaustion spin (continue→return), renewalMaxAttempts=0 guard, completion note correction, safe MockClock assertions. All tests green.

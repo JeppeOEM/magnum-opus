@@ -123,9 +123,14 @@ func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg co
 
 // tokenRenewalLoop polls on renewalCheckInterval and fetches a fresh token
 // once the current one is within renewalLeadTime of expiry. On retry exhaustion
-// it fires the reconnect trigger so runLoop re-authenticates from scratch.
+// it fires the reconnect trigger so runLoop re-authenticates from scratch, then
+// exits — runLoop owns reconnect and will obtain a fresh 24h token independently.
 // The goroutine exits cleanly when ctx is cancelled.
 func (a *Adapter) tokenRenewalLoop(ctx context.Context) {
+	if a.renewalMaxAttempts <= 0 {
+		return
+	}
+
 	ticker := time.NewTicker(a.renewalCheckInterval)
 	defer ticker.Stop()
 
@@ -159,20 +164,21 @@ func (a *Adapter) tokenRenewalLoop(ctx context.Context) {
 			slog.Warn("kucoin: token renewal failed", "attempt", attempt, "err", err)
 			if attempt+1 < a.renewalMaxAttempts {
 				d := backoff.Duration(attempt, a.clk)
+				pongTimer := time.NewTimer(d)
 				select {
-				case <-time.After(d):
+				case <-pongTimer.C:
 				case <-ctx.Done():
+					pongTimer.Stop()
 					return
 				}
+				pongTimer.Stop()
 			}
 		}
 
 		if err != nil {
 			slog.Error("kucoin: token renewal exhausted retries, triggering reconnect")
 			a.fireTrigger()
-			// Do not return — runLoop will reconnect and update a.tok; the loop
-			// will detect the fresh token on the next tick and stop retrying.
-			continue
+			return
 		}
 
 		a.tokMu.Lock()

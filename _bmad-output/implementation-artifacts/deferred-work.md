@@ -15,6 +15,13 @@
 - **`symbolFromTopic` with multi-symbol batch topic returns wrong symbol** (`parser.go`) — `LastIndex(":")` on a comma-separated topic yields the full symbol list as a single key. Latent because level2 wire messages arrive per-symbol; pre-existing.
 - **End-to-end WS server-push → readLoop → tick path not covered at L3** (`kucoin_test.go`) — `TestAdapter_ConnectSubscribeReceiveTick` injects via `a.dispatch()` directly. A corrupt server push breaking `readLoop` would go undetected here. Acknowledged test design choice; the transport L3 tests cover the read path.
 
+## Deferred from: code review of 2-3-kucoin-token-auto-renewal (2026-05-06)
+
+- **Double `Connect()` goroutine leak** (`kucoin.go:Connect`) — calling `Connect()` twice launches a second `tokenRenewalLoop` goroutine; pre-existing pattern shared with `runLoop`; needs a global guard.
+- **Real wall-clock sleep in `TestTokenRenewal_RetryThenSucceed`** (`kucoin_test.go`) — `backoff.Duration` returns a real-time duration consumed by `time.After`; MockClock cannot short-circuit it; test takes ~1s real time; architectural trade-off.
+- **`TestTokenRenewal_ExhaustRetries` assertion conflates renewal and reconnect token requests** (`kucoin_test.go`) — assertion `tokenRequestCount > initialCount+renewalMaxAttempts` passes due to reconnect's own failing fetches; correct behavior but assertion is imprecise.
+- **No concurrent test for `tokMu` atomicity under simultaneous renewal write and heartbeat read** (`kucoin_test.go`) — AC4 production code is correct; test gap only.
+
 ## Deferred from: code review of 2-4-bybit-connection-multiplexer (2026-05-06)
 
 - **confirmWatcher timer can fire sooner than expected post-reconnect** (`mux.go:confirmWatcher`) — after `resetAcks()` and `sendSlotSubscriptions`, the watcher's timer from the previous cycle is already ticking; the first post-reconnect check may arrive before the full `confirmTimeout` window has elapsed. Low production impact; design limitation of a watcher whose lifetime spans reconnects.
