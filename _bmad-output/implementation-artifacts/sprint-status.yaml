@@ -59,7 +59,7 @@ development_status:
   2-1-exchange-interface-and-websocket-transport-layer: done
   2-2-kucoin-websocket-feed-adapter: done
   2-3-kucoin-token-auto-renewal: review
-  2-4-bybit-connection-multiplexer: backlog
+  2-4-bybit-connection-multiplexer: review
   2-5-bybit-websocket-feed-adapter: backlog
   epic-2-retrospective: optional
 
