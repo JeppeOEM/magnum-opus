@@ -1,6 +1,6 @@
 # generated: 2026-05-05
 # last_updated: 2026-05-06
-# updated: epic-1-retrospective → done; epic-2 → in-progress; 2-1 → done
+# updated: epic-1-retrospective → done; epic-2 → in-progress; 2-1 → done; 2-2 → ready-for-dev
 # project: magnum-opus
 # project_key: NOKEY
 # tracking_system: file-system
@@ -57,7 +57,7 @@ development_status:
   # ─── Epic 2: Exchange Feed Connectivity ────────────────────────────────────
   epic-2: in-progress
   2-1-exchange-interface-and-websocket-transport-layer: done
-  2-2-kucoin-websocket-feed-adapter: backlog
+  2-2-kucoin-websocket-feed-adapter: ready-for-dev
   2-3-kucoin-token-auto-renewal: backlog
   2-4-bybit-connection-multiplexer: backlog
   2-5-bybit-websocket-feed-adapter: backlog
