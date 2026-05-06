@@ -94,7 +94,12 @@ type Adapter struct {
 
 	clk    Clock
 	cancel context.CancelFunc
-	wg     sync.WaitGroup // tracks runLoop only
+	wg     sync.WaitGroup // tracks runLoop and tokenRenewalLoop
+
+	// token renewal configuration — overridable in tests
+	renewalCheckInterval time.Duration
+	renewalLeadTime      time.Duration
+	renewalMaxAttempts   int
 }
 
 // New returns a KuCoin adapter. clk must not be nil; the composition root supplies
@@ -118,8 +123,11 @@ func New(cfg config.KuCoinConfig, httpClient *http.Client, clk Clock) *Adapter {
 		confirmed:        make(map[string]bool),
 		pendingPings:     make(map[string]chan struct{}),
 		reconnectTrigger: make(chan struct{}, 1),
-		confirmTimeout:   30 * time.Second,
-		clk:              clk,
+		confirmTimeout:       30 * time.Second,
+		renewalCheckInterval: 1 * time.Minute,
+		renewalLeadTime:      30 * time.Minute,
+		renewalMaxAttempts:   5,
+		clk:                  clk,
 	}
 }
 
@@ -165,8 +173,14 @@ func (a *Adapter) Connect(ctx context.Context) error {
 	a.conn = conn
 	a.connMu.Unlock()
 
+	// Reset acks before starting the goroutine so Subscribe() called immediately
+	// after Connect() cannot race with resetAcks() inside runLoop.
+	a.resetAcks()
+
 	a.wg.Add(1)
 	go a.runLoop(adapterCtx, conn, tok)
+	a.wg.Add(1)
+	go func() { defer a.wg.Done(); a.tokenRenewalLoop(adapterCtx) }()
 	return nil
 }
 
@@ -202,8 +216,6 @@ func (a *Adapter) runLoop(adapterCtx context.Context, conn *transport.Conn, tok 
 	}()
 
 	for {
-		a.resetAcks()
-
 		connCtx, connCancel := context.WithCancel(adapterCtx)
 		var connWg sync.WaitGroup
 		connWg.Add(3)
@@ -270,6 +282,8 @@ func (a *Adapter) runLoop(adapterCtx context.Context, conn *transport.Conn, tok 
 		a.connMu.Lock()
 		a.conn = conn
 		a.connMu.Unlock()
+
+		a.resetAcks() // reset before re-subscribing on new connection
 
 		if err := a.sendSubscriptions(adapterCtx); err != nil {
 			slog.Error("kucoin: re-subscribe after reconnect", "err", err)

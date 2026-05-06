@@ -150,9 +150,14 @@ func parseTrade(msg wireMessage) (ParsedTrade, error) {
 		return ParsedTrade{}, fmt.Errorf("parse time %q: %w", data.Time, err)
 	}
 
-	side := "bid"
-	if data.Side == "sell" {
+	var side string
+	switch data.Side {
+	case "buy":
+		side = "bid"
+	case "sell":
 		side = "ask"
+	default:
+		return ParsedTrade{}, fmt.Errorf("unknown trade side %q", data.Side)
 	}
 
 	return ParsedTrade{

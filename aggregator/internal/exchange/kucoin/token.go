@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/mrqdt/magnum-opus/aggregator/internal/backoff"
 	"github.com/mrqdt/magnum-opus/aggregator/internal/config"
 )
 
@@ -59,7 +61,8 @@ type tokenAPIResponse struct {
 // fetchToken obtains a KuCoin WebSocket token via the private bullet endpoint.
 // apiBase allows overriding the base URL for tests.
 func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg config.KuCoinConfig, clock Clock) (tokenData, error) {
-	ts := strconv.FormatInt(clock.Now().UnixMilli(), 10)
+	now := clock.Now()
+	ts := strconv.FormatInt(now.UnixMilli(), 10)
 	method := "POST"
 	path := bulletPrivatePath
 
@@ -114,8 +117,69 @@ func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg co
 		token:        apiResp.Data.Token,
 		pingInterval: time.Duration(srv.PingInterval) * time.Millisecond,
 		pingTimeout:  time.Duration(srv.PingTimeout) * time.Millisecond,
-		fetchedAt:    clock.Now(),
+		fetchedAt:    now,
 	}, nil
+}
+
+// tokenRenewalLoop polls on renewalCheckInterval and fetches a fresh token
+// once the current one is within renewalLeadTime of expiry. On retry exhaustion
+// it fires the reconnect trigger so runLoop re-authenticates from scratch.
+// The goroutine exits cleanly when ctx is cancelled.
+func (a *Adapter) tokenRenewalLoop(ctx context.Context) {
+	ticker := time.NewTicker(a.renewalCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		a.tokMu.RLock()
+		renewalDue := a.clk.Now().After(a.tok.expiresAt().Add(-a.renewalLeadTime))
+		a.tokMu.RUnlock()
+
+		if !renewalDue {
+			continue
+		}
+
+		var (
+			newTok tokenData
+			err    error
+		)
+		for attempt := 0; attempt < a.renewalMaxAttempts; attempt++ {
+			if ctx.Err() != nil {
+				return
+			}
+			newTok, err = fetchToken(ctx, a.httpClient, a.apiBase, a.cfg, a.clk)
+			if err == nil {
+				break
+			}
+			slog.Warn("kucoin: token renewal failed", "attempt", attempt, "err", err)
+			if attempt+1 < a.renewalMaxAttempts {
+				d := backoff.Duration(attempt, a.clk)
+				select {
+				case <-time.After(d):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+
+		if err != nil {
+			slog.Error("kucoin: token renewal exhausted retries, triggering reconnect")
+			a.fireTrigger()
+			// Do not return — runLoop will reconnect and update a.tok; the loop
+			// will detect the fresh token on the next tick and stop retrying.
+			continue
+		}
+
+		a.tokMu.Lock()
+		a.tok = newTok
+		a.tokMu.Unlock()
+		slog.Info("kucoin: token renewed", "expires_at", newTok.expiresAt())
+	}
 }
 
 // kucoinHMAC computes base64(HMAC-SHA256(message, secret)).
