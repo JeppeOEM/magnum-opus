@@ -1,6 +1,6 @@
 # Story 2.4: Bybit Connection Multiplexer
 
-**Status:** review
+**Status:** done
 **Epic:** 2 — Exchange Feed Connectivity
 **Story ID:** 2.4
 **Story Key:** `2-4-bybit-connection-multiplexer`
