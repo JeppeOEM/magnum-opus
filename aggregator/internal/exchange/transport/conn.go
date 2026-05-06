@@ -1,5 +1,5 @@
-// Package transport wraps nhooyr.io/websocket with keepalive and reconnect signaling.
-// gorilla/websocket is prohibited — nhooyr.io/websocket exclusively.
+// Package transport wraps github.com/coder/websocket with keepalive and reconnect signaling.
+// gorilla/websocket and nhooyr.io/websocket are prohibited — github.com/coder/websocket exclusively.
 package transport
 
 import (
@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wsjson"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 const (
@@ -26,7 +26,7 @@ type Options struct {
 	DialOptions *websocket.DialOptions
 }
 
-// Conn wraps an nhooyr.io/websocket connection with a keepalive goroutine.
+// Conn wraps a github.com/coder/websocket connection with a keepalive goroutine.
 // When the keepalive detects no pong within the timeout window, it fires the
 // Reconnect() channel so the owning exchange adapter can re-establish the feed.
 //

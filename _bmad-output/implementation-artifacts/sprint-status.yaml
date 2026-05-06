@@ -1,5 +1,6 @@
 # generated: 2026-05-05
-# last_updated: 2026-05-05
+# last_updated: 2026-05-06
+# updated: epic-1-retrospective → done; epic-2 → in-progress; 2-1 → ready-for-dev
 # project: magnum-opus
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-05
+last_updated: 2026-05-06
 project: magnum-opus
 project_key: NOKEY
 tracking_system: file-system
@@ -43,19 +44,19 @@ story_location: _bmad-output/implementation-artifacts/stories
 
 development_status:
   # ─── Epic 1: Project Foundation & Correctness Engine ───────────────────────
-  epic-1: in-progress
-  1-1-go-module-initialization-and-dependency-verification: ready-for-dev
-  1-2-configuration-loading-and-credential-isolation: backlog
-  1-3-symbol-normalization-package: backlog
-  1-4-l2-order-book-state-machine: backlog
-  1-5-reconnect-and-snapshot-delta-merge-state-machine: backlog
-  1-6-gap-detection-and-4-cause-classification: backlog
-  1-7-test-infrastructure-and-l1-coverage-gate: backlog
-  epic-1-retrospective: optional
+  epic-1: done
+  1-1-go-module-initialization-and-dependency-verification: done
+  1-2-configuration-loading-and-credential-isolation: done
+  1-3-symbol-normalization-package: done
+  1-4-l2-order-book-state-machine: done
+  1-5-reconnect-and-snapshot-delta-merge-state-machine: done
+  1-6-gap-detection-and-4-cause-classification: done
+  1-7-test-infrastructure-and-l1-coverage-gate: done
+  epic-1-retrospective: done
 
   # ─── Epic 2: Exchange Feed Connectivity ────────────────────────────────────
-  epic-2: backlog
-  2-1-exchange-interface-and-websocket-transport-layer: backlog
+  epic-2: in-progress
+  2-1-exchange-interface-and-websocket-transport-layer: in-progress
   2-2-kucoin-websocket-feed-adapter: backlog
   2-3-kucoin-token-auto-renewal: backlog
   2-4-bybit-connection-multiplexer: backlog

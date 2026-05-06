@@ -17,6 +17,9 @@ import (
 	"github.com/mrqdt/magnum-opus/aggregator/internal/symbol"
 )
 
+// Compile-time proof that Adapter satisfies the Exchange interface.
+var _ exchange.Exchange = (*Adapter)(nil)
+
 const (
 	subBatchSize = 100
 	tickBuf      = 4096
