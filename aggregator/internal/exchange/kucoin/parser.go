@@ -27,8 +27,10 @@ type wireMessage struct {
 // for a single symbol. Each Delta carries the exact sequence number from the
 // level tuple — price and size are always strings, never float64.
 type ParsedUpdate struct {
-	Symbol symbol.Symbol
-	Deltas []orderbook.Delta
+	Symbol       symbol.Symbol
+	Deltas       []orderbook.Delta
+	MsgSeqStart  uint64 // sequenceStart from the message envelope (gap detection)
+	MsgSeqEnd    uint64 // sequenceEnd from the message envelope (gap detection)
 }
 
 // ParsedTrade is the output of parseTrade.
@@ -47,20 +49,23 @@ type ParsedTrade struct {
 //
 //	{
 //	  "sequenceStart": 100,
-//	  "sequenceEnd": 101,
+//	  "sequenceEnd": 105,
 //	  "changes": {
-//	    "bids": [["29500.50", "1.5", 100]],   // [price, size, seq]
-//	    "asks": [["29501.00", "0", 101]]
+//	    "bids": [["29500.50", "1.5", "100"]],  // [price, size, seq] — seq is a string on public feed
+//	    "asks": [["29501.00", "0", "105"]]      // per-level seqs are non-consecutive (internal events fill the gaps)
 //	  },
 //	  "time": 1620000000000   // milliseconds
 //	}
 //
 // size "0" means remove that price level from the book.
+// Gap detection must use sequenceStart/sequenceEnd (message level), not per-level seq numbers.
 func parseL2Update(msg wireMessage) (ParsedUpdate, error) {
 	sym := symbolFromTopic(msg.Topic)
 
 	var data struct {
-		Changes struct {
+		SequenceStart json.RawMessage `json:"sequenceStart"`
+		SequenceEnd   json.RawMessage `json:"sequenceEnd"`
+		Changes       struct {
 			Bids []json.RawMessage `json:"bids"`
 			Asks []json.RawMessage `json:"asks"`
 		} `json:"changes"`
@@ -68,6 +73,15 @@ func parseL2Update(msg wireMessage) (ParsedUpdate, error) {
 	}
 	if err := json.Unmarshal(msg.Data, &data); err != nil {
 		return ParsedUpdate{}, fmt.Errorf("parse l2 data: %w", err)
+	}
+
+	seqStart, err := parseSeqField(data.SequenceStart)
+	if err != nil {
+		return ParsedUpdate{}, fmt.Errorf("parse sequenceStart: %w", err)
+	}
+	seqEnd, err := parseSeqField(data.SequenceEnd)
+	if err != nil {
+		return ParsedUpdate{}, fmt.Errorf("parse sequenceEnd: %w", err)
 	}
 
 	tsNano := data.Time * int64(time.Millisecond)
@@ -80,7 +94,23 @@ func parseL2Update(msg wireMessage) (ParsedUpdate, error) {
 		return ParsedUpdate{}, err
 	}
 
-	return ParsedUpdate{Symbol: sym, Deltas: deltas}, nil
+	return ParsedUpdate{Symbol: sym, Deltas: deltas, MsgSeqStart: seqStart, MsgSeqEnd: seqEnd}, nil
+}
+
+// parseSeqField parses a sequence number that may be a JSON number or a quoted string.
+func parseSeqField(raw json.RawMessage) (uint64, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	var n int64
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return uint64(n), nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return 0, fmt.Errorf("cannot parse as number or string")
+	}
+	return strconv.ParseUint(s, 10, 64)
 }
 
 // parseLevels decodes KuCoin [price, size, seq] tuples and appends Deltas.

@@ -52,13 +52,21 @@ func (e EventType) String() string {
 type Tick struct {
 	Exchange   string
 	Symbol     symbol.Symbol
-	Seq        uint64
+	Seq        uint64    // per-level-change sequence (orderbook dedup)
 	TsExchange int64     // Unix nanoseconds from the exchange timestamp field
 	TsLocal    int64     // Unix nanoseconds at receipt, captured by the exchange adapter
 	Side       string    // "bid" or "ask"; empty string for trade events
 	Price      string    // exact string from wire, e.g. "29500.50"
 	Size       string    // exact string from wire; "0" means level removed (OB updates only)
 	Type       EventType
+
+	// Message-level sequence numbers for gap detection.
+	// Exchanges like KuCoin assign a global sequence to each internal event; per-level
+	// sequences within one message are non-consecutive. Gap detection must use the
+	// message boundary (sequenceStart/sequenceEnd) rather than per-level sequences.
+	// Both are 0 for exchanges that use per-level sequences for gap detection (e.g. Bybit).
+	MsgSeqStart uint64 // sequenceStart of this message; non-zero only on the first delta
+	MsgSeqEnd   uint64 // sequenceEnd of this message; set on every delta in the message
 }
 
 // SignalType classifies a lifecycle event emitted by an exchange adapter.

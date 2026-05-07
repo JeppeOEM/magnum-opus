@@ -46,7 +46,8 @@ type Worker struct {
 	book         *orderbook.OrderBook
 	recon        *reconnect.Machine
 	clock        gapdetector.Clock
-	lastSeq      uint64
+	lastSeq      uint64 // per-delta seq (fallback gap detection for exchanges without msg-level seq)
+	lastMsgSeqEnd uint64 // message-level sequenceEnd (KuCoin-style gap detection)
 	metrics      *metrics.Registry // nil disables metric emission (safe for tests)
 }
 
@@ -106,6 +107,7 @@ func (w *Worker) Run(ctx context.Context) {
 					// Reset so the first live tick after recovery doesn't trigger a spurious
 					// external-disconnect gap against the stale pre-panic lastSeq.
 					w.lastSeq = 0
+					w.lastMsgSeqEnd = 0
 					// Drain any stale snapshot result that arrived while the panic was in flight.
 					select {
 					case <-w.resultCh:
@@ -164,24 +166,48 @@ func (w *Worker) handleTick(ctx context.Context, tick exchange.Tick) {
 		return
 	}
 
-	// Gap detection in Live state (AC1). Cause is always CauseExternalDisconnect here;
-	// internal causes (panic, merge_error) are emitted directly in Run() and handleSnapshot.
-	if w.lastSeq > 0 {
-		if gap := gapdetector.Detect(w.lastSeq, tick.Seq, gapdetector.CauseExternalDisconnect, w.clock); gap != nil {
-			slog.Warn("coordinator: gap detected", "exchange", w.exch, "symbol", string(w.sym),
-				"cause", gap.Cause, "seq_before", gap.SeqBefore, "seq_after", gap.SeqAfter)
-			if err := w.stream.WriteGap(ctx, w.exch, w.sym, *gap); err != nil && ctx.Err() == nil {
-				slog.Error("coordinator: WriteGap (stream) failed", "err", err)
-			}
-			if err := w.ilp.WriteGap(ctx, w.exch, w.sym, *gap); err != nil && ctx.Err() == nil {
-				slog.Error("coordinator: WriteGap (ilp) failed", "err", err)
-			}
-			if w.metrics != nil {
-				w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gap.Cause)).Inc()
+	// Gap detection in Live state (AC1).
+	// If the exchange provides message-level sequence numbers (MsgSeqEnd != 0), use those —
+	// per-level sequences within one message are non-consecutive by design (KuCoin assigns
+	// a global sequence to every internal event; only a subset appear in L2 changes).
+	// MsgSeqStart is only set on the first delta of each message, so the check fires once
+	// per message rather than once per delta.
+	if tick.MsgSeqEnd != 0 {
+		if tick.MsgSeqStart > 0 && w.lastMsgSeqEnd > 0 {
+			if gap := gapdetector.Detect(w.lastMsgSeqEnd, tick.MsgSeqStart, gapdetector.CauseExternalDisconnect, w.clock); gap != nil {
+				slog.Warn("coordinator: gap detected", "exchange", w.exch, "symbol", string(w.sym),
+					"cause", gap.Cause, "seq_before", gap.SeqBefore, "seq_after", gap.SeqAfter)
+				if err := w.stream.WriteGap(ctx, w.exch, w.sym, *gap); err != nil && ctx.Err() == nil {
+					slog.Error("coordinator: WriteGap (stream) failed", "err", err)
+				}
+				if err := w.ilp.WriteGap(ctx, w.exch, w.sym, *gap); err != nil && ctx.Err() == nil {
+					slog.Error("coordinator: WriteGap (ilp) failed", "err", err)
+				}
+				if w.metrics != nil {
+					w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gap.Cause)).Inc()
+				}
 			}
 		}
+		w.lastMsgSeqEnd = tick.MsgSeqEnd
+	} else {
+		// Fallback: per-delta gap detection for exchanges without message-level seq (e.g. Bybit).
+		if w.lastSeq > 0 {
+			if gap := gapdetector.Detect(w.lastSeq, tick.Seq, gapdetector.CauseExternalDisconnect, w.clock); gap != nil {
+				slog.Warn("coordinator: gap detected", "exchange", w.exch, "symbol", string(w.sym),
+					"cause", gap.Cause, "seq_before", gap.SeqBefore, "seq_after", gap.SeqAfter)
+				if err := w.stream.WriteGap(ctx, w.exch, w.sym, *gap); err != nil && ctx.Err() == nil {
+					slog.Error("coordinator: WriteGap (stream) failed", "err", err)
+				}
+				if err := w.ilp.WriteGap(ctx, w.exch, w.sym, *gap); err != nil && ctx.Err() == nil {
+					slog.Error("coordinator: WriteGap (ilp) failed", "err", err)
+				}
+				if w.metrics != nil {
+					w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gap.Cause)).Inc()
+				}
+			}
+		}
+		w.lastSeq = tick.Seq
 	}
-	w.lastSeq = tick.Seq
 
 	// Apply update events to the order book (pure, no IO) (AC1)
 	if tick.Type == exchange.EventTypeUpdate {
@@ -244,8 +270,9 @@ func (w *Worker) handleSnapshot(ctx context.Context, result SnapshotResult) {
 	// Full payloads are not stored — the book is seeded from the REST snapshot and
 	// live deltas fill subsequent updates. See Dev Notes: Replay Buffer Limitation.
 	_ = replay
-	// Anchor lastSeq at the snapshot so the first live tick is gap-checked from here.
+	// Anchor sequence trackers at the snapshot so the first live message is gap-checked from here.
 	w.lastSeq = result.Seq
+	w.lastMsgSeqEnd = result.Seq
 	w.recon.GoLive()
 	if w.metrics != nil {
 		w.metrics.FeedState.WithLabelValues(w.exch, string(w.sym)).Set(1)

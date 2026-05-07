@@ -359,17 +359,26 @@ func (a *Adapter) handleMarketData(msg wireMessage) {
 			slog.Error("kucoin: parse l2 update", "topic", msg.Topic, "err", err)
 			return
 		}
-		for _, d := range update.Deltas {
+		for i, d := range update.Deltas {
+			// MsgSeqStart is only set on the first delta so the Worker fires the
+			// gap check exactly once per message. MsgSeqEnd is set on all deltas
+			// so the Worker can always update its lastMsgSeqEnd tracker.
+			msgSeqStart := uint64(0)
+			if i == 0 {
+				msgSeqStart = update.MsgSeqStart
+			}
 			a.sendTick(exchange.Tick{
-				Exchange:   "kucoin",
-				Symbol:     update.Symbol,
-				Seq:        d.Seq,
-				TsExchange: d.TsExchange,
-				TsLocal:    tsLocal,
-				Side:       sideStr(d.Side),
-				Price:      d.Price,
-				Size:       d.Size,
-				Type:       exchange.EventTypeUpdate,
+				Exchange:    "kucoin",
+				Symbol:      update.Symbol,
+				Seq:         d.Seq,
+				TsExchange:  d.TsExchange,
+				TsLocal:     tsLocal,
+				Side:        sideStr(d.Side),
+				Price:       d.Price,
+				Size:        d.Size,
+				Type:        exchange.EventTypeUpdate,
+				MsgSeqStart: msgSeqStart,
+				MsgSeqEnd:   update.MsgSeqEnd,
 			})
 		}
 
