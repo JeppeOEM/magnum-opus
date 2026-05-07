@@ -4,7 +4,7 @@ BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 export VERSION GIT_SHA BUILD_TIME
 
-.PHONY: up down logs test test-l1 test-l2 test-l3
+.PHONY: up down logs test test-l1 test-l2 test-l3 test-chain
 
 ## Spin up all services and stream logs — Ctrl+C to stop
 up:
@@ -30,3 +30,11 @@ test-l2:
 
 test-l3:
 	$(MAKE) -C aggregator test-l3
+
+## Run full chain: L1 + L2 + L3 + L4 (starts and stops Toxiproxy automatically)
+test-chain:
+	docker compose -f docker-compose.test.yml up -d
+	$(MAKE) -C aggregator test-all test-l4; \
+	  STATUS=$$?; \
+	  docker compose -f docker-compose.test.yml down; \
+	  exit $$STATUS
