@@ -45,7 +45,6 @@ _PASSTHROUGH_INFO = frozenset({
 _lock = threading.Lock()
 _warns: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 _pending_errors: list[dict] = []
-_status_active = False   # True when the current terminal line is a \r status line
 _start_time = time.monotonic()
 
 # ── terminal helpers ───────────────────────────────────────────────────────────
@@ -53,21 +52,7 @@ _start_time = time.monotonic()
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
-def _clear_status():
-    global _status_active
-    if _status_active:
-        print(flush=True)   # commit the \r line with a newline
-        _status_active = False
-
-def _overwrite_status(msg: str):
-    global _status_active
-    cols = 120
-    padded = msg.ljust(cols)[:cols]
-    print(f"\r{padded}", end="", flush=True)
-    _status_active = True
-
 def _println(msg: str):
-    _clear_status()
     print(msg, flush=True)
 
 # ── flush (called every second by background thread) ──────────────────────────
@@ -92,7 +77,7 @@ def _flush():
 
     if warn_total == 0:
         uptime = int(time.monotonic() - _start_time)
-        _overwrite_status(f"[{_now()}] \033[32m✓ running\033[0m  uptime {uptime}s")
+        _println(f"[{_now()}] \033[32m✓ running\033[0m  uptime {uptime}s")
     else:
         parts = []
         for msg, syms in sorted(warn.items()):
@@ -159,8 +144,6 @@ def _run_aggregated():
             _process(line)
     except KeyboardInterrupt:
         pass
-    finally:
-        _clear_status()
 
 def _flush_loop():
     while True:
