@@ -7,9 +7,13 @@ export VERSION GIT_SHA BUILD_TIME
 
 .PHONY: up down logs test test-l1 test-l2 test-l3 test-l4 test-chain
 
-## Spin up all services and stream logs — Ctrl+C to stop
+## Spin up all services — filtered logs by default, VERBOSE=1 for raw JSON
 up:
-	docker compose up --build
+	@if [ "$(VERBOSE)" = "1" ]; then \
+		docker compose up --build; \
+	else \
+		docker compose up --build 2>&1 | python3 scripts/logfmt.py; \
+	fi
 
 ## Stop and remove containers
 down:
