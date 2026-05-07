@@ -81,3 +81,42 @@ development_status:
   4-5-cicd-pipeline-and-l4-fault-injection-tests: done
   4-6-live-exchange-tests: done
   epic-4-retrospective: done
+
+  # ─── Epic 5: Candle Service Foundation ─────────────────────────────────────
+  epic-5: backlog
+  5-1-snapshot-1s-questdb-ddl: backlog
+  5-2-python-project-setup-and-docker: backlog
+  5-3-redis-consumer-and-gap-parser: backlog
+  5-4-l2-order-book-state-machine: backlog
+  5-5-ohlcv-accumulator-and-questdb-writer: backlog
+  epic-5-retrospective: optional
+
+  # ─── Epic 6: OB-Derived Features ───────────────────────────────────────────
+  epic-6: backlog
+  6-1-ob-state-machine-fixture-validation: backlog
+  6-2-mid-price-and-spread-features: backlog
+  6-3-ob-depth-and-book-shape-features: backlog
+  6-4-market-impact-and-ofi-features: backlog
+  epic-6-retrospective: optional
+
+  # ─── Epic 7: Trade & Quality Features ──────────────────────────────────────
+  epic-7: backlog
+  7-1-trade-direction-and-flow: backlog
+  7-2-block-trades-rolling-percentile: backlog
+  7-3-trade-distribution-and-volatility: backlog
+  7-4-ob-activity-and-microstructure: backlog
+  7-5-quality-fields-and-null-rows: backlog
+  epic-7-retrospective: optional
+
+  # ─── Epic 8: Multi-Timeframe Cascade & Redis Output ────────────────────────
+  epic-8: backlog
+  8-1-cascade-engine-and-clock-boundary: backlog
+  8-2-redis-candle-stream-publisher: backlog
+  8-3-ob-feature-snapshot-publisher: backlog
+  epic-8-retrospective: optional
+
+  # ─── Epic 9: Cold Storage & Operations ─────────────────────────────────────
+  epic-9: backlog
+  9-1-daily-parquet-flush-and-flush-manifest: backlog
+  9-2-flush-failure-alerting: backlog
+  epic-9-retrospective: optional

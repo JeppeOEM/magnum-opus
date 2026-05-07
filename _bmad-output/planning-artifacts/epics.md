@@ -4,6 +4,12 @@ status: complete
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
+candleServiceStepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics']
+candleServiceStatus: in-progress
+candleServiceInputDocuments:
+  - '_bmad-output/planning-artifacts/prd.md'
+  - '_bmad-output/planning-artifacts/architecture.md'
+  - 'docs/data-contract.md'
 ---
 
 # magnum-opus - Epic Breakdown
@@ -912,3 +918,188 @@ So that every production deployment is validated against real exchange data befo
 
 **Given** no regressions are observed
 **Then** the operator tags the release in git and the previous VM snapshot is retained for at least 7 days
+
+---
+
+# Candle Service — Epic Breakdown
+
+## Overview
+
+This section documents the epic and story breakdown for the Python Candle Service, the second major component of magnum-opus. It reads normalized ticks from Redis Streams produced by the Go aggregator and computes 1-second OHLCV + microstructure aggregates, multi-timeframe candles, and OB feature snapshots.
+
+Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
+
+## Candle Service Requirements Inventory
+
+### Functional Requirements
+
+**Stream Reading**
+- CS-FR1: Read `ticks:{exchange}:{symbol}` streams via Redis consumer group; on first connect start from current position (`$`); on restart resume from last-ack'd position
+- CS-FR2: Parse both `type=tick` and `type=gap` entries from the stream
+- CS-FR3: Deduplicate gap markers on `(seq_before, seq_after, gap_cause)` — aggregator may emit retries
+
+**L2 Order Book Maintenance**
+- CS-FR25: Maintain in-memory L2 order book per symbol: `event_type=snapshot` resets state, `event_type=update` applies deltas
+- CS-FR27: On `event_type=snapshot`: immediately flush the current 1-second accumulator and reinitialize OB state from the snapshot data
+
+**1-Second Aggregation**
+- CS-FR4: Compute 1-second OHLCV bars (open, high, low, close, volume, quote_volume, trade_count, twap)
+- CS-FR5: Track mid-price path per second (mid_price_open, mid_price_high, mid_price_low, vwmp)
+- CS-FR6: Compute spread features per second (spread_high, spread_low, spread_mean, effective_spread)
+- CS-FR7: Capture L2 OB state at open and close of each second (best_bid, best_ask, depth at L1/L2/top10/total for both open and close snapshots)
+- CS-FR8: Compute book shape features (weighted_bid_price, weighted_ask_price)
+- CS-FR9: Compute market impact features (depth_to_1pct_bid, depth_to_1pct_ask)
+- CS-FR10: Compute OFI features (ofi: full-book, ofi_l1: L1-only)
+- CS-FR11: Classify trades by aggressor side (`side=bid` → buy, `side=ask` → sell); accumulate buy_volume, buy_count
+- CS-FR12: Classify block trades using rolling 99th-percentile threshold over last N trades per symbol (N = `BLOCK_TRADE_WINDOW`, default 1000); accumulate block_buy_volume, block_sell_volume
+- CS-FR13: Compute trade distribution features (max_trade_size, large_bid_orders, large_ask_orders, first_trade_offset_ms, last_trade_offset_ms, trade_clustering as Gini coefficient of inter-trade intervals, max_consecutive_run)
+- CS-FR14: Compute volatility features (realized_vol, realized_skewness, uptick_count, downtick_count)
+- CS-FR15: Compute OB activity features (bid/ask_order_arrivals, bid/ask_cancel_count, ob_modify_count, avg_bid/ask_order_size, best_bid/ask_changes, quote_stuff_ratio)
+- CS-FR16: Compute trade microstructure features (trade_sign_autocorr, inter_trade_interval_std_ms, num_trade_price_levels)
+- CS-FR17: Track bar quality fields: gap_count (incremented per gap marker in window), bar_count
+
+**Data Output**
+- CS-FR18: Write completed 1-second bars to QuestDB `snapshot_1s` via ILP; for empty seconds write a null row (ts/exchange/symbol populated, all computed fields null)
+- CS-FR19: Cascade 1-second bars to 1m, 5m, 15m, 1h, 4h, 1d, 1w OHLCV timeframes
+- CS-FR20: Publish to `candles:{exchange}:{symbol}:{tf}` on every accumulator update (`is_complete: false`) and on bar close (`is_complete: true`); publish weekly bars also to `candles:1w:{exchange}:{symbol}` alias
+- CS-FR21: Publish 1-second OB feature snapshots to `ob_features:{exchange}:{symbol}` on bar close
+
+**Cold Storage**
+- CS-FR22: Perform daily Parquet flush of `snapshot_1s` to Backblaze B2 in Hive-partitioned format (zstd compressed)
+- CS-FR23: Write `flush_manifest` record to QuestDB after each flush attempt (success or failure, with row count, B2 path, error message if failed)
+- CS-FR24: Publish to `alerts:flush_failure` Redis stream on daily flush failure
+
+**Configuration**
+- CS-FR26: Load all configuration from env vars: `REDIS_URL`, `QUESTDB_ILP_ADDR`, `SYMBOLS_KUCOIN`, `SYMBOLS_BYBIT`, `B2_*` credentials, `BLOCK_TRADE_WINDOW`, `LOG_LEVEL`
+
+### Non-Functional Requirements
+
+- CS-NFR1: Bar publish latency ≤2s from second boundary to QuestDB write
+- CS-NFR2: Sustained write rate: ~400 rows/sec (200 symbols × 2 exchanges)
+- CS-NFR3: Zero silent gap corruption: every gap marker in a window must increment gap_count
+- CS-NFR4: On restart, replay all unacknowledged stream entries without double-counting bars
+- CS-NFR5: Daily B2 flush must complete within 4 hours of the day boundary
+- CS-NFR6: All credentials (Redis, QuestDB, B2) loaded exclusively from env vars
+- CS-NFR7: Service containerized and co-deployed via docker-compose alongside aggregator
+- CS-NFR8: Testable at minimum two layers: pure-function unit tests + integration tests using `fakeredis` (PyPI) and test-container QuestDB
+
+### FR Coverage Map
+
+| FR | Epic | Description |
+|---|---|---|
+| CS-FR1 | 5 | Redis consumer group, startup position |
+| CS-FR2 | 5 | Tick/gap message parsing |
+| CS-FR3 | 5 | Gap marker deduplication |
+| CS-FR25 | 5 | In-memory L2 OB maintenance |
+| CS-FR26 | 5 | Env-var configuration |
+| CS-FR27 | 5 | Snapshot flush + OB reinit |
+| CS-FR4 | 5 | 1s OHLCV computation |
+| CS-FR18 (OHLCV write) | 5 | QuestDB ILP write — OHLCV fields only; full DDL created from day one |
+| CS-FR5 | 6 | Mid-price path features |
+| CS-FR6 | 6 | Spread features |
+| CS-FR7 | 6 | OB state at open/close |
+| CS-FR8 | 6 | Book shape features |
+| CS-FR9 | 6 | Market impact features |
+| CS-FR10 | 6 | OFI features |
+| CS-FR11 | 7 | Trade direction classification |
+| CS-FR12 | 7 | Block trade rolling percentile |
+| CS-FR13 | 7 | Trade distribution features |
+| CS-FR14 | 7 | Volatility features |
+| CS-FR15 | 7 | OB activity features |
+| CS-FR16 | 7 | Trade microstructure features |
+| CS-FR17 | 7 | Gap count + bar quality |
+| CS-FR18 (null rows) | 7 | Empty second null-row behaviour |
+| CS-FR19 | 8 | Timeframe cascade engine |
+| CS-FR20 | 8 | Redis candle stream output (time-based partial updates) |
+| CS-FR21 | 8 | Redis OB feature snapshot output |
+| CS-FR22 | 9 | Daily B2 Parquet flush |
+| CS-FR23 | 9 | flush_manifest QuestDB write (DDL created in same story) |
+| CS-FR24 | 9 | alerts:flush_failure publish |
+
+## Candle Service Epic List
+
+- Epic 5: Candle Service Foundation
+- Epic 6: OB-Derived Features
+- Epic 7: Trade & Quality Features
+- Epic 8: Multi-Timeframe Cascade & Redis Output
+- Epic 9: Cold Storage & Operations
+
+---
+
+## Epic 5: Candle Service Foundation
+
+The operator can run the Candle Service alongside the aggregator, confirm it reads from Redis, and see basic OHLCV rows appearing in `snapshot_1s` in QuestDB.
+
+**FRs covered:** CS-FR1, CS-FR2, CS-FR3, CS-FR4, CS-FR18 (OHLCV fields), CS-FR25, CS-FR26, CS-FR27
+
+**Implementation notes:**
+- Story 1: `snapshot_1s` CREATE TABLE DDL — full 67-column schema, all non-identity columns nullable. Written before any accumulator code. No migrations ever.
+- Story 2: Python project setup — `candle-service/` directory, pyproject.toml, Dockerfile, docker-compose update (add candle-service service)
+- Story 3: Redis consumer — consumer group per symbol, parse tick/gap messages, dedup gap markers, on snapshot event flush accumulator + reinit OB state (CS-FR27)
+- Story 4: L2 OB state machine — in-memory per symbol, snapshot resets, update applies deltas (CS-FR25)
+- Story 5: 1s OHLCV accumulator + QuestDB ILP writer — wall-clock second boundaries, write 8 OHLCV fields, leave remaining 59 columns null
+
+**Done when:** `docker-compose up` starts the service, it connects to Redis, and QuestDB shows OHLCV rows in `snapshot_1s` for all configured symbols.
+
+---
+
+## Epic 6: OB-Derived Features
+
+The `snapshot_1s` rows contain all order-book-derived fields: mid-price path, spread, depth at open/close, book shape, market impact, and OFI.
+
+**FRs covered:** CS-FR5, CS-FR6, CS-FR7, CS-FR8, CS-FR9, CS-FR10
+
+**Implementation notes:**
+- All features in this epic are derived from the L2 OB state machine built in Epic 5
+- Validation story recommended first: confirm OB state machine produces correct books against known tick fixtures before computing features from it
+- OFI requires tracking book state changes across ticks (not just snapshots) — needs careful delta tracking in the accumulator
+
+**Done when:** QuestDB `snapshot_1s` rows contain populated mid_price_*, spread_*, bid/ask_depth_*, weighted_*_price, depth_to_1pct_*, ofi, ofi_l1 fields.
+
+---
+
+## Epic 7: Trade & Quality Features
+
+The `snapshot_1s` rows contain all trade-derived fields and quality metadata. The 67-field schema is fully populated for all active seconds.
+
+**FRs covered:** CS-FR11, CS-FR12, CS-FR13, CS-FR14, CS-FR15, CS-FR16, CS-FR17, CS-FR18 (null-row behaviour for empty seconds)
+
+**Implementation notes:**
+- All features in this epic are derived from trade events (`event_type=trade`) in the tick stream — independent of the OB state machine
+- CS-FR12 block trade threshold: rolling 99th-percentile over last N trades per symbol (N = `BLOCK_TRADE_WINDOW`, default 1000). Stateful with edge cases — deserves its own story, not bundled with trade flow
+- Empty-second null-row: when no ticks arrive in a second, write a row with ts/exchange/symbol and all computed fields null
+- gap_count increments once per gap marker received in the window; bar_count always increments
+
+**Done when:** QuestDB `snapshot_1s` rows contain all 67 fields populated for active seconds; empty seconds produce null rows; gap markers correctly increment gap_count.
+
+---
+
+## Epic 8: Multi-Timeframe Cascade & Redis Output
+
+Bots can subscribe to 1m–1w candles via Redis streams. Both in-progress and closed bars are published. OB feature snapshots are available for real-time signal consumers.
+
+**FRs covered:** CS-FR19, CS-FR20, CS-FR21
+
+**Implementation notes:**
+- Cascade engine: 1s → 1m → 5m → 15m → 1h → 4h → 1d → 1w. Clock boundary owned by an asyncio timer loop, NOT the Redis consumer (prevents off-by-one bar assignment bugs)
+- **Partial bar publish cadence: time-based (every 250ms per symbol per active timeframe), NOT on every tick.** Publishing on every tick at 2,400/sec × 400 symbols × 8 timeframes = ~7.7M Redis writes/minute — unsustainable. Cadence is configurable via env var
+- Weekly bars also published to `candles:1w:{exchange}:{symbol}` alias
+- OB feature snapshots published to `ob_features:{exchange}:{symbol}` on each 1s bar close
+
+**Done when:** Redis streams receive candle messages at all 8 timeframes; bots can filter on `is_complete` to choose closed-bar-only or live-update behaviour; OB feature snapshots appear in `ob_features:*` streams.
+
+---
+
+## Epic 9: Cold Storage & Operations
+
+Daily snapshots of `snapshot_1s` are archived to Backblaze B2. Flush failures are alerted. The complete system runs in production via docker-compose.
+
+**FRs covered:** CS-FR22, CS-FR23, CS-FR24
+
+**Implementation notes:**
+- `flush_manifest` CREATE TABLE DDL written in the same story as the first flush implementation — schema-first, no migrations
+- Daily Parquet flush: zstd compressed, Hive-partitioned by date, runs at configurable daily time
+- Flush must complete within 4 hours of day boundary (CS-NFR5)
+- On failure: write flush_manifest row with error field populated AND publish to `alerts:flush_failure`
+
+**Done when:** QuestDB data older than 30 days is present in B2; flush_manifest shows successful flush records; a simulated failure produces an entry in both flush_manifest and alerts:flush_failure.
