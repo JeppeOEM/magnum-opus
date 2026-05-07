@@ -7,8 +7,7 @@ Behaviour:
   - Aggregator INFO (startup/status) prints immediately.
   - Aggregator WARN is counted and flushed as a summary once per second.
   - Aggregator ERROR prints immediately in full, then the summary resumes.
-  - The status line overwrites itself in-place when there is nothing notable,
-    so the terminal stays clean during healthy operation.
+  - Every second: tick rate per exchange/symbol is fetched from /metrics.
 
 Usage:
   docker compose up --build 2>&1 | python3 scripts/logfmt.py
@@ -19,15 +18,16 @@ import re
 import sys
 import threading
 import time
+import urllib.request
+import urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
-# docker compose prefixes lines with "service-N  | "
 _PREFIX = re.compile(r'^\S+-\d+\s+\|\s+')
+_METRICS_URL = "http://localhost:8080/metrics"
 
-# INFO messages worth printing immediately (not aggregated)
 _PASSTHROUGH_INFO = frozenset({
     "aggregator starting",
     "aggregator: kucoin enabled",
@@ -47,6 +47,30 @@ _warns: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 _pending_errors: list[dict] = []
 _start_time = time.monotonic()
 
+# previous tick counter values for computing per-second rate
+_prev_ticks: dict[str, float] = {}   # "exchange/symbol" -> counter value
+
+# ── metrics scrape ─────────────────────────────────────────────────────────────
+
+def _scrape_ticks() -> dict[str, float]:
+    """Fetch aggregator_ticks_total from /metrics. Returns {} on any error."""
+    try:
+        with urllib.request.urlopen(_METRICS_URL, timeout=0.5) as r:
+            body = r.read().decode()
+    except Exception:
+        return {}
+
+    counts: dict[str, float] = {}
+    for line in body.splitlines():
+        if not line.startswith("aggregator_ticks_total{"):
+            continue
+        # aggregator_ticks_total{exchange="kucoin",symbol="BTC-USDT"} 12345.0
+        m = re.match(r'aggregator_ticks_total\{exchange="([^"]+)",symbol="([^"]+)"\}\s+([\d.]+)', line)
+        if m:
+            key = f"{m.group(1)}/{m.group(2)}"
+            counts[key] = float(m.group(3))
+    return counts
+
 # ── terminal helpers ───────────────────────────────────────────────────────────
 
 def _now() -> str:
@@ -58,40 +82,57 @@ def _println(msg: str):
 # ── flush (called every second by background thread) ──────────────────────────
 
 def _flush():
+    global _prev_ticks
+
     with _lock:
-        errs  = _pending_errors[:]
-        warn  = {msg: dict(syms) for msg, syms in _warns.items()}
+        errs = _pending_errors[:]
+        warn = {msg: dict(syms) for msg, syms in _warns.items()}
         _pending_errors.clear()
         _warns.clear()
 
     # Errors first — each one gets its own block
     for log in errs:
-        ts  = log.get("time", "")[:19].replace("T", " ")
-        msg = log.get("msg", "")
+        ts     = log.get("time", "")[:19].replace("T", " ")
+        msg    = log.get("msg", "")
         extras = [(k, v) for k, v in log.items() if k not in ("time", "level", "msg")]
         _println(f"[{ts}] \033[31m✗ ERROR\033[0m  {msg}")
         for k, v in extras:
             _println(f"          \033[2m{k}:\033[0m {v}")
 
-    warn_total = sum(sum(s.values()) for s in warn.values())
+    # Tick rate from Prometheus
+    current = _scrape_ticks()
+    tick_parts = []
+    for key in sorted(current):
+        prev  = _prev_ticks.get(key, current[key])
+        rate  = max(0, current[key] - prev)
+        exch, sym = key.split("/", 1)
+        tick_parts.append(f"{sym} \033[36m{int(rate)}/s\033[0m")
+    _prev_ticks = current
 
-    if warn_total == 0:
-        uptime = int(time.monotonic() - _start_time)
-        _println(f"[{_now()}] \033[32m✓ running\033[0m  uptime {uptime}s")
-    else:
-        parts = []
-        for msg, syms in sorted(warn.items()):
-            total = sum(syms.values())
-            label = msg.replace("coordinator: ", "")
-            sym_bits = "  ".join(
-                f"{s.split('/')[-1]}×{n}"
-                for s, n in sorted(syms.items()) if s
-            )
-            chunk = f"\033[33m⚠ {total} {label}\033[0m"
-            if sym_bits:
-                chunk += f"  [{sym_bits}]"
-            parts.append(chunk)
-        _println(f"[{_now()}] {' | '.join(parts)}")
+    # Warnings
+    warn_total = sum(sum(s.values()) for s in warn.values())
+    warn_parts = []
+    for msg, syms in sorted(warn.items()):
+        total = sum(syms.values())
+        label = msg.replace("coordinator: ", "")
+        sym_bits = "  ".join(
+            f"{s.split('/')[-1]}×{n}"
+            for s, n in sorted(syms.items()) if s
+        )
+        chunk = f"\033[33m⚠ {total} {label}\033[0m"
+        if sym_bits:
+            chunk += f"  [{sym_bits}]"
+        warn_parts.append(chunk)
+
+    uptime = int(time.monotonic() - _start_time)
+    status = f"\033[32m✓ running\033[0m  uptime {uptime}s"
+
+    parts = [status]
+    if tick_parts:
+        parts.append("  ".join(tick_parts))
+    parts.extend(warn_parts)
+
+    _println(f"[{_now()}] {'  |  '.join(parts)}")
 
 # ── line processor ─────────────────────────────────────────────────────────────
 
@@ -100,7 +141,6 @@ def _process(raw: str):
     m = _PREFIX.match(line)
 
     if not m:
-        # Build output / non-service line: pass straight through
         _println(line)
         return
 
@@ -136,6 +176,11 @@ def _process(raw: str):
 
 # ── entry points ──────────────────────────────────────────────────────────────
 
+def _flush_loop():
+    while True:
+        time.sleep(1.0)
+        _flush()
+
 def _run_aggregated():
     t = threading.Thread(target=_flush_loop, daemon=True)
     t.start()
@@ -144,11 +189,6 @@ def _run_aggregated():
             _process(line)
     except KeyboardInterrupt:
         pass
-
-def _flush_loop():
-    while True:
-        time.sleep(1.0)
-        _flush()
 
 def _run_verbose():
     try:
