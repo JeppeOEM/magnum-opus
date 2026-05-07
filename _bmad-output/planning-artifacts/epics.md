@@ -113,7 +113,7 @@ Architecture-derived requirements that directly affect implementation scope:
 - **ARC5:** Five-layer test architecture enforced via Go build tags: L1 (no tag), L2 (`//go:build l2`), L3 (`//go:build l3`), L4 (`//go:build l4`), L5 (`//go:build live`) — Makefile targets: test-l1, test-l2, test-l3, test-l4, test-all, test-live
 - **ARC6:** CI/CD pipeline: GitHub Actions runs L1+L2 on every push/PR; `release.yml` builds multi-stage Docker image and pushes to `ghcr.io/mrqdt/magnum-opus/aggregator` on git tag push
 - **ARC7:** Docker Compose deployment on Linode (8 vCPU, 16 GB RAM) with resource limits — aggregator: mem_limit 600m/cpus 2.0; redis: 2g; questdb: 8g; stop_grace_period: 15s
-- **ARC8:** Linode VM snapshot before each deploy for 5-minute rollback if 48-hour canary gate fails
+- **ARC8:** Linode VM snapshot before each deploy for 5-minute rollback
 - **ARC9:** Credential sanitizing `slog.Handler` wrapper must be wired in `main.go` before any other package initializes its logger — covers DEBUG output and third-party library log calls
 - **ARC10:** Dockerfile multi-stage build required: build stage (Go toolchain) + minimal runtime stage — not yet specified in architecture, must be authored as part of deployment story
 - **ARC11:** All external dependencies must be actively maintained at time of adoption and on every future dependency update. Criteria: not archived, has had a commit within the last 12 months, has an active maintainer. The specific choice of `nhooyr.io/websocket` over the archived `gorilla/websocket` is the canonical example of this rule. Before adding any new dependency, verify active maintenance status. Pinned versions (e.g. QuestDB image tag) must be updated deliberately — not left on `:latest` — but must be periodically reviewed for security patches.
@@ -156,7 +156,7 @@ The Candle Service can read a complete Redis Stream with normalized ticks and in
 **NFRs covered:** NFR1, NFR2, NFR3, NFR4, NFR8, NFR9, NFR18
 
 ### Epic 4: Operational Readiness & Deployment
-The operator can monitor the service via /health (ok/degraded/critical), /version, and /metrics (Prometheus); deploy via Docker Compose + GitHub Actions to Linode; validate the running binary against the intended git SHA; pass the 48-hour canary gate; and roll back in 5 minutes via VM snapshot.
+The operator can monitor the service via /health (ok/degraded/critical), /version, and /metrics (Prometheus); deploy via Docker Compose + GitHub Actions to Linode; validate the running binary against the intended git SHA; and roll back in 5 minutes via VM snapshot.
 **FRs covered:** FR20, FR27, FR28, FR29, FR30, FR32, FR33, FR34
 **ARCs covered:** ARC4, ARC6, ARC7, ARC8, ARC9, ARC10
 **NFRs covered:** NFR5, NFR10, NFR17, NFR19, NFR20
@@ -736,7 +736,7 @@ So that the full pipeline from exchange feed to Redis/QuestDB runs as a single c
 
 ## Epic 4: Operational Readiness & Deployment
 
-The operator can monitor the service via /health (ok/degraded/critical), /version, and /metrics (Prometheus); deploy via Docker Compose + GitHub Actions to Linode; validate the running binary against the intended git SHA; pass the 48-hour canary gate; and roll back in 5 minutes via VM snapshot.
+The operator can monitor the service via /health (ok/degraded/critical), /version, and /metrics (Prometheus); deploy via Docker Compose + GitHub Actions to Linode; validate the running binary against the intended git SHA; and roll back in 5 minutes via VM snapshot.
 
 ### Story 4.1: Prometheus Metrics Registry
 
@@ -893,27 +893,22 @@ So that no unverified code reaches the registry and deployments are reproducible
 **Then** it defines: `test-l1`, `test-l2`, `test-l3`, `test-l4`, `test-all` (l1+l2+l3 fail-fast), `test-live`, `build`, `docker-build`, `verify-versions`
 **And** `make verify-versions` confirms the SHA reported by `/version` on a running instance matches the intended git SHA
 
-### Story 4.6: Live Exchange Tests & 48-Hour Canary Gate
+### Story 4.6: Live Exchange Tests
 
 As the operator,
-I want L5 live exchange tests and a documented 48-hour canary gate procedure,
-So that every production deployment is validated against real exchange data before being promoted to the primary feed.
+I want L5 live exchange tests,
+So that every production deployment is validated against real exchange data before being tagged as a release.
 
 **Acceptance Criteria:**
 
 **Given** `make test-live`
 **Then** it runs 18 L5 tests tagged `//go:build live` against actual KuCoin and Bybit WebSocket feeds
 **And** if `KUCOIN_API_KEY` or `BYBIT_API_KEY` environment variables are absent, it exits with a clear message — not a confusing auth error
-**And** all 18 tests pass before the canary gate begins
+**And** all 18 tests pass before deploying
 
 **Given** a new version is deployed to Linode
-**When** the 48-hour canary gate begins
-**Then** the pass criteria are: zero `internal_*` gap events in `gaps:log` across 48 hours, `external_*` gap rate ≤ 1 per symbol per 24h, `/health` status `"ok"` or `"degraded"` (never `"critical"`)
-**And** these criteria are documented in `docs/ops.md` before Epic 4 implementation begins (per Winston's feedback)
+**Then** the operator monitors `/health`, `/metrics`, and logs for regressions
+**And** the rollback procedure is documented in `docs/ops.md`: revert to Linode VM snapshot → verify `/version` returns previous SHA → confirm feeds reconnect within 90 seconds
 
-**Given** the canary gate fails at any point before 48 hours
-**When** the operator decides to roll back
-**Then** `docs/ops.md` documents the exact rollback procedure: revert to Linode VM snapshot → verify `/version` returns previous SHA → confirm feeds reconnect within 90 seconds
-
-**Given** the canary gate passes
+**Given** no regressions are observed
 **Then** the operator tags the release in git and the previous VM snapshot is retained for at least 7 days

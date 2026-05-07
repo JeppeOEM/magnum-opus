@@ -1,0 +1,56 @@
+name: Release
+
+# Triggers only when a semver tag is pushed AND the CI workflow on that commit passed.
+# This prevents publishing a broken image from an unverified commit.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  publish:
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+    # Only run when: (a) CI succeeded, and (b) the triggering ref is a semver tag.
+    # head_branch for a tag push is the tag name (e.g. v1.2.3), NOT refs/tags/v1.2.3.
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve build metadata
+        id: vars
+        run: |
+          echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          # head_branch is the tag name (e.g. v1.2.3) for tag-triggered runs.
+          echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./aggregator
+          push: true
+          build-args: |
+            VERSION=${{ steps.vars.outputs.tag }}
+            GIT_SHA=${{ steps.vars.outputs.sha }}
+            BUILD_TIME=${{ steps.vars.outputs.build_time }}
+          tags: |
+            ghcr.io/mrqdt/magnum-opus/aggregator:${{ steps.vars.outputs.sha }}
+            ghcr.io/mrqdt/magnum-opus/aggregator:${{ steps.vars.outputs.tag }}

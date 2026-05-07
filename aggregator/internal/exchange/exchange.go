@@ -26,15 +26,22 @@ const (
 	EventTypeUpdate EventType = iota
 	// EventTypeTrade is a trade execution event ("trade" in the Redis schema).
 	EventTypeTrade
+	// EventTypeSnapshot is an order book snapshot written to QuestDB when the
+	// coordinator initialises or re-initialises a symbol's order book from a REST
+	// snapshot. Snapshot events are not published to Redis Streams — they go to
+	// raw_ticks only so the audit trail is complete.
+	EventTypeSnapshot
 )
 
-// String returns the Redis stream field value for the event type.
+// String returns the Redis stream / QuestDB field value for the event type.
 func (e EventType) String() string {
 	switch e {
 	case EventTypeUpdate:
 		return "update"
 	case EventTypeTrade:
 		return "trade"
+	case EventTypeSnapshot:
+		return "snapshot"
 	default:
 		return "unknown"
 	}

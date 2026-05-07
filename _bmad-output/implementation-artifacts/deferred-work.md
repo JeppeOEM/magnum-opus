@@ -1,5 +1,44 @@
 # Deferred Work
 
+## Deferred from: code review of 4-3-service-composition-root-and-credential-sanitizing-logger (2026-05-07)
+
+- **`gapwindow.Window` allocated but never populated — gap_count_24h always 0** (`cmd/aggregator/main.go:132`) — the coordinator Workers detect and emit gap events to Redis/QuestDB but never call `gapWin.Add()`. The HTTP /health endpoint reports `gap_count_24h: 0` for the entire process lifetime. Wiring requires adding gapwindow as a coordinator dependency (new constructor parameter). Pre-existing architectural gap from story 3.x; out of scope for story 4.3.
+- **No `cmd/aggregator/main_test.go` verifying slogredact handler is active in test binary** (`cmd/aggregator/`) — the epic-level spec for story 4.3 states "a test in cmd/aggregator/ confirms the handler is registered before any test log output is produced." The story spec did not carry this task forward. Deferred — story spec is the binding document for this story.
+
+## Deferred from: code review of 4-2-health-version-and-metrics-http-endpoints (2026-05-07)
+
+- **Gather() errors silently swallowed in GathererFeedStatus** (`httpapi/server.go:FeedCounts`) — if the prometheus registry returns an error, returns 0/0 which reports status=ok; acceptable tradeoff for in-memory operation, no production impact.
+- **Populate() is not an atomic batch** (`gapwindow/window.go:Populate`) — acquires mutex N times; other goroutines can interleave; startup-only call in practice so concurrent access is not expected before Run().
+- **Window.Add negative Unix timestamp guard incomplete** (`gapwindow/window.go`) — `int(h%24+24)%24` is incorrect for `h < -24`; pre-epoch gap timestamps never occur in production.
+- **Count() window boundary includes events in the cutoff hour** (`gapwindow/window.go`) — events up to 1h older than exactly 24h ago may be counted due to hourly-bucket granularity; by design, consistent with spec's "older than 24h" interpreted at hourly resolution.
+- **Package-level `Version`, `GitSHA`, `BuildTime` vars are mutable global state** (`httpapi/version.go`) — ldflags injection requires exported package vars; tests use VersionInfo struct injection instead; no mutation in production.
+- **No HTTP method restriction on /health, /version, /metrics** (`httpapi/server.go`) — POST/PUT/DELETE return 200; internal monitoring endpoints, no auth, low risk.
+- **JSON encoding errors silently discarded** (`httpapi/server.go:handleHealth, handleVersion`) — encoding simple value structs never fails in practice; if ResponseWriter fails mid-write, client sees truncated response.
+- **`TestHealth_UptimeIncreases` tests lower bound only** (`httpapi/server_test.go`) — asserts `>= 10s`, not strictly increasing; sufficient for the AC but could be more precise.
+- **BucketEviction test only exercises one 24h wrap** (`gapwindow/window_test.go`) — second wrap (48h advance) not tested; modulo logic is the same for all wraps.
+
+## Deferred from: code review of 4-1-prometheus-metrics-registry (2026-05-07)
+
+- **metricsReg field stored but never read** (`coordinator/coordinator.go:WithMetrics`) — set in WithMetrics but not referenced elsewhere; will be needed if coordinator-level metrics (e.g. snapshot dispatch latency) are added in a later story.
+- **WithMetrics after Run() is an unsynchronized data race** (`coordinator/coordinator.go:WithMetrics`) — writes `worker.metrics` field without synchronization; consistent with existing WithSleep pattern; doc comment "Call before Run()" is the contract enforcement.
+- **gapCauses is a mutable package-level var slice** (`metrics/metrics.go`) — `var gapCauses = []string{...}` could be appended to; package-private and never mutated in practice. Cosmetic.
+- **ConsumerLagMs has no writer** (`coordinator/`) — metric is defined and pre-initialized but no code path calls `ConsumerLagMs.Set(...)` yet. Will be wired when Redis Stream consumer lag is tracked (story 4.2 or 4.3).
+
+## Deferred from: code review of 3-5-snapshot-dispatch-and-full-coordinator-orchestration (2026-05-07)
+
+- **AC3 Redis drain not implemented** (`coordinator/coordinator.go`, `coordinator/symbol.go`) — Workers pass the cancelled root `ctx` to `stream.Write()`; in-flight Redis writes abort on SIGTERM. Lost tick falls inside the restart gap marker so audit trail is complete. Wire a proper drain context in story 4.3 (service composition root) where the full shutdown sequence is assembled.
+- **Stale snapshot sequencing hazard after panic recovery** (`coordinator/snapshot.go`) — when a panic fires during StateBuffering, recovery enqueues a second SnapshotRequest; the first result is consumed by the panic-recovered Worker, the second result sits in resultCh and is consumed by the next snapshot request cycle with potentially stale data. Root cause: all SnapshotRequests share the same `w.resultCh`. Fix requires per-request ResultCh. Low probability in practice.
+- **`parseSide` silent default to `SideBid` for unknown values** (`coordinator/symbol.go`) — any tick whose Side field is not `"ask"` (including empty string) silently becomes a bid. Pre-existing from story 3.4.
+- **Gap marker write errors intentionally discarded** (`coordinator/symbol.go`) — `_ = w.stream.WriteGap(...)` in the shutdown path. Best-effort semantics per NFR9 (must-not-halt). By design.
+- **Fixed-index test assertions in `TestWorker_GapDetected_EmitsMarker`** (`coordinator/symbol_test.go`) — assertions on `entries[1]` and `entries[2]` by fixed index could misfire if the Worker's retry logic produces extra entries before the snapshot. Pre-existing from story 3.4.
+- **Replay buffer not applied after snapshot merge** (`coordinator/symbol.go`) — `replay` return value from `recon.MergeSnapshot()` is discarded; buffered deltas newer than the snapshot are never applied to the order book. Acknowledged design limitation in Dev Notes (story 3.4).
+- **`time.Sleep(25ms)` synchronization in E2E tests** (`coordinator/coordinator_test.go`) — used to allow the Worker goroutine to receive from `resultCh` and call `GoLive` after `WaitCalled` returns. Explicitly documented trade-off in Dev Notes.
+- **`Shutdown()` called before `Run()` leaves ILP writer broken** (`coordinator/coordinator.go`) — `ilp.Close()` closes `w.stop`; subsequent Worker goroutines from `Run()` write to an undrained channel. API contract issue; low practical risk.
+- **Unknown-symbol tick drop unlogged in `runTickFanout`** (`coordinator/coordinator.go`) — ticks for symbols not in `symMap` are silently dropped with no log; a buffer-full drop does log. Minor observability gap.
+- **len != 2 snapshot entries silently skipped** (`exchange/kucoin/snapshot.go`, `exchange/bybit/snapshot.go`) — the `if len(level) == 2` guard silently ignores malformed entries. Correct for current API format (pairs); would silently corrupt book if API returns triples.
+- **Extra HTTP call when ctx already cancelled at entry to `fetchWithRetry`** (`coordinator/snapshot.go`) — attempt 0 runs before `ctx.Err()` is checked; under clean shutdown one extra immediately-failing network call is made per in-flight snapshot request.
+- **`seq_gap=0` when `lastSeq=0` on shutdown gap marker** (`coordinator/symbol.go`) — when no ticks have arrived (lastSeq=0), the shutdown gap marker has `SeqBefore=0, SeqAfter=1`, producing `seq_gap=0`. Downstream consumers filtering on `seq_gap > 0` will miss this event. Acknowledged in Dev Notes.
+
 ## Deferred from: code review of 2-1-exchange-interface-and-websocket-transport-layer (2026-05-06)
 
 - **Close() blocks up to 5s when connection dies between pings** (`transport/conn.go:96`) — pre-existing behavior now narrowed by the `dropped` fix. If a connection dies silently between keepalive pings, `dropped` is still false and `Close(StatusNormalClosure, "")` waits up to 5s for a handshake that will never complete. Consider a deadline on the graceful close path.
@@ -27,3 +66,20 @@
 - **confirmWatcher timer can fire sooner than expected post-reconnect** (`mux.go:confirmWatcher`) — after `resetAcks()` and `sendSlotSubscriptions`, the watcher's timer from the previous cycle is already ticking; the first post-reconnect check may arrive before the full `confirmTimeout` window has elapsed. Low production impact; design limitation of a watcher whose lifetime spans reconnects.
 - **sendSymbolSubscriptions write-failure window lets watcher observe in-flight pendingAck** (`mux.go:sendSymbolSubscriptions`) — between `s.mu.Unlock()` (after inserting the reqID) and the `conn.Write` call, `confirmWatcher` can acquire the lock and see a reqID whose write hasn't succeeded yet. If the write fails, the reqID is deleted and the watcher's retry is spurious for one cycle. Benign and self-healing.
 - **readLoop exits silently on non-context read error without triggering reconnect** (`mux.go:readLoop`) — if the transport returns a read error that is not due to context cancellation AND the transport's `Reconnect()` channel doesn't fire, `runSlot` hangs on its select indefinitely. This is a transport contract assumption (transport must signal `Reconnect()` on fatal errors) that is not enforced in the mux.
+
+## Deferred from: code review of 3-1-coordinator-interface-definitions-and-stream-schema (2026-05-06)
+
+- **GapEvent.SeqBefore >= SeqAfter produces uint64 underflow in seq_gap formula** (`gapdetector/types.go`) — gapdetector.Detect fires on `next != prev+1`; a retransmit or rollback where `next <= prev` produces a GapEvent with SeqBefore > SeqAfter. The seq_gap formula `SeqAfter - SeqBefore - 1` then wraps. Pre-existing in gapdetector (Epic 1).
+- **gapdetector.Detect treats next < prev as a gap, producing SeqBefore > SeqAfter** (`gapdetector/gapdetector.go`) — no special handling for sequence rollback or retransmit. Pre-existing behavior from Epic 1.
+- **ts_exchange can be zero/epoch if exchange sends malformed timestamp** (`exchange/bybit/parser.go`, `exchange/kucoin/parser.go`) — parsers do not validate TsExchange > 0; a zero value writes a row into the 1970-01-01 QuestDB partition. Pre-existing parser issue from Epic 2.
+- **FakeRedis not goroutine-safe** (`internal/testutil/fakeredis.go`) — `calls`, `streams`, and `FailAfter` are read/written without mutex. FakeQuestDB is correctly mutex-protected. Pre-existing in testutil (Epic 1).
+- **Bybit parseTrade silently drops all but the first trade in a multi-trade batch frame** (`exchange/bybit/parser.go`) — only `trades[0]` is processed; remaining trades vanish with no error, log, or gap marker. Pre-existing from Story 2.5.
+- **price/size STRING columns are unbounded in raw_ticks** (`internal/writer/questdb/schema.sql`) — QuestDB STRING has no length constraint; adversarial or malformed exchange messages could write arbitrarily large values. Parser validation is the appropriate enforcement boundary.
+
+## Deferred from: code review of 3-2-redis-stream-writer (2026-05-06)
+
+- **seq_gap=-1 when Write() emits best-effort gap with SeqBefore=SeqAfter=tick.Seq** (`internal/writer/redis/writer.go:83-88`) — on tick write exhaustion, the emitted GapEvent has SeqBefore=SeqAfter=tick.Seq, producing seq_gap = -1 in gaps:log. No better sequence info is available at the failure site; downstream interprets -1 as an undefined sentinel. Fix requires tracking last-good sequence in Writer state.
+- **Gap write error swallowed silently in Write()** (`internal/writer/redis/writer.go:83`) — `_ = w.WriteGap(...)` discards the error when the best-effort gap marker also fails. No log entry, no metric. By design (NFR9 must-not-halt), but creates a silent data loss window.
+- **FailFirst/FailAfter share global calls counter across all streams in FakeRedis** (`internal/testutil/mock/fake_redis.go`) — failure injection triggers at a global call count regardless of stream; multi-stream write sequences may have non-obvious failure points.
+- **XACK is no-op / Redis PEL semantics not modeled in FakeRedis** (`internal/testutil/mock/fake_redis.go`) — FakeRedis advances position on read (not ACK); real Redis re-delivers unACKed entries on consumer restart. Tests verify position advancement, not re-delivery behavior.
+- **Production wiring of 10s retry cap not enforced** — `New()` accepts arbitrary maxRetryDur; no production instantiation enforces 10s. Will be wired in story 4.3 (service composition root).

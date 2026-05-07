@@ -1,4 +1,4 @@
-# Story 1.1: Go Module Initialization & Dependency Verification
+ Story 1.1: Go Module Initialization & Dependency Verification
 
 Status: ready-for-dev
 

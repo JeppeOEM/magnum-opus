@@ -1,6 +1,6 @@
 # generated: 2026-05-05
-# last_updated: 2026-05-06
-# updated: 2-3-kucoin-token-auto-renewal → done (post-review patches applied 2026-05-06); epic-2 → done
+# last_updated: 2026-05-07
+# updated: story 4-3 → in-progress (2026-05-07); 3 patch findings from code review
 # project: magnum-opus
 # project_key: NOKEY
 # tracking_system: file-system
@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-06
+last_updated: 2026-05-07
 project: magnum-opus
 project_key: NOKEY
 tracking_system: file-system
@@ -64,20 +64,20 @@ development_status:
   epic-2-retrospective: done
 
   # ─── Epic 3: Data Capture Pipeline & Gap Guarantees ────────────────────────
-  epic-3: backlog
-  3-1-coordinator-interface-definitions-and-stream-schema: backlog
-  3-2-redis-stream-writer: backlog
-  3-3-questdb-ilp-writer: backlog
-  3-4-per-symbol-coordinator-worker: backlog
-  3-5-snapshot-dispatch-and-full-coordinator-orchestration: backlog
-  epic-3-retrospective: optional
+  epic-3: done
+  3-1-coordinator-interface-definitions-and-stream-schema: done
+  3-2-redis-stream-writer: done
+  3-3-questdb-ilp-writer: done
+  3-4-per-symbol-coordinator-worker: done
+  3-5-snapshot-dispatch-and-full-coordinator-orchestration: done
+  epic-3-retrospective: done
 
   # ─── Epic 4: Operational Readiness & Deployment ────────────────────────────
-  epic-4: backlog
-  4-1-prometheus-metrics-registry: backlog
-  4-2-health-version-and-metrics-http-endpoints: backlog
-  4-3-service-composition-root-and-credential-sanitizing-logger: backlog
-  4-4-dockerfile-and-docker-compose-deployment: backlog
-  4-5-cicd-pipeline-and-l4-fault-injection-tests: backlog
-  4-6-live-exchange-tests-and-48-hour-canary-gate: backlog
-  epic-4-retrospective: optional
+  epic-4: done
+  4-1-prometheus-metrics-registry: done
+  4-2-health-version-and-metrics-http-endpoints: done
+  4-3-service-composition-root-and-credential-sanitizing-logger: done
+  4-4-dockerfile-and-docker-compose-deployment: done
+  4-5-cicd-pipeline-and-l4-fault-injection-tests: done
+  4-6-live-exchange-tests: done
+  epic-4-retrospective: done

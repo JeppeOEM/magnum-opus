@@ -1,2 +1,1 @@
-is the clock.Now() in gapdector okay?
-remove deprecated websocket dependency
+UPDATE THE STORY SO THAT I REFLECTS THE DEPRECATION I FOUND IN WEBSOCKET PACKAGE

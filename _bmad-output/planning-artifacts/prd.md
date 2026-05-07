@@ -54,7 +54,7 @@ The service is successful when the following conditions hold continuously in pro
 - **SC3: Startup reliability.** All configured feeds connect and confirm subscriptions within 90 seconds on ≥99% of process starts.
 - **SC4: Sustained operation.** The service runs ≥30 consecutive days without an operator-initiated restart under normal exchange conditions.
 - **SC5: Consumer independence.** The Candle Service operates correctly using only Redis Stream contents — no out-of-band coordination, no sequence tracking, no staleness detection required on its side.
-- **SC6: Deployment confidence.** Every production deployment passes L1+L2+L3 tests locally, L5 live exchange tests (18 tests), and a 48-hour canary gate (zero `internal_*` gaps) before being promoted to the primary feed.
+- **SC6: Deployment confidence.** Every production deployment passes L1+L2+L3 tests locally and L5 live exchange tests (18 tests). After deploy, metrics and logs are monitored for regressions before the release is tagged.
 - **SC7: Performance envelope.** Tick-to-Redis latency stays below 10ms at p99 and memory stays below 512 MB RSS at steady state across 400 active feeds.
 
 ## User Journeys
@@ -89,9 +89,9 @@ The service is successful when the following conditions hold continuously in pro
 
 **Rising action.** GitHub Actions runs L1+L2 (26 tests, ~45 seconds, free tier). Green. He runs `make test-l4` locally — L4 integration suite with FakeQuestDB WAL suspension tests and Toxiproxy network partition tests. Green. He then runs `make test-live` — L5 live exchange tests connecting to actual KuCoin and Bybit. 18 tests. All pass.
 
-**Climax.** He deploys to the Hetzner CPX41 VM. The aggregator starts, authenticates with KuCoin (REST token fetch), subscribes to 200 KuCoin symbols and ~20 Bybit connections for 200 symbols. Within 90 seconds all feeds report `connected`. He runs `make verify-versions` — confirmed the deployed binary matches the intended git SHA. The 48h canary gate begins.
+**Climax.** He deploys to the Hetzner CPX41 VM. The aggregator starts, authenticates with KuCoin (REST token fetch), subscribes to 200 KuCoin symbols and ~20 Bybit connections for 200 symbols. Within 90 seconds all feeds report `connected`. He runs `make verify-versions` — confirmed the deployed binary matches the intended git SHA.
 
-**Resolution.** 48 hours later: gap count is within the external-only SLO (≤1/symbol/24h for external causes, zero internal causes). No `internal_*` gaps. The canary gate passes. The deployment is promoted. He tags the release.
+**Resolution.** He monitors `/health`, `/metrics`, and logs. Gap count stays within the external-only SLO (≤1/symbol/24h for external causes, zero internal causes). No `internal_*` gaps. He tags the release.
 
 ---
 
@@ -374,7 +374,7 @@ All feeds must confirm within 90 seconds of startup or the service exits non-zer
 | QuestDB WAL silent suspension | Low | Medium | Poll `wal_tables()` every 30s; auto-resume; Prometheus metric for WAL state |
 | Delta buffer overflow during high-volatility reconnect | Low | Low | `internal_buffer_overflow` gap cause emitted — correct behavior, not silent failure |
 
-**Resource:** Solo developer. Mitigated by TDD-first approach, 48h canary gate, Hetzner VM snapshots for 5-minute rollback. Infrastructure cost ~€27/month total.
+**Resource:** Solo developer. Mitigated by TDD-first approach, Hetzner VM snapshots for 5-minute rollback, and post-deploy metrics/log monitoring. Infrastructure cost ~€27/month total.
 
 ## Functional Requirements
 

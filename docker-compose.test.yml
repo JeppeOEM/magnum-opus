@@ -1,0 +1,22 @@
+# L4 fault-injection test environment.
+# Run: docker compose -f docker-compose.test.yml up -d
+# The aggregator process runs OUTSIDE compose and connects to toxiproxy ports.
+services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"   # toxiproxy API
+      - "6380:6380"   # redis proxy
+      - "9010:9010"   # questdb ILP proxy
+      - "9011:9011"   # questdb HTTP proxy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # No persistent volume — fresh state each test run.
+    restart: unless-stopped
+
+  questdb:
+    image: questdb/questdb:8.2.1
+    # No persistent volume — fresh state each test run.
+    restart: unless-stopped

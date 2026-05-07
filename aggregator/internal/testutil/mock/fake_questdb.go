@@ -2,17 +2,22 @@
 
 package mock
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // FakeQuestDB simulates QuestDB ILP write behaviour for L2 tests.
 // Supports WAL suspension simulation per the pre-mortem analysis in Story 3.3.
 //
 // Accepted-but-not-committed semantics mirror QuestDB's WAL behaviour:
-// rows are accepted (XADD succeeds) but not committed until a flush is issued.
-// When WAL is suspended, accepts succeed but commits do not.
+// rows are accepted (Write succeeds) but not committed until a flush is issued.
+// When WAL is suspended, Flush fails with errWALSuspended.
+//
+// Implements writer/questdb.ILPSender and writer/questdb.WALChecker via structural typing.
 type FakeQuestDB struct {
-	mu        sync.Mutex
-	rows      []FakeRow
+	mu         sync.Mutex
+	rows       []FakeRow
 	walSuspend bool
 	// SuspendAfter, if > 0, suspends WAL after this many committed rows.
 	SuspendAfter int
@@ -29,7 +34,8 @@ type FakeRow struct {
 func NewFakeQuestDB() *FakeQuestDB { return &FakeQuestDB{} }
 
 // Write accepts a row (always succeeds — WAL suspension affects commits, not accepts).
-func (f *FakeQuestDB) Write(table string, fields map[string]interface{}) error {
+// Satisfies writer/questdb.ILPSender (structural typing — no import needed).
+func (f *FakeQuestDB) Write(_ context.Context, table string, fields map[string]interface{}) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rows = append(f.rows, FakeRow{Table: table, Fields: fields})
@@ -37,7 +43,8 @@ func (f *FakeQuestDB) Write(table string, fields map[string]interface{}) error {
 }
 
 // Flush commits buffered rows, unless WAL is suspended.
-func (f *FakeQuestDB) Flush() error {
+// Satisfies writer/questdb.ILPSender (structural typing — no import needed).
+func (f *FakeQuestDB) Flush(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.walSuspend {
@@ -51,17 +58,32 @@ func (f *FakeQuestDB) Flush() error {
 	return nil
 }
 
-// SuspendWAL activates WAL suspension — subsequent Flush calls fail.
-func (f *FakeQuestDB) SuspendWAL() {
+// Close is a no-op for the fake.
+// Satisfies writer/questdb.ILPSender (structural typing — no import needed).
+func (f *FakeQuestDB) Close(_ context.Context) error { return nil }
+
+// IsWALSuspended reports whether WAL suspension is active.
+// Satisfies writer/questdb.WALChecker (structural typing — no import needed).
+func (f *FakeQuestDB) IsWALSuspended(_ context.Context) (bool, error) {
 	f.mu.Lock()
-	f.walSuspend = true
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+	return f.walSuspend, nil
 }
 
 // ResumeWAL deactivates WAL suspension.
-func (f *FakeQuestDB) ResumeWAL() {
+// Satisfies writer/questdb.WALChecker (structural typing — no import needed).
+func (f *FakeQuestDB) ResumeWAL(_ context.Context) error {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.walSuspend = false
+	return nil
+}
+
+// SuspendWAL activates WAL suspension — subsequent Flush calls fail.
+// Test-helper only; not in any interface.
+func (f *FakeQuestDB) SuspendWAL() {
+	f.mu.Lock()
+	f.walSuspend = true
 	f.mu.Unlock()
 }
 

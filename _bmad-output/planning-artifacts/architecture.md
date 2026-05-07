@@ -215,7 +215,7 @@ aggregator/
 - Linode deploy: docker compose pull aggregator && docker compose up -d aggregator
 - Redis and QuestDB images are pinned versions — updated deliberately, not on every deploy
 - /version endpoint confirms running container matches intended git SHA (FR34)
-- Linode VM snapshot before each deploy provides rollback if canary gate fails
+- Linode VM snapshot before each deploy provides rollback
 
 **Compose service resource limits:**
 - aggregator: mem_limit: 600m, cpus: 2.0
@@ -226,7 +226,7 @@ aggregator/
 **CI/CD test tier mapping:**
 - GitHub Actions (every push/PR): L1 (pure functions, ~3s) + L2 (mock interfaces, ~10s)
 - Local pre-push (Makefile gate): L3 (MockWSServer) + L4 (Toxiproxy/Docker)
-- Manual pre-deploy: L5 (live exchange, 18 tests) + 48h canary (zero internal_* gaps)
+- Manual pre-deploy: L5 (live exchange, 18 tests); post-deploy: monitor metrics and logs for regressions
 
 **Concurrency model: per-symbol goroutine**
 - Each (exchange, symbol) pair owns a dedicated goroutine for its L2 book state machine.
