@@ -98,13 +98,25 @@ func parseLevels(raws []json.RawMessage, side orderbook.Side, tsNano int64, out 
 		if err := json.Unmarshal(tuple[1], &size); err != nil {
 			return fmt.Errorf("level %d: size: %w", i, err)
 		}
-		var seqRaw int64
-		if err := json.Unmarshal(tuple[2], &seqRaw); err != nil {
-			return fmt.Errorf("level %d: seq: %w", i, err)
+		// seq is a number on the private feed but a quoted string on the public feed.
+		var seq uint64
+		var seqInt int64
+		if err := json.Unmarshal(tuple[2], &seqInt); err == nil {
+			seq = uint64(seqInt)
+		} else {
+			var seqStr string
+			if err := json.Unmarshal(tuple[2], &seqStr); err != nil {
+				return fmt.Errorf("level %d: seq: %w", i, err)
+			}
+			n, err := strconv.ParseUint(seqStr, 10, 64)
+			if err != nil {
+				return fmt.Errorf("level %d: seq %q: %w", i, seqStr, err)
+			}
+			seq = n
 		}
 
 		*out = append(*out, orderbook.Delta{
-			Seq:        uint64(seqRaw),
+			Seq:        seq,
 			Side:       side,
 			Price:      price,
 			Size:       size,
