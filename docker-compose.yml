@@ -10,6 +10,7 @@ services:
       - ./config.yaml:/config.yaml:ro
     environment:
       CONFIG_FILE: /config.yaml
+      KUCOIN_PUBLIC: "true"
       REDIS_ADDR: redis:6379
       QUESTDB_ILP_ADDR: questdb:9009
       QUESTDB_HTTP_ADDR: questdb:9000

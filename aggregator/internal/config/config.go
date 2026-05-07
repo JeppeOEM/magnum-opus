@@ -140,7 +140,9 @@ func Load() (*Config, error) {
 	kucoinKey := optStr("KUCOIN_API_KEY", "")
 	kucoinSecret := optStr("KUCOIN_API_SECRET", "")
 	kucoinPass := optStr("KUCOIN_API_PASSPHRASE", "")
-	kucoinPublic := kucoinKey == "" && kucoinSecret == "" && kucoinPass == ""
+	// KUCOIN_PUBLIC=true forces the unauthenticated endpoint regardless of credentials.
+	kucoinPublic := os.Getenv("KUCOIN_PUBLIC") == "true" ||
+		(kucoinKey == "" && kucoinSecret == "" && kucoinPass == "")
 
 	cfg := &Config{
 		KuCoin: KuCoinConfig{
