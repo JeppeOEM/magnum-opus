@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const defaultConfigFile = "config.yaml"
+
 // Credential is a sealed type for API keys, secrets, and passphrases.
 // It deliberately has no fmt.Stringer or error implementation so the raw
 // value cannot escape into logs or error messages.
@@ -47,9 +49,11 @@ type Config struct {
 }
 
 type KuCoinConfig struct {
-	APIKey      Credential
-	APISecret   Credential
-	Passphrase  Credential
+	APIKey     Credential
+	APISecret  Credential
+	Passphrase Credential
+	// Public is true when no credentials are provided — uses the unauthenticated bullet-public endpoint.
+	Public bool
 }
 
 type BybitConfig struct {
@@ -79,18 +83,11 @@ type ServiceConfig struct {
 	StartupTimeoutSec int
 }
 
-// Load reads all configuration from environment variables.
+// Load reads configuration from a YAML file (CONFIG_FILE env var, default config.yaml)
+// and from environment variables for credentials and infrastructure addresses.
 // Returns an error listing all missing required variables.
 func Load() (*Config, error) {
 	missing := []string{}
-
-	req := func(key string) Credential {
-		v := os.Getenv(key)
-		if v == "" {
-			missing = append(missing, key)
-		}
-		return newCredential(v)
-	}
 
 	reqStr := func(key string) string {
 		v := os.Getenv(key)
@@ -133,30 +130,28 @@ func Load() (*Config, error) {
 		return n
 	}
 
-	splitSymbols := func(key string) []string {
-		v := os.Getenv(key)
-		if v == "" {
-			return nil
-		}
-		parts := strings.Split(v, ",")
-		out := make([]string, 0, len(parts))
-		for _, p := range parts {
-			if s := strings.TrimSpace(p); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
+	// Load symbols from YAML config file.
+	cfgFile := optStr("CONFIG_FILE", defaultConfigFile)
+	fc, err := loadFileConfig(cfgFile)
+	if err != nil {
+		return nil, fmt.Errorf("config file: %w", err)
 	}
+
+	kucoinKey := optStr("KUCOIN_API_KEY", "")
+	kucoinSecret := optStr("KUCOIN_API_SECRET", "")
+	kucoinPass := optStr("KUCOIN_API_PASSPHRASE", "")
+	kucoinPublic := kucoinKey == "" && kucoinSecret == "" && kucoinPass == ""
 
 	cfg := &Config{
 		KuCoin: KuCoinConfig{
-			APIKey:     req("KUCOIN_API_KEY"),
-			APISecret:  req("KUCOIN_API_SECRET"),
-			Passphrase: req("KUCOIN_API_PASSPHRASE"),
+			APIKey:     newCredential(kucoinKey),
+			APISecret:  newCredential(kucoinSecret),
+			Passphrase: newCredential(kucoinPass),
+			Public:     kucoinPublic,
 		},
 		Bybit: BybitConfig{
-			APIKey:    req("BYBIT_API_KEY"),
-			APISecret: req("BYBIT_API_SECRET"),
+			APIKey:    newCredential(optStr("BYBIT_API_KEY", "")),
+			APISecret: newCredential(optStr("BYBIT_API_SECRET", "")),
 		},
 		Redis: RedisConfig{
 			Addr:         reqStr("REDIS_ADDR"),
@@ -168,8 +163,8 @@ func Load() (*Config, error) {
 			HTTPAddr: reqStr("QUESTDB_HTTP_ADDR"),
 		},
 		Symbols: SymbolConfig{
-			KuCoin: splitSymbols("KUCOIN_SYMBOLS"),
-			Bybit:  splitSymbols("BYBIT_SYMBOLS"),
+			KuCoin: fc.Exchanges["kucoin"].Symbols,
+			Bybit:  fc.Exchanges["bybit"].Symbols,
 		},
 		Service: ServiceConfig{
 			LogLevel:          optStr("LOG_LEVEL", "info"),

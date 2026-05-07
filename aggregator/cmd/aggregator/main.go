@@ -104,27 +104,57 @@ func main() {
 		1*time.Millisecond, 1*time.Hour, 30*time.Second,
 	).Start()
 
-	// ── 7. Exchange adapters ──────────────────────────────────────────────────
-	kucoinAdapter := kucoinexch.New(cfg.KuCoin, http.DefaultClient, clk)
-	kucoinFetcher := kucoinexch.NewOrderBookFetcher(kucoinAdapter)
-
-	bybitAdapter := bybitexch.New(clk)
-	bybitFetcher := bybitexch.NewSnapshotFetcher(http.DefaultClient)
-
-	// ── 8. Coordinator ────────────────────────────────────────────────────────
+	// ── 7. Exchange adapters (only for configured symbols) ───────────────────
 	kuCoinSyms := normalizeSymbols("kucoin", cfg.Symbols.KuCoin)
 	bybitSyms := normalizeSymbols("bybit", cfg.Symbols.Bybit)
 
-	fetcher := &multiSnapshotFetcher{fetchers: map[string]coordinator.SnapshotFetcher{
-		"kucoin": kucoinFetcher,
-		"bybit":  bybitFetcher,
-	}}
+	var exchConfigs []coordinator.ExchangeConfig
+	fetchers := map[string]coordinator.SnapshotFetcher{}
+
+	if len(cfg.Symbols.KuCoin) > 0 {
+		mode := "private"
+		if cfg.KuCoin.Public {
+			mode = "public"
+		}
+		slog.Info("aggregator: kucoin enabled", "mode", mode, "symbols", cfg.Symbols.KuCoin)
+		kucoinAdapter := kucoinexch.New(cfg.KuCoin, http.DefaultClient, clk)
+		if err := kucoinAdapter.Connect(ctx); err != nil {
+			slog.Error("aggregator: kucoin connect failed", "err", err)
+			os.Exit(1)
+		}
+		if err := kucoinAdapter.Subscribe(cfg.Symbols.KuCoin, []exchange.FeedType{exchange.FeedTypeOrderBook}); err != nil {
+			slog.Error("aggregator: kucoin subscribe failed", "err", err, "symbols", cfg.Symbols.KuCoin)
+			os.Exit(1)
+		}
+		exchConfigs = append(exchConfigs, coordinator.ExchangeConfig{Adapter: kucoinAdapter, Symbols: kuCoinSyms})
+		fetchers["kucoin"] = kucoinexch.NewOrderBookFetcher(kucoinAdapter)
+	}
+
+	if len(cfg.Symbols.Bybit) > 0 {
+		slog.Info("aggregator: bybit enabled", "symbols", cfg.Symbols.Bybit)
+		bybitAdapter := bybitexch.New(clk)
+		if err := bybitAdapter.Connect(ctx); err != nil {
+			slog.Error("aggregator: bybit connect failed", "err", err)
+			os.Exit(1)
+		}
+		if err := bybitAdapter.Subscribe(cfg.Symbols.Bybit, []exchange.FeedType{exchange.FeedTypeOrderBook}); err != nil {
+			slog.Error("aggregator: bybit subscribe failed", "err", err, "symbols", cfg.Symbols.Bybit)
+			os.Exit(1)
+		}
+		exchConfigs = append(exchConfigs, coordinator.ExchangeConfig{Adapter: bybitAdapter, Symbols: bybitSyms})
+		fetchers["bybit"] = bybitexch.NewSnapshotFetcher(http.DefaultClient)
+	}
+
+	if len(exchConfigs) == 0 {
+		slog.Error("aggregator: no exchanges configured — set KUCOIN_SYMBOLS and/or BYBIT_SYMBOLS")
+		os.Exit(1)
+	}
+
+	// ── 8. Coordinator ────────────────────────────────────────────────────────
+	fetcher := &multiSnapshotFetcher{fetchers: fetchers}
 
 	coord := coordinator.New(
-		[]coordinator.ExchangeConfig{
-			{Adapter: kucoinAdapter, Symbols: kuCoinSyms},
-			{Adapter: bybitAdapter, Symbols: bybitSyms},
-		},
+		exchConfigs,
 		streamWriter, ilpWriter, fetcher, clk,
 	).WithMetrics(metricsReg)
 
@@ -139,33 +169,7 @@ func main() {
 		httpapi.VersionInfo{Version: version, GitSHA: gitSHA, BuildTime: buildTime},
 	).WithReadyFn(startupReady.Load)
 
-	// ── 10. Connect and subscribe exchanges ───────────────────────────────────
-	rawKuCoin := cfg.Symbols.KuCoin
-	rawBybit := cfg.Symbols.Bybit
-
-	if err := kucoinAdapter.Connect(ctx); err != nil {
-		slog.Error("aggregator: kucoin connect failed", "err", err)
-		os.Exit(1)
-	}
-	if len(rawKuCoin) > 0 {
-		if err := kucoinAdapter.Subscribe(rawKuCoin, []exchange.FeedType{exchange.FeedTypeOrderBook}); err != nil {
-			slog.Error("aggregator: kucoin subscribe failed", "err", err, "symbols", rawKuCoin)
-			os.Exit(1)
-		}
-	}
-
-	if err := bybitAdapter.Connect(ctx); err != nil {
-		slog.Error("aggregator: bybit connect failed", "err", err)
-		os.Exit(1)
-	}
-	if len(rawBybit) > 0 {
-		if err := bybitAdapter.Subscribe(rawBybit, []exchange.FeedType{exchange.FeedTypeOrderBook}); err != nil {
-			slog.Error("aggregator: bybit subscribe failed", "err", err, "symbols", rawBybit)
-			os.Exit(1)
-		}
-	}
-
-	// ── 11. Start coordinator and HTTP server ─────────────────────────────────
+	// ── 10. Start coordinator and HTTP server ─────────────────────────────────
 	coord.Run(ctx)
 
 	go func() {

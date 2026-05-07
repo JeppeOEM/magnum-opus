@@ -30,6 +30,29 @@ func setEnv(t *testing.T, pairs map[string]string) {
 	}
 }
 
+// writeConfigFile writes a temporary config.yaml and points CONFIG_FILE at it.
+func writeConfigFile(t *testing.T, content string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
+	require.NoError(t, err)
+	_, err = f.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	t.Setenv("CONFIG_FILE", f.Name())
+}
+
+const defaultTestConfig = `
+exchanges:
+  kucoin:
+    symbols:
+      - BTC-USDT
+      - ETH-USDT
+  bybit:
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+`
+
 func fullEnv() map[string]string {
 	return map[string]string{
 		"KUCOIN_API_KEY":        "kc-key-abc123",
@@ -41,12 +64,11 @@ func fullEnv() map[string]string {
 		"REDIS_STREAM_MAXLEN":   "50000",
 		"QUESTDB_ILP_ADDR":      "localhost:9009",
 		"QUESTDB_HTTP_ADDR":     "localhost:9000",
-		"KUCOIN_SYMBOLS":        "BTC-USDT,ETH-USDT",
-		"BYBIT_SYMBOLS":         "BTCUSDT,ETHUSDT",
 	}
 }
 
 func TestLoad_Success(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
 	setEnv(t, fullEnv())
 
 	cfg, err := config.Load()
@@ -55,44 +77,63 @@ func TestLoad_Success(t *testing.T) {
 
 	assert.Equal(t, "localhost:6379", cfg.Redis.Addr)
 	assert.Equal(t, int64(50000), cfg.Redis.StreamMaxLen)
-	assert.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, cfg.Symbols.KuCoin)
-	assert.Equal(t, []string{"BTCUSDT", "ETHUSDT"}, cfg.Symbols.Bybit)
+	assert.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, cfg.Symbols.KuCoin)  // from config.yaml
+	assert.Equal(t, []string{"BTCUSDT", "ETHUSDT"}, cfg.Symbols.Bybit)      // from config.yaml
 	assert.Equal(t, "info", cfg.Service.LogLevel)
 	assert.Equal(t, ":8080", cfg.Service.HTTPAddr)
 	assert.Equal(t, 90, cfg.Service.StartupTimeoutSec)
 }
 
 func TestLoad_MissingRequired(t *testing.T) {
-	// No env vars set — all required vars should be listed.
+	writeConfigFile(t, defaultTestConfig)
+	// No env vars set — only infrastructure vars are required.
 	cfg, err := config.Load()
 	assert.Nil(t, cfg)
 	require.Error(t, err)
 
 	for _, key := range []string{
-		"KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_API_PASSPHRASE",
-		"BYBIT_API_KEY", "BYBIT_API_SECRET",
 		"REDIS_ADDR", "QUESTDB_ILP_ADDR", "QUESTDB_HTTP_ADDR",
 	} {
 		assert.Contains(t, err.Error(), key, "error should mention missing var %s", key)
 	}
+	// Exchange credentials are optional — must not appear in the error.
+	for _, key := range []string{
+		"KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_API_PASSPHRASE",
+		"BYBIT_API_KEY", "BYBIT_API_SECRET",
+	} {
+		assert.NotContains(t, err.Error(), key, "optional var %s must not appear in error", key)
+	}
 }
 
-func TestLoad_PartialMissing(t *testing.T) {
+func TestLoad_KuCoinPublicMode(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
+	// No KuCoin credentials → Public flag should be true.
 	env := fullEnv()
 	delete(env, "KUCOIN_API_KEY")
-	delete(env, "BYBIT_API_SECRET")
+	delete(env, "KUCOIN_API_SECRET")
+	delete(env, "KUCOIN_API_PASSPHRASE")
 	setEnv(t, env)
 
-	_, err := config.Load()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "KUCOIN_API_KEY")
-	assert.Contains(t, err.Error(), "BYBIT_API_SECRET")
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.KuCoin.Public, "KuCoin should be in public mode when no credentials are set")
+}
+
+func TestLoad_KuCoinPrivateMode(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
+	// All KuCoin credentials present → Public flag should be false.
+	setEnv(t, fullEnv())
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.False(t, cfg.KuCoin.Public, "KuCoin should be in private mode when credentials are set")
 }
 
 // TestCredential_CannotLeakViaFmt verifies that fmt.Sprintf and slog cannot
 // expose the raw credential value — the sealed type must produce no output
 // containing the raw string.
 func TestCredential_CannotLeakViaFmt(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
 	setEnv(t, fullEnv())
 
 	cfg, err := config.Load()
@@ -127,6 +168,7 @@ func TestCredential_CannotLeakViaFmt(t *testing.T) {
 
 // TestCredential_CannotLeakViaSlog verifies the slog path does not expose credentials.
 func TestCredential_CannotLeakViaSlog(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
 	setEnv(t, fullEnv())
 
 	cfg, err := config.Load()
@@ -151,6 +193,7 @@ func TestCredential_CannotLeakViaSlog(t *testing.T) {
 }
 
 func TestLoad_OptionalPassword_Empty(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
 	env := fullEnv()
 	// No REDIS_PASSWORD set — should succeed with empty credential.
 	setEnv(t, env)
@@ -162,6 +205,7 @@ func TestLoad_OptionalPassword_Empty(t *testing.T) {
 }
 
 func TestLoad_Defaults(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
 	setEnv(t, fullEnv())
 	// Do not set optional vars — verify defaults apply.
 
@@ -173,6 +217,7 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_EnvOverridesDefaults(t *testing.T) {
+	writeConfigFile(t, defaultTestConfig)
 	env := fullEnv()
 	env["LOG_LEVEL"] = "debug"
 	env["HTTP_ADDR"] = ":9090"

@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	defaultAPIBase  = "https://api.kucoin.com"
+	defaultAPIBase    = "https://api.kucoin.com"
 	bulletPrivatePath = "/api/v1/bullet-private"
-	tokenTTL        = 24 * time.Hour
+	bulletPublicPath  = "/api/v1/bullet-public"
+	tokenTTL          = 24 * time.Hour
 )
 
 // tokenData holds a parsed KuCoin WebSocket token and its connection parameters.
@@ -58,29 +59,38 @@ type tokenAPIResponse struct {
 	} `json:"data"`
 }
 
-// fetchToken obtains a KuCoin WebSocket token via the private bullet endpoint.
+// fetchToken obtains a KuCoin WebSocket token.
+// If cfg.Public is true (no credentials provided) it uses the unauthenticated
+// bullet-public endpoint; otherwise it signs the request against bullet-private.
 // apiBase allows overriding the base URL for tests.
 func fetchToken(ctx context.Context, client *http.Client, apiBase string, cfg config.KuCoinConfig, clock Clock) (tokenData, error) {
 	now := clock.Now()
-	ts := strconv.FormatInt(now.UnixMilli(), 10)
 	method := "POST"
-	path := bulletPrivatePath
-
-	preSign := ts + method + path
-	sig := kucoinHMAC(cfg.APISecret.Value(), preSign)
-	// API v2: passphrase itself is HMAC-signed with the API secret.
-	signedPassphrase := kucoinHMAC(cfg.APISecret.Value(), cfg.Passphrase.Value())
+	var path string
+	if cfg.Public {
+		path = bulletPublicPath
+	} else {
+		path = bulletPrivatePath
+	}
 
 	req, err := http.NewRequestWithContext(ctx, method, apiBase+path, nil)
 	if err != nil {
 		return tokenData{}, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("KC-API-KEY", cfg.APIKey.Value())
-	req.Header.Set("KC-API-SIGN", sig)
-	req.Header.Set("KC-API-TIMESTAMP", ts)
-	req.Header.Set("KC-API-PASSPHRASE", signedPassphrase)
-	req.Header.Set("KC-API-KEY-VERSION", "2")
 	req.Header.Set("Content-Type", "application/json")
+
+	if !cfg.Public {
+		ts := strconv.FormatInt(now.UnixMilli(), 10)
+		preSign := ts + method + path
+		sig := kucoinHMAC(cfg.APISecret.Value(), preSign)
+		// API v2: passphrase itself is HMAC-signed with the API secret.
+		signedPassphrase := kucoinHMAC(cfg.APISecret.Value(), cfg.Passphrase.Value())
+		req.Header.Set("KC-API-KEY", cfg.APIKey.Value())
+		req.Header.Set("KC-API-SIGN", sig)
+		req.Header.Set("KC-API-TIMESTAMP", ts)
+		req.Header.Set("KC-API-PASSPHRASE", signedPassphrase)
+		req.Header.Set("KC-API-KEY-VERSION", "2")
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {

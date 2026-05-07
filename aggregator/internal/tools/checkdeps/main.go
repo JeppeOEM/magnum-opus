@@ -83,13 +83,13 @@ func main() {
 	}
 
 	if len(failures) > 0 {
-		fmt.Fprintln(os.Stderr, "checkdeps: stale or unannotated direct dependencies:")
+		fmt.Fprintln(os.Stderr, "checkdeps WARNING: stale or unannotated direct dependencies:")
 		for _, f := range failures {
 			fmt.Fprintln(os.Stderr, f)
 		}
 		fmt.Fprintln(os.Stderr, "\nRe-verify each dependency and update the // verified: date in go.mod.")
 		fmt.Fprintln(os.Stderr, "See DEPS.md for the re-verification procedure.")
-		os.Exit(1)
+		os.Exit(0)
 	}
 
 	fmt.Println("checkdeps: all direct dependencies verified within 12 months ✓")

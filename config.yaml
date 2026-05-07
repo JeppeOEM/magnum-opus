@@ -1,0 +1,10 @@
+exchanges:
+  kucoin:
+    symbols:
+      - BTC-USDT
+      - ETH-USDT
+
+  # bybit:
+  #   symbols:
+  #     - BTCUSDT
+  #     - ETHUSDT
