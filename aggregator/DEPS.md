@@ -4,7 +4,7 @@
 
 | Package | Version | Purpose | Verified |
 |---|---|---|---|
-| `nhooyr.io/websocket` | v1.8.17 | WebSocket transport — context-native, actively maintained. Replaces archived `gorilla/websocket`. | 2026-05-05 |
+| `github.com/coder/websocket` | v1.8.14 | WebSocket transport — maintained fork of deprecated nhooyr.io/websocket; context-native. Replaces archived `gorilla/websocket`. | 2026-05-06 |
 | `github.com/redis/go-redis/v9` | v9.19.0 | Redis Streams client (XADD, XREAD, consumer groups) | 2026-05-05 |
 | `github.com/questdb/go-questdb-client/v3` | v3.2.0 | QuestDB ILP write client (port 9009 TCP line protocol) | 2026-05-05 |
 | `github.com/prometheus/client_golang` | v1.23.2 | Prometheus metrics registry and `/metrics` handler | 2026-05-05 |
@@ -18,7 +18,7 @@ All direct dependencies must be actively maintained at the time of adoption **an
 - At least one commit within the last 12 months
 - Active maintainer (not bot-only activity)
 
-The canonical example of this rule: `nhooyr.io/websocket` is used instead of `gorilla/websocket` because gorilla was archived in 2022 with no security patches since.
+The canonical example of this rule: `github.com/coder/websocket` is used instead of `gorilla/websocket` (archived 2022) and instead of `nhooyr.io/websocket` (deprecated, unmaintained).
 
 ## Re-verification Command
 
@@ -33,4 +33,5 @@ This runs `go list -m -json all` and checks each direct dependency for recent co
 ## Prohibited Dependencies
 
 - `github.com/gorilla/websocket` — archived, no security patches
+- `nhooyr.io/websocket` — deprecated; use `github.com/coder/websocket` instead
 - Any dependency with no commit activity in the last 12 months (flag and evaluate before adding)

@@ -5,7 +5,7 @@ go 1.24
 // Direct dependencies — run `make check-deps` before updating any entry.
 // Re-verification command and prohibited alternatives are documented in DEPS.md.
 require (
-	github.com/coder/websocket v1.8.14 // verified: 2026-05-06; replaces deprecated nhooyr.io/websocket
+	github.com/coder/websocket v1.8.14 // verified: 2026-05-06 replaces deprecated nhooyr.io/websocket
 	github.com/questdb/go-questdb-client/v3 v3.2.0 // verified: 2026-05-06
 	github.com/redis/go-redis/v9 v9.19.0 // verified: 2026-05-06
 	github.com/stretchr/testify v1.11.1 // verified: 2026-05-05
