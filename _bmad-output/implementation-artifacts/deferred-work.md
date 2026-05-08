@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of 5-2-migration-runner (2026-05-08)
+
+- **Phantom migration**: DDL applied but `schema_migrations` INSERT fails → blocks startup permanently on re-run for non-idempotent DDL (`candle-service/internal/migrator/migrator.go:240`) — QuestDB REST has no multi-statement transactions; current migration files use `IF NOT EXISTS`; inherent limitation documented in package comment.
+- **Context cancellation only at `Run` entry**: inter-migration cancellation relies on http.Client context propagation (`migrator.go:51`) — http.Client propagates ctx on each call; startup-only path with small file count.
+- **Concurrent blue/green starts produce duplicate `schema_migrations` rows** (`migrator.go:149`) — benign (duplicate checksums overwrite identically in map); deployment strategy avoids simultaneous starts.
+- **`exec`/`queryRows` response body unbounded** — no `io.LimitReader` (`migrator.go:105`) — startup-only runner against known QuestDB; not a realistic attack surface.
+- **`TestRun_ContextCancellation` tests pre-cancellation only** (`migrator_l2_test.go:165`) — fast-path guard tested; mid-flight handled by http.Client ctx propagation.
+
 ## Deferred from: code review of 4-3-service-composition-root-and-credential-sanitizing-logger (2026-05-07)
 
 - **`gapwindow.Window` allocated but never populated — gap_count_24h always 0** (`cmd/aggregator/main.go:132`) — the coordinator Workers detect and emit gap events to Redis/QuestDB but never call `gapWin.Add()`. The HTTP /health endpoint reports `gap_count_24h: 0` for the entire process lifetime. Wiring requires adding gapwindow as a coordinator dependency (new constructor parameter). Pre-existing architectural gap from story 3.x; out of scope for story 4.3.
@@ -83,3 +91,29 @@
 - **FailFirst/FailAfter share global calls counter across all streams in FakeRedis** (`internal/testutil/mock/fake_redis.go`) — failure injection triggers at a global call count regardless of stream; multi-stream write sequences may have non-obvious failure points.
 - **XACK is no-op / Redis PEL semantics not modeled in FakeRedis** (`internal/testutil/mock/fake_redis.go`) — FakeRedis advances position on read (not ACK); real Redis re-delivers unACKed entries on consumer restart. Tests verify position advancement, not re-delivery behavior.
 - **Production wiring of 10s retry cap not enforced** — `New()` accepts arbitrary maxRetryDur; no production instantiation enforces 10s. Will be wired in story 4.3 (service composition root).
+
+## Deferred from: code review of 5-1-go-project-setup-and-docker (2026-05-08)
+
+- No `IdleTimeout` on `http.Server` in `cmd/candle/main.go` — best practice; add when service has long-lived connections
+- No `HEALTHCHECK` in Dockerfile — add when deploying to an orchestrator that uses it
+- `test-l1` Makefile target explicitly lists packages instead of `./...` — update as new L1 packages are added
+- `handleHealth`/`handleVersion` respond to any HTTP method — add method check when tightening the HTTP surface
+- `slotHandler.WithGroup` adds `slot` outside the named group — revisit when log structure requirements are finalized
+- `stop_grace_period: 15s` (docker-compose) vs `SHUTDOWN_TIMEOUT_S: 10s` (env) — intentionally different; link them in a comment if both change
+- `CANDLE_SERVICE_PORT` not validated — invalid value fails at runtime with unhelpful error; validate in config.Load() when hardening startup
+- No `healthcheck:` stanza in docker-compose candle profiles — needed for Story 9-4 promotion gating
+
+
+## Deferred from: code review of 8-1-cascade-engine-and-clock-boundary (2026-05-08)
+
+- **SQL injection in `querySnapshotCount`** (`cmd/candle/main.go`): `exchange`/`symbol` interpolated directly via `fmt.Sprintf` without escaping. Low risk — values come from operator-controlled env vars, not user input. Add input validation or note in ops docs when hardening startup.
+- **`getEnvInt`/`getDurationSeconds` silently treat 0 as unset** (`internal/config/config.go`): guard `n > 0` makes it impossible to configure zero-value for e.g. `SHUTDOWN_TIMEOUT_S=0`. Pre-existing pattern across all config fields.
+- **`persistCascadeHashes` worst-case blocking: ~2.45s on full Redis failure** (`cmd/candle/main.go`): 7 TFs × 3 retries × max sleep = 2.45s blocks consumer goroutine, dropping bar-close signals. Design-level issue per spec (backoff-per-TF); revisit with async write or per-batch timeout when measuring production impact.
+- **`Engine.clk` field stored but never called** (`internal/cascade/cascade.go`): `Clock` interface defined for future use by 250ms partial-publish ticker in story 8-2. Not dead code — spec-intentional placeholder.
+- **`Flush()` uses `time.Now()` for `tsSecMs` — late flush can miss cascade boundary** (`cmd/candle/main.go`): if consumer goroutine is delayed past a second boundary, `IsBarClose` receives the wrong second and the boundary is permanently missed. Pre-existing design issue in original `Flush()` (predates story 8-1); the cascade fold inherited the same wall-clock coupling.
+
+## Deferred from: code review of 7-2-block-trades-rolling-percentile (2026-05-08)
+
+- `blockwindow.Window.Add` uses O(n) copy-shift — 999 element copies per tick at default 1000-entry window; replace with circular buffer when CPU cost becomes measurable
+- Redis key `candle:btw:{exchange}:{symbol}` has no TTL — removed symbols leave stale entries indefinitely; add TTL or cleanup sweep when symbol rotation is implemented
+- `blockwindow.New(windowSize, minSample)` silently produces a permanently cold window when `minSample > windowSize`; add validation log or error when formalizing config hardening

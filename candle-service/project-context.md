@@ -76,6 +76,10 @@ One `time.Ticker` lives in `cmd/candle/` and fires once per second. Its goroutin
 
 The `BarClose` channel per symbol is buffered with **capacity 1**. The ticker goroutine uses a non-blocking send: if the previous `BarClose` hasn't been consumed yet (slow batch), the signal is dropped and `candle_bar_close_dropped_total` is incremented. The consumer goroutine processes `BarClose` in-order after draining the current `XREADGROUP` batch — no mutex needed.
 
+A second ticker in `cmd/candle/` fires every `CANDLE_PARTIAL_PUBLISH_MS` (default 250ms) and sends a non-blocking `PartialPublish` signal to each symbol's channel (capacity 1, same pattern). The consumer goroutine handles both `BarClose` and `PartialPublish` cases in the same select loop. The 250ms ticker is owned by **story 8-2** (Redis candle stream publisher). The cascade engine `CurrentBar(tf)` read-only API is owned by **story 8-1** and is what the partial publish calls to read in-progress cascade state without blocking the consumer goroutine.
+
+**SIGTERM shutdown (post-ACK semantics):** On SIGTERM: (1) flush current accumulator as partial (`is_partial=true`), (2) XACK all processed messages from the current batch, (3) close ILP connection, exit. The candle service uses post-ACK — NOT the pre-ACK pattern used by the aggregator. A crash before XACK causes redelivery; QuestDB WAL dedup prevents duplicate rows.
+
 ---
 
 ## Language-Specific Rules
@@ -112,8 +116,14 @@ Interfaces defined in the **consuming** package, not the implementing package:
 
 ## Critical Behavioral Rules
 
-### Accumulator Reset — MUST NOT be skipped
-`accumulator.Reset()` MUST be called on every gap event and every snapshot event before feeding new ticks. This clears OFI accumulator and prior-book-state. Skipping it corrupts OFI for the rest of the session.
+### Accumulator Reset — Two Methods, Different Scopes
+
+The accumulator has two reset methods with distinct scopes:
+
+- **`Reset()`** — full reset. Called on gap events and snapshot events. Clears OHLCV, OFI, per-bar OB tracking, gap_count, AND the carry-forward OB state (`lastKnownBid`/`lastKnownAsk`/`lastKnownDepth`). Use when OB state is genuinely unknown (gap/snapshot = book wiped).
+- **`BarReset()`** — bar-flush reset. Called by `accWriter.Flush()` after each 1-second bar write. Clears OHLCV, OFI, and per-bar OB tracking. Does NOT clear carry-forward state. The next bar's idle-second carry inherits from this bar's close.
+
+`Reset()` MUST be called on every gap and snapshot event. `BarReset()` MUST be called after every bar flush (replaces the current `Reset()` call in `accWriter.Flush()`). Mixing them up corrupts OFI or idle-second carry-forward state.
 
 ### OFI State Location
 OFI accumulator and prior-book-state are fields inside `accumulator/` — NOT computed in `features/`. `features.OFIDelta(prev, curr BestQuote)` is a pure, stateless function that computes a single per-tick OFI delta from before/after best quotes. It does NOT hold state between calls. All OFI accumulation (running sum) happens in `accumulator/`.
@@ -124,8 +134,10 @@ For each tick, `accumulator/` computes the per-tick OFI delta:
 - `Δ_ask` = change in best-ask quantity (0 if best-ask price rose — the prior best ask was displaced by a worse one)
 - per-tick OFI delta = `Δ_bid − Δ_ask`
 - OFI accumulator += per-tick OFI delta on each tick
-- L1 OFI uses only best bid/ask. Full-book OFI extends to all touched price levels.
-- Reset both OFI accumulator and prior-book-state on every gap or snapshot event.
+- Reset OFI accumulator and prior-book-state on every gap or snapshot event (call `Reset()`, not `BarReset()`).
+
+**`ofi` and `ofi_l1` column semantics (resolved design decision):**
+Both `ofi` and `ofi_l1` in `snapshot_1s` receive the same value: the L1 OFI running sum from `acc.ofiSum`. They are written identically from the same accumulator field. This is deliberate — full-book OFI (accumulating across all touched price levels) is deferred out of scope. A future migration can differentiate them when full-book OFI is implemented. Do NOT write different values for these two columns until that work is done.
 
 ### Tick Redelivery OFI Protection
 `consumer/` maintains a per-symbol dedup set of processed Redis stream entry IDs within the current 1-second window. If a message ID is already in the set (XACK failed → redelivery by Redis), XACK it and skip without applying to the accumulator or order book. Clear the dedup set on each `BarClose`. This prevents OFI inflation from at-least-once redelivery — QuestDB WAL dedup protects the persisted row but not the in-flight accumulator.
@@ -134,7 +146,7 @@ For each tick, `accumulator/` computes the per-tick OFI delta:
 A delta with `size="0"` removes the price level from the order book. Never leave a stale level. This is the most common source of silent book divergence. If a zero-size delta arrives for a price level not in the book, silently ignore (no-op) — do NOT create the level. Log at TRACE only to avoid spam.
 
 ### Cold-Start Delta Buffering
-If an update delta arrives before the first snapshot for a symbol, buffer it. The cold-start buffer is capped at `COLD_START_BUFFER_MAX` entries (default 1000) per symbol; see env vars.
+If an update delta arrives before the first snapshot for a symbol, buffer it. The cold-start buffer is capped at `COLD_START_BUFFER_SIZE` entries (default 1000) per symbol; see env vars.
 
 After the snapshot arrives: replay buffered messages in order. Replay deltas with `seq > snapshot.seq`. Gap markers in the buffer: if `gap_ts` is after the snapshot, replay them (they increment gap_count); if before the snapshot, discard.
 
@@ -142,7 +154,7 @@ After the snapshot arrives: replay buffered messages in order. Replay deltas wit
 
 **Second snapshot during replay:** If a second snapshot arrives while replaying buffered deltas, stop the replay immediately, call `accumulator.Reset()`, apply the new snapshot, discard remaining buffered deltas, and emit a gap marker with `gap_cause=snapshot_superseded`.
 
-**Buffer overflow:** If the buffer reaches `COLD_START_BUFFER_MAX` before a snapshot arrives, discard all buffered deltas and emit a gap marker with `gap_cause=cold_start_buffer_overflow`. Do NOT use `gap_cause=external_disconnect` — that is reserved for aggregator-emitted gap markers for actual exchange disconnects.
+**Buffer overflow:** If the buffer reaches `COLD_START_BUFFER_SIZE` before a snapshot arrives, discard all buffered deltas and emit a gap marker with `gap_cause=cold_start_buffer_overflow`. Do NOT use `gap_cause=external_disconnect` — that is reserved for aggregator-emitted gap markers for actual exchange disconnects.
 
 ### Upsert Semantics in QuestDB
 `snapshot_1s` rows have deduplication key `(exchange, symbol, ts_second)`. A crash-before-XACK restart writes the same bar twice — that is correct and expected. The QuestDB WAL dedup prevents duplicate rows. Never use this as an error signal.
@@ -151,6 +163,21 @@ After the snapshot arrives: replay buffered messages in order. Replay deltas wit
 `gap_count` for a bar is attributed to the second containing `gap_ts` from the gap marker — NOT the second the marker is consumed from the stream. A gap marker consumed in second N+1 but with `gap_ts` in second N increments second N's bar.
 
 If `gap_ts` falls in a second whose bar has already been committed to QuestDB (late-arriving gap marker on restart), issue a QuestDB UPDATE to increment `gap_count` for that row. If the row does not exist (gap predates service start), discard and log WARN.
+
+### Depth Snapshot Interface (Epic 6 architectural pattern)
+
+OB depth fields (16 columns: L1/L2/top10/total at open and close) plus weighted prices require full-book access at specific points in time. The pattern:
+
+1. `features.DepthSnapshot` struct — defined in `features/` to avoid import cycles. Contains `BidL1, AskL1, BidL2, AskL2, BidTop10, AskTop10, BidTotal, AskTotal, WeightedBidPrice, WeightedAskPrice float64`.
+2. `features.ComputeDepthSnapshot(bids, asks map[string]string) features.DepthSnapshot` — pure function in `features/`. Takes the output of `ob.AllBids()`/`ob.AllAsks()`.
+3. `acc.SetOpenDepth(d features.DepthSnapshot)` — called by `accWriter.Apply()` the first time `hasOpenQuote` transitions to true for a new bar.
+4. `acc.SetCloseDepth(d features.DepthSnapshot)` — called by `accWriter.Flush()` before `CurrentBar()`.
+
+The `accWriter` in `cmd/candle/` owns both `ob *orderbook.OrderBook` and `acc *accumulator.Accumulator`. It is the coordination point — the accumulator stays pure (no OB reference).
+
+**`weighted_bid_price` / `weighted_ask_price`** are bar-close snapshots computed once at flush time. They live in `DepthSnapshot.WeightedBidPrice`/`WeightedAskPrice`. No `_open` suffix — book shape is represented at bar close only.
+
+**`mid_price_close` is intentionally absent from the DDL.** It is always derivable as `(best_bid + best_ask) / 2` from the existing close-quote columns. Do NOT add a `mid_price_close` column or migration.
 
 ### Idle Second Field Semantics
 For seconds with zero ticks but valid prior OB state, write a row with the following semantics:
@@ -192,15 +219,32 @@ Trades with `size="0"` (parsed as zero) are XACK'd with a DEBUG log and not forw
 - `weighted_bid_price` / `weighted_ask_price`: if total volume on either side is zero, return null — never divide by zero
 
 ### Cascade Accumulator Persistence
-On each 1s bar close, write accumulator state to Redis (`candle:acc:{exchange}:{symbol}:{tf}`) as a **HASH**. Required fields: `open_ts`, `open`, `high`, `low`, `volume`, `quote_volume`, `trade_count`, `bar_count` (number of 1s bars merged so far), `gap_count`. No TTL — key persists until next write.
+On each 1s bar close, write accumulator state to Redis (`candle:acc:{exchange}:{symbol}:{tf}`) as a **HASH**. Required fields: `open_ts`, `open`, `high`, `low`, `volume`, `quote_volume`, `trade_count`, `bar_count` (number of 1s bars merged so far), `gap_count`. No TTL — key persists until next write. Schema evolution: read with HGETALL; any absent field is treated as 0/zero-value (never fail on a missing field).
 
-On startup reconstruction: fetch `snapshot_1s` rows from QuestDB since the last closed boundary for each timeframe. Compare fetched row count against expected count (`(now − last_closed_boundary) / 1s`). If actual < expected × 0.95, emit a gap marker for the cascade bar (`gap_cause=reconstruction_incomplete`) and start from an empty accumulator for the affected timeframes.
+**Startup reconstruction sequence (run synchronously before consumer goroutines start):**
+1. For each `(exchange, symbol, tf)`: read Redis HASH `candle:acc:{exchange}:{symbol}:{tf}`
+2. If HASH is present and all 9 fields are readable: restore cascade accumulator state from HASH
+3. Run completeness check: `SELECT COUNT(*) FROM snapshot_1s WHERE exchange=? AND symbol=? AND ts_second >= ? AND ts_second < now_boundary` (COUNT only — no row replay)
+4. If count < (expected_bar_count × 0.95): emit gap marker `gap_cause=reconstruction_incomplete`, override `gap_count` in restored state
+5. If HASH absent or malformed: start empty, emit gap marker with `gap_cause=reconstruction_incomplete`, skip QuestDB check
 
-If QuestDB unavailable at startup, start empty and emit a gap marker for the incomplete bars.
+**No row replay from QuestDB.** The Redis HASH is the only reconstruction source. The QuestDB query is a single COUNT(*) for completeness validation only.
 
-If the Redis cascade key is absent or malformed on startup, treat as fresh — same path as QuestDB-unavailable.
+**Startup ordering in `cmd/candle/main.go`:** (1) run migrations → (2) restore all cascade accumulators from Redis HASHes (synchronously, all symbols) → (3) run QuestDB completeness checks → (4) start consumer goroutines. Consumer goroutines MUST NOT start until step 3 is complete for all symbols.
+
+If QuestDB unavailable at startup, skip step 3, start empty, emit gap markers.
 
 **Write failure:** use `backoff/` with max 3 retries, initial=50ms, max=2s. If all retries fail, log ERROR, increment `candle_cascade_state_write_failure_total{exchange,symbol}`, and continue — never block the bar-close flow on a cascade Redis write failure.
+
+### Cascade Nil Aggregation Rules
+The cascade accumulator is OHLCV-only (9 fields). Microstructure fields (TWAP, OFI, etc.) are 1s-only — never aggregated to higher TFs. When folding a 1s `Bar` into a higher-TF cascade accumulator:
+- `open_ts`: set once on first 1s bar with any data; never overwritten
+- `open`: set once on first 1s bar where `open` is non-nil; never overwritten
+- `high`: if 1s bar's `high` is nil → skip (no update to cascade high)
+- `low`: if 1s bar's `low` is nil → skip (no update to cascade low)
+- `close`: if non-nil → update cascade close; if nil → carry last known close (no update)
+- `volume`, `quote_volume`, `trade_count`, `gap_count`: nil = +0
+- `bar_count`: always +1 regardless of 1s bar content (counts every second, including no-trade seconds)
 
 ### Timeframe Boundaries
 All timeframe calculations use UTC:
@@ -208,13 +252,13 @@ All timeframe calculations use UTC:
 - 1d: midnight UTC
 - 1w: **Monday 00:00:00 UTC** — use `time.Weekday() == time.Monday` check, not `time.Truncate` (which gives wrong results for weekly periods)
 
-The `1w` alias stream `candles:1w:{exchange}:{symbol}` publishes on the Monday boundary.
+The 1w bar closes to `candles:{exchange}:{symbol}:1w` (partial + close stream) and `candles:close:{exchange}:{symbol}:1w` (close-only stream). There is no duplicate alias key.
 
 ### Non-Atomic Redis Publish
-`candles:{exchange}:{symbol}:{tf}` and `ob_features:{exchange}:{symbol}` are published as two separate `XADD` calls on each bar close. If either fails after backoff retries, log ERROR, increment `candle_redis_publish_failure_total`, and continue — do not stall the consumer loop. Downstream consumers may occasionally see a bar without a corresponding OB features entry; this is acceptable.
+`candles:{exchange}:{symbol}:{tf}`, `candles:close:{exchange}:{symbol}:{tf}`, and `ob_features:{exchange}:{symbol}` are published as separate `XADD` calls on each bar close. If any fails after backoff retries, log ERROR, increment `candle_redis_publish_failure_total`, and continue — do not stall the consumer loop.
 
 ### Daily Flush Catch-Up
-On startup, read `last_flush_date` from Redis. If the key is **absent** (first startup or Redis was reset), do NOT perform catch-up — start daily flush from the current day and write `last_flush_date` after the first successful flush.
+On startup, read `last_flush_date` from Redis. If the key is **absent**, query `flush_manifest` in QuestDB for the most recent row where `success = true` and use its `date_flushed` as `last_flush_date`. Only if `flush_manifest` is also empty (true first run) start from the current day. This prevents silent data loss when Redis is reset in production — never silently skip catch-up on Redis key absence.
 
 If more than 1 day behind, flush all missing days sequentially before entering normal operation. Before flushing a date, query `flush_manifest` in QuestDB for an existing row with `date_flushed = target_date AND success = true`. If found, skip and advance `last_flush_date` in Redis — catch-up must be idempotent against Redis loss.
 
@@ -251,11 +295,12 @@ If the Redis write to `alerts:flush_failure` fails after a flush failure, increm
   - `B2_ACCESS_KEY_ID`, `B2_SECRET_ACCESS_KEY`, `B2_BUCKET_NAME`, `B2_ENDPOINT`
   - `BLOCK_TRADE_WINDOW` (default 1000), `BLOCK_TRADE_MIN_SAMPLE` (default 100)
   - `LOG_LEVEL`
-  - `CANDLE_STREAM_MAXLEN` (default 10000)
+  - `CANDLE_STREAM_MAXLEN` (default 10000) — MAXLEN for `candles:{exchange}:{symbol}:{tf}` partial+close stream
+  - `CANDLE_CLOSE_STREAM_MAXLEN` (default 500) — MAXLEN for `candles:close:{exchange}:{symbol}:{tf}` close-only stream
   - `CANDLE_SERVICE_PORT` (default 8081)
   - `CANDLE_PARTIAL_PUBLISH_MS` (default 250)
   - `CANDLE_CONSUMER_GROUP` — Redis consumer group name (default `candle-service`)
-  - `COLD_START_BUFFER_MAX` — per-symbol cold-start delta buffer cap (default 1000)
+  - `COLD_START_BUFFER_SIZE` — per-symbol cold-start delta buffer cap (default 10,000 — ~10s of ticks at peak rate)
   - `QUESTDB_ILP_FLUSH_MS` — ILP batch flush interval in milliseconds (default 500)
 
 ### Serialization
@@ -299,13 +344,16 @@ Identical dual strategy to the aggregator:
 
 ## QuestDB Schema
 
+### Migration Runner
+The service runs QuestDB migrations on startup (Story 5-1) before the Redis consumer starts. Migration files live in `candle-service/migrations/` as numbered SQL files (`001_snapshot_1s.sql`, `002_flush_manifest.sql`, …). A `schema_migrations` table tracks applied migrations with SHA-256 checksums. The service refuses to start if any migration fails or a previously-applied file has changed. Migrations are **additive only** — `ALTER TABLE ADD COLUMN` is permitted; `DROP COLUMN` and `RENAME COLUMN` are not supported by QuestDB and must never appear.
+
 ### `snapshot_1s` table
-Full 67-column schema including `best_bid_open` and `best_ask_open`. All non-identity columns nullable. DDL written in Story 5-1 before any accumulator code. No migrations — schema is complete and final from day one.
-Upsert key: `(exchange, symbol, ts_second)` — enforced via QuestDB WAL deduplication.
+Full 67-column schema including `best_bid_open` and `best_ask_open`. All non-identity columns nullable. DDL is migration file `001_snapshot_1s.sql` applied by the migration runner (Story 5-1) before any accumulator code.
+Upsert key: `(exchange, symbol, ts_second)` — enforced via `DEDUP UPSERT KEYS(ts, exchange, symbol)` in the DDL. ILP is append-only; deduplication happens in the WAL layer.
 
 ### `flush_manifest` table
 Fields: `ts_flush timestamp, exchange symbol, date_flushed date, row_count long, b2_path string, success boolean, error_msg string nullable, duration_ms long`
-DDL written in Epic 9 Story 1 before any flush code.
+DDL is migration file `002_flush_manifest.sql`, applied by the migration runner on startup before any flush code (Epic 9, Story 9-1).
 
 ---
 
@@ -320,12 +368,21 @@ DDL written in Epic 9 Story 1 before any flush code.
 ### Publishing: `candles:{exchange}:{symbol}:{tf}`
 - MAXLEN: 10,000 (configurable via `CANDLE_STREAM_MAXLEN`)
 - Partial bars: `is_complete: "false"`; closed bars: `is_complete: "true"`
-- Weekly alias: `candles:1w:{exchange}:{symbol}`
+- **No weekly alias.** The `candles:1w:{exchange}:{symbol}` alias is NOT published. Use `candles:close:{exchange}:{symbol}:1w` for weekly close signals (see below).
 - Full field specification: see `docs/data-contract.md` section 1.3
+
+### Publishing: `candles:close:{exchange}:{symbol}:{tf}`
+- Close events only (`is_complete: "true"`); never partial events
+- MAXLEN: 500 (configurable via `CANDLE_CLOSE_STREAM_MAXLEN`)
+- Published simultaneously with the close event in `candles:{exchange}:{symbol}:{tf}` on each bar close
+- Exists for all timeframes (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+- Bots that need bar-completion events subscribe to this stream. Bots that need live partial state read `candles:{exchange}:{symbol}:{tf}`.
+- Rationale: at 4 partial publishes/s, a 1h bar generates 14,400 entries — MAXLEN=10,000 would trim the close event 41 minutes after it was written. The close stream is always ≤500 entries per TF per symbol, so close events are never trimmed before the next bar closes.
 
 ### Publishing: `ob_features:{exchange}:{symbol}`
 - MAXLEN: 10,000 (same `CANDLE_STREAM_MAXLEN`)
-- Published on each 1s bar close
+- Published on each 1s bar close, from the **closed `Bar` struct** (after `CurrentBar()`, before `BarReset()`)
+- Flush sequence in `accWriter.Flush()`: (1) `acc.SetCloseDepth()`, (2) `bar := acc.CurrentBar()`, (3) write bar to QuestDB, (4) publish to `candles:` and `candles:close:` streams, (5) publish to `ob_features:` from `bar`, (6) `acc.BarReset()`. ob_features MUST NOT read from live OB state after `BarReset()`.
 - Full field specification: see `docs/data-contract.md` section 1.4
 
 ### Cascade persistence: `candle:acc:{exchange}:{symbol}:{tf}`
@@ -334,6 +391,7 @@ DDL written in Epic 9 Story 1 before any flush code.
 - No TTL — key persists until overwritten
 - Written on each 1s bar close; read on startup for reconstruction
 - Absent or malformed key on startup: treat as fresh (same as QuestDB-unavailable path)
+- Schema evolution: read with HGETALL; any absent field is treated as 0/zero-value
 
 ### Flush tracking: `last_flush_date` (Redis string key)
 ### Alerts: `alerts:flush_failure` (Redis stream)
@@ -352,6 +410,18 @@ candle-service:
   depends_on: [redis, questdb]
   ports: ["${CANDLE_SERVICE_PORT:-8081}:8081"]
 ```
+
+### Blue/Green Deployment (Story 9-4)
+
+Two docker-compose profiles: `candle-blue` (port 8081) and `candle-green` (port 8082). `CANDLE_SLOT` env var (`blue` or `green`) is included in `/health` response and all structured log lines.
+
+**`/health` response fields:** `status`, `shadow_lag` (max messages-behind-stream-tip across all configured symbols during shadow XREAD warmup — 0 after all symbols have promoted), `shadow_lag_symbol` (name of the symbol with the highest lag when `shadow_lag > 0`; omitted when `shadow_lag = 0`), `consumer_lag_max`, `slot`, `version`. The deploy script gates promotion on `shadow_lag=0`. If a symbol is permanently lagged and cannot catch up, the operator must remove it from `SYMBOLS_*` and redeploy — there is no automatic override.
+
+**Graceful shutdown on SIGTERM:** flush current in-flight 1s accumulator (`is_partial=true`), XACK all pending Redis messages, close ILP connection. Timeout: `SHUTDOWN_TIMEOUT_S` (default 10s).
+
+**Shadow XREAD warmup:** on startup the new slot reads the live stream via `XREAD` (no consumer group) building OB state and rolling windows. Tracks `lastShadowID` — the last processed message ID. At promotion: switch to `XREADGROUP` starting from `lastShadowID` (NOT `>`), call `XAUTOCLAIM` for pending messages, discard in-memory OHLCV accumulator and reconstruct from QuestDB last `is_partial=true` row. This ensures every message is processed exactly once at the XREAD→XREADGROUP boundary.
+
+**Rollback:** if new slot fails post-promotion, restart old slot. Redis state (cascade accumulators, block trade window, gap dedup ZSET) is intact. `XAUTOCLAIM`-on-startup recovers orphaned messages. Restart IS rollback.
 
 ---
 
@@ -372,9 +442,12 @@ candle-service:
 - Using `gap_ts` of a gap marker for the consumption second — always attribute to the second containing `gap_ts`
 - Computing OFI state in `features/` — OFI running sum lives in `accumulator/`
 - One `time.Ticker` per symbol — there is exactly one shared ticker in `cmd/candle/` that fans out
-- Unbounded cold-start delta buffer (use `COLD_START_BUFFER_MAX`, default 1000)
+- Unbounded cold-start delta buffer (use `COLD_START_BUFFER_SIZE`, default 1000)
 - `gap_cause=external_disconnect` for cold-start buffer overflow — use `cold_start_buffer_overflow`
 - Forwarding zero-volume trades (`size="0"`) to the accumulator
+- Publishing `candles:1w:{exchange}:{symbol}` as a weekly alias — use `candles:close:{exchange}:{symbol}:1w` instead
+- Publishing `ob_features` from live OB state after `BarReset()` — must come from the closed `Bar` struct before `BarReset()`
+- Starting consumer goroutines before cascade reconstruction is complete for all symbols
 - B2 multipart upload without calling `AbortMultipartUpload` on context cancellation
 - Re-flushing a date without checking `flush_manifest` for an existing `success=true` row
 
@@ -382,16 +455,18 @@ candle-service:
 
 ## Implementation Sequence
 
-1. `snapshot_1s` CREATE TABLE DDL (Story 5-1) — written before any accumulator code
-2. `internal/config/` + `internal/symbol/` + `.env.example`
-3. `internal/orderbook/` — pure L2 book (can import from aggregator's implementation as reference, but must be its own package)
-4. `internal/accumulator/` + `internal/features/` — pure, L1 tests with MockClock first
-5. `internal/cascade/` — pure, L1 tests with MockClock
-6. `internal/consumer/` — Redis XREADGROUP, dedup, dispatch
-7. `internal/writer/questdb/` + `internal/writer/redis/`
-8. `internal/metrics/` + `internal/health/`
-9. `cmd/candle/main.go` — composition root, ticker goroutine, startup reconstruction
-10. `internal/flush/` (Epic 9) — after QuestDB writes are stable
+1. Go project setup (Story 5-1) — `candle-service/` module, `go.mod`, Dockerfile, docker-compose blue/green profiles
+2. Migration runner (Story 5-2) — `candle-service/migrations/`, `schema_migrations` table, SHA-256 checksum enforcement
+3. `snapshot_1s` CREATE TABLE DDL (Story 5-3) — migration file `001_snapshot_1s.sql`, applied by migration runner
+4. `internal/config/` + `internal/symbol/` + `.env.example`
+5. `internal/orderbook/` — pure L2 book (can import from aggregator's implementation as reference, but must be its own package)
+6. `internal/accumulator/` + `internal/features/` — pure, L1 tests with MockClock first
+7. `internal/cascade/` — pure, L1 tests with MockClock (Story 8-1)
+8. `internal/consumer/` — Redis XREADGROUP, dedup, dispatch
+9. `internal/writer/questdb/` + `internal/writer/redis/` (story 8-2: writer/redis adds candle streams + 250ms ticker)
+10. `internal/metrics/` + `internal/health/`
+11. `cmd/candle/main.go` — composition root; startup order: migrations → cascade reconstruction (all symbols) → completeness checks → start consumer goroutines; 1s and 250ms tickers start after consumer goroutines are running
+12. `internal/flush/` (Epic 9) — after QuestDB writes are stable
 
 ---
 
@@ -399,4 +474,4 @@ candle-service:
 
 **For AI agents:** Read this file before writing any code. The aggregator's project-context.md covers a different service — rules there (WebSocket handling, exchange adapters, Bybit multiplexer) do not apply here. When in doubt, prefer the more restrictive interpretation. Flag any rule that conflicts with a framework or library default.
 
-_Last updated: 2026-05-08_
+_Last updated: 2026-05-08 (Epic 8 adversarial review resolutions applied)_

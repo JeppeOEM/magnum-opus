@@ -30,6 +30,66 @@ services:
           cpus: "2.0"
     restart: unless-stopped
 
+  candle-blue:
+    profiles: [candle-blue]
+    build:
+      context: ./candle-service
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    env_file:
+      - path: candle-service/.env
+        required: false
+    environment:
+      CANDLE_SLOT: blue
+      CANDLE_SERVICE_PORT: "8081"
+      REDIS_URL: redis://redis:6379
+      QUESTDB_ILP_ADDR: questdb:9009
+      QUESTDB_HTTP_ADDR: questdb:9000
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+      - questdb
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 400m
+          cpus: "1.0"
+    restart: unless-stopped
+
+  candle-green:
+    profiles: [candle-green]
+    build:
+      context: ./candle-service
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    env_file:
+      - path: candle-service/.env
+        required: false
+    environment:
+      CANDLE_SLOT: green
+      CANDLE_SERVICE_PORT: "8081"
+      REDIS_URL: redis://redis:6379
+      QUESTDB_ILP_ADDR: questdb:9009
+      QUESTDB_HTTP_ADDR: questdb:9000
+    ports:
+      - "8082:8081"
+    depends_on:
+      - redis
+      - questdb
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 400m
+          cpus: "1.0"
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     volumes:

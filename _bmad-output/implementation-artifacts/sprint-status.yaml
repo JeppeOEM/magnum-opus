@@ -1,6 +1,6 @@
 # generated: 2026-05-05
-# last_updated: 2026-05-07
-# updated: story 4-3 → in-progress (2026-05-07); 3 patch findings from code review
+# last_updated: 2026-05-08
+# updated: epic 5 stories renumbered (migration runner added as 5-1, old 1-6 → 2-7); epic 9 stories expanded (DDL split to 9-1, flush+catchup 9-2, alerting 9-3, blue-green 9-4)
 # project: magnum-opus
 # project_key: NOKEY
 # tracking_system: file-system
@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-07
+last_updated: 2026-05-08
 project: magnum-opus
 project_key: NOKEY
 tracking_system: file-system
@@ -83,41 +83,44 @@ development_status:
   epic-4-retrospective: done
 
   # ─── Epic 5: Candle Service Foundation ─────────────────────────────────────
-  epic-5: backlog
-  5-1-snapshot-1s-questdb-ddl: backlog
-  5-2-go-project-setup-and-docker: backlog
-  5-3-redis-consumer-and-gap-parser: backlog
-  5-4-l2-order-book-state-machine: backlog
-  5-5-ohlcv-accumulator-and-questdb-writer: backlog
-  5-6-observability-health-version-metrics: backlog
-  epic-5-retrospective: optional
+  epic-5: done
+  5-1-go-project-setup-and-docker: done
+  5-2-migration-runner: done
+  5-3-snapshot-1s-questdb-ddl: done
+  5-4-redis-consumer-and-gap-parser: done
+  5-5-l2-order-book-state-machine: done
+  5-6-ohlcv-accumulator-and-questdb-writer: done
+  5-7-observability-health-version-metrics: done
+  epic-5-retrospective: done
 
   # ─── Epic 6: OB-Derived Features ───────────────────────────────────────────
-  epic-6: backlog
-  6-1-ob-state-machine-fixture-validation: backlog
-  6-2-mid-price-and-spread-features: backlog
-  6-3-ob-depth-and-book-shape-features: backlog
-  6-4-market-impact-and-ofi-features: backlog
-  epic-6-retrospective: optional
+  epic-6: done
+  6-1-ob-state-machine-fixture-validation: done
+  6-2-mid-price-and-spread-features: done
+  6-3-ob-depth-and-book-shape-features: done
+  6-4-market-impact-and-ofi-features: done
+  epic-6-retrospective: done
 
   # ─── Epic 7: Trade & Quality Features ──────────────────────────────────────
-  epic-7: backlog
-  7-1-trade-direction-and-flow: backlog
-  7-2-block-trades-rolling-percentile: backlog
-  7-3-trade-distribution-and-volatility: backlog
-  7-4-ob-activity-and-microstructure: backlog
-  7-5-quality-fields-and-null-rows: backlog
-  epic-7-retrospective: optional
+  epic-7: done
+  7-1-trade-direction-and-flow: done
+  7-2-block-trades-rolling-percentile: done
+  7-3-trade-distribution-and-volatility: done
+  7-4-ob-activity-and-microstructure: done
+  7-5-quality-fields-and-null-rows: done
+  epic-7-retrospective: done
 
   # ─── Epic 8: Multi-Timeframe Cascade & Redis Output ────────────────────────
-  epic-8: backlog
-  8-1-cascade-engine-and-clock-boundary: backlog
-  8-2-redis-candle-stream-publisher: backlog
+  epic-8: in-progress
+  8-1-cascade-engine-and-clock-boundary: done
+  8-2-redis-candle-stream-publisher: done
   8-3-ob-feature-snapshot-publisher: backlog
   epic-8-retrospective: optional
 
   # ─── Epic 9: Cold Storage & Operations ─────────────────────────────────────
   epic-9: backlog
-  9-1-daily-parquet-flush-and-flush-manifest: backlog
-  9-2-flush-failure-alerting: backlog
+  9-1-flush-manifest-ddl: backlog
+  9-2-daily-parquet-flush-and-catchup: backlog
+  9-3-flush-failure-alerting: backlog
+  9-4-blue-green-deployment: backlog
   epic-9-retrospective: optional
