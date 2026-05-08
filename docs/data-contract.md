@@ -47,14 +47,19 @@ One stream per (exchange, symbol) pair. Two entry types share the same stream, d
 
 **Gap causes (exhaustive):**
 
-| Cause | Meaning |
-|-------|---------|
-| `external_disconnect` | Exchange WebSocket disconnected |
-| `external_rate_limit` | Exchange signalled rate limiting |
-| `internal_buffer_overflow` | Coordinator delta buffer was full |
-| `internal_merge_error` | Snapshot arrived but sequence didn't overlap buffered deltas |
+| Cause | Producer | Meaning |
+|-------|----------|---------|
+| `external_disconnect` | Aggregator | Exchange WebSocket disconnected |
+| `external_rate_limit` | Aggregator | Exchange signalled rate limiting |
+| `internal_buffer_overflow` | Aggregator | Coordinator delta buffer was full |
+| `internal_merge_error` | Aggregator | Snapshot arrived but sequence didn't overlap buffered deltas |
+| `stream_overflow` | Candle Service | Stream was at MAXLEN when consumer group was created (startup) |
+| `cold_start_buffer_overflow` | Candle Service | Cold-start delta buffer full before first snapshot arrived |
+| `seq_reset` | Candle Service | Exchange sequence counter reset (detected via heuristic) |
+| `snapshot_superseded` | Candle Service | Second snapshot arrived while replaying cold-start buffer |
+| `reconstruction_incomplete` | Candle Service | QuestDB rows insufficient to reconstruct cascade bar at startup |
 
-Internal gaps (`internal_*`) indicate a bug or resource exhaustion. External gaps are normal exchange behaviour.
+Aggregator-emitted `internal_*` causes indicate a bug or resource exhaustion. `external_*` causes are normal exchange behaviour. Candle Service causes are operational events, not bugs.
 
 **Guarantees:**
 - Gap markers are written in-band — a consumer reading the stream sequentially always sees the gap marker before the first tick that follows the gap.
@@ -77,7 +82,7 @@ Use for alerting and audit. Not intended for per-symbol consumption (use the tic
 
 ### 1.3 Candle streams — `candles:{exchange}:{symbol}:{tf}` **[PLANNED]**
 
-One stream per (exchange, symbol, timeframe). Written by the Python Candle Service when a bar closes.
+One stream per (exchange, symbol, timeframe). Written by the Go Candle Service when a bar closes.
 
 Timeframes: `1s`, `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`
 
@@ -86,15 +91,18 @@ Timeframes: `1s`, `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`
 | `ts` | string (int64 ms) | bar open time, Unix ms |
 | `exchange` | string | |
 | `symbol` | string | canonical |
-| `timeframe` | string | e.g. `"1m"` |
-| `open` | string (float) | |
-| `high` | string (float) | |
-| `low` | string (float) | |
-| `close` | string (float) | |
-| `volume` | string (float) | base asset volume |
-| `quote_volume` | string (float) | quote asset volume |
-| `trade_count` | string (int) | |
+| `tf` | string | e.g. `"1m"` |
+| `open` | string (float) | null on idle bars with no trades |
+| `high` | string (float) | null on idle bars with no trades |
+| `low` | string (float) | null on idle bars with no trades |
+| `close` | string (float) | null on idle bars with no trades |
+| `volume` | string (float) | base asset volume; null on idle bars |
+| `quote_volume` | string (float) | null on idle bars |
+| `trade_count` | string (int) | null on idle bars |
 | `is_complete` | string (bool) | `"true"` when bar is closed and will not be updated |
+| `is_partial` | string (bool) | `"true"` for mid-second flush on snapshot reinit — valid bar, not an error |
+
+Full 67-field bars include all microstructure fields from the `snapshot_1s` schema.
 
 Weekly bars also published to `candles:1w:{exchange}:{symbol}` as an alias for subscribers that only want weekly data.
 
@@ -102,20 +110,25 @@ Weekly bars also published to `candles:1w:{exchange}:{symbol}` as an alias for s
 
 ### 1.4 OB feature snapshots — `ob_features:{exchange}:{symbol}` **[PLANNED]**
 
-1-second order book feature snapshots. Written by the Python Candle Service.
+1-second order book feature snapshots. Written by the Go Candle Service on each 1s bar close.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `ts` | string (int64 ms) | snapshot time |
+| `ts` | string (int64 ms) | bar close time, Unix ms |
+| `exchange` | string | |
+| `symbol` | string | canonical |
 | `best_bid` | string (float) | |
 | `best_ask` | string (float) | |
-| `spread_mean` | string (float) | average spread over the second |
-| `ofi` | string (float) | order flow imbalance, full book |
+| `bid_depth_l1` | string (float) | bid depth at L1 |
+| `ask_depth_l1` | string (float) | ask depth at L1 |
+| `bid_depth_l2` | string (float) | bid depth at L2 |
+| `ask_depth_l2` | string (float) | ask depth at L2 |
+| `bid_depth_top10` | string (float) | |
+| `ask_depth_top10` | string (float) | |
+| `bid_depth_total` | string (float) | |
+| `ask_depth_total` | string (float) | |
+| `ofi` | string (float) | order flow imbalance, full book (Cont et al. 2014) |
 | `ofi_l1` | string (float) | order flow imbalance, L1 only |
-| `bid_depth_usd_top10` | string (float) | |
-| `ask_depth_usd_top10` | string (float) | |
-| `bid_depth_usd_total` | string (float) | |
-| `ask_depth_usd_total` | string (float) | |
 
 ---
 
@@ -377,7 +390,7 @@ To be clear about gaps before building bots:
 
 | Missing | Blocking what |
 |---------|--------------|
-| Python Candle Service | `snapshot_1s` table, candle streams, ob_features stream |
+| Go Candle Service _(in development)_ | `snapshot_1s` table, candle streams, ob_features stream |
 | AI/ML Service | `ai:{symbol}:signals` stream |
 | Bot Manager | strategy lifecycle, kill switch integration |
 | Kill Switch service | `bot:commands` stream, `/kill` HTTP endpoint |

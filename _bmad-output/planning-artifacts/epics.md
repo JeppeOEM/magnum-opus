@@ -5,7 +5,7 @@ inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
 candleServiceStepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics']
-candleServiceStatus: in-progress
+candleServiceStatus: complete
 candleServiceInputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
   - '_bmad-output/planning-artifacts/architecture.md'
@@ -112,7 +112,7 @@ This document provides the complete epic and story breakdown for magnum-opus, de
 
 Architecture-derived requirements that directly affect implementation scope:
 
-- **ARC1:** Greenfield Go module — initialize with `go mod init github.com/mrqdt/magnum-opus/aggregator` and pin specific library versions: `nhooyr.io/websocket`, `github.com/redis/go-redis/v9`, `github.com/questdb/go-questdb-client/v3`, `github.com/prometheus/client_golang`, `github.com/stretchr/testify`
+- **ARC1:** Greenfield Go module — initialize with `go mod init github.com/mrqdt/magnum-opus/aggregator` and pin specific library versions: `github.com/coder/websocket v1.8.14` (maintained fork of archived `nhooyr.io/websocket`), `github.com/redis/go-redis/v9`, `github.com/questdb/go-questdb-client/v3`, `github.com/prometheus/client_golang`, `github.com/stretchr/testify`
 - **ARC2:** `.env.example` must document all environment variables with descriptions and example values — must be written before `internal/config/` implementation begins
 - **ARC3:** `raw_ticks` QuestDB `CREATE TABLE` DDL must be written as the first story in `writer/questdb/` to prevent schema drift — field list: exchange, symbol, seq, ts_exchange, ts_local, side, price (string), size (string), event_type, is_gap, gap_cause (nullable)
 - **ARC4:** Implementation sequence is ordered and must not be reordered: (1) config/+symbol/, (2) orderbook/+reconnect/+gapdetector/ with L1 tests, (3) exchange interface+transport/, (4) kucoin/+bybit/mux/+bybit/, (5) coordinator/interfaces.go then writer/redis/+writer/questdb/, (6) coordinator/, (7) metrics/+health/, (8) cmd/aggregator/main.go, (9) Makefile+docker-compose.yml+Dockerfile
@@ -122,7 +122,7 @@ Architecture-derived requirements that directly affect implementation scope:
 - **ARC8:** Linode VM snapshot before each deploy for 5-minute rollback
 - **ARC9:** Credential sanitizing `slog.Handler` wrapper must be wired in `main.go` before any other package initializes its logger — covers DEBUG output and third-party library log calls
 - **ARC10:** Dockerfile multi-stage build required: build stage (Go toolchain) + minimal runtime stage — not yet specified in architecture, must be authored as part of deployment story
-- **ARC11:** All external dependencies must be actively maintained at time of adoption and on every future dependency update. Criteria: not archived, has had a commit within the last 12 months, has an active maintainer. The specific choice of `nhooyr.io/websocket` over the archived `gorilla/websocket` is the canonical example of this rule. Before adding any new dependency, verify active maintenance status. Pinned versions (e.g. QuestDB image tag) must be updated deliberately — not left on `:latest` — but must be periodically reviewed for security patches.
+- **ARC11:** All external dependencies must be actively maintained at time of adoption and on every future dependency update. Criteria: not archived, has had a commit within the last 12 months, has an active maintainer. The canonical example: `nhooyr.io/websocket` is archived — use `github.com/coder/websocket v1.8.14` (its maintained fork) instead. `gorilla/websocket` is also archived and must not be used. Before adding any new dependency, verify active maintenance status. Pinned versions (e.g. QuestDB image tag) must be updated deliberately — not left on `:latest` — but must be periodically reviewed for security patches.
 
 ### UX Design Requirements
 
@@ -185,7 +185,7 @@ So that the project compiles from day one and no archived or unmaintained librar
 **When** `go mod init github.com/mrqdt/magnum-opus/aggregator` is run and all dependencies are added
 **Then** `go build ./...` succeeds with zero errors
 **And** `go.mod` declares `go 1.21` minimum
-**And** the following dependencies are pinned to specific versions: `nhooyr.io/websocket`, `github.com/redis/go-redis/v9`, `github.com/questdb/go-questdb-client/v3`, `github.com/prometheus/client_golang`, `github.com/stretchr/testify`
+**And** the following dependencies are pinned to specific versions: `github.com/coder/websocket v1.8.14`, `github.com/redis/go-redis/v9`, `github.com/questdb/go-questdb-client/v3`, `github.com/prometheus/client_golang`, `github.com/stretchr/testify`
 **And** `gorilla/websocket` does NOT appear in `go.mod` or `go.sum`
 **And** each dependency has had a commit within the last 12 months (verified at time of pinning, noted in a comment in go.mod or a DEPS.md note)
 **And** `go.mod` is annotated with a `// verified: YYYY-MM-DD` comment for each direct external dependency so drift is visible in git diff
@@ -398,7 +398,7 @@ So that exchange-specific adapters focus on protocol semantics rather than conne
 **And** the interface includes methods for connecting, subscribing, receiving events, and graceful shutdown
 
 **Given** `internal/exchange/transport/conn.go`
-**Then** it uses `nhooyr.io/websocket` exclusively — `gorilla/websocket` must not appear anywhere
+**Then** it uses `github.com/coder/websocket v1.8.14` exclusively — `nhooyr.io/websocket` (archived) and `gorilla/websocket` (archived) must not appear anywhere
 **And** read/write use `wsjson.Read(ctx, conn, &v)` / `wsjson.Write(ctx, conn, v)`
 **And** graceful teardown cancels context first, then calls `conn.Close(StatusNormalClosure, "")`
 
@@ -925,7 +925,7 @@ So that every production deployment is validated against real exchange data befo
 
 ## Overview
 
-This section documents the epic and story breakdown for the Python Candle Service, the second major component of magnum-opus. It reads normalized ticks from Redis Streams produced by the Go aggregator and computes 1-second OHLCV + microstructure aggregates, multi-timeframe candles, and OB feature snapshots.
+This section documents the epic and story breakdown for the Go Candle Service, the second major component of magnum-opus. It reads normalized ticks from Redis Streams produced by the Go aggregator and computes 1-second OHLCV + microstructure aggregates, multi-timeframe candles, and OB feature snapshots.
 
 Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
 
@@ -934,13 +934,13 @@ Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
 ### Functional Requirements
 
 **Stream Reading**
-- CS-FR1: Read `ticks:{exchange}:{symbol}` streams via Redis consumer group; on first connect start from current position (`$`); on restart resume from last-ack'd position
-- CS-FR2: Parse both `type=tick` and `type=gap` entries from the stream
-- CS-FR3: Deduplicate gap markers on `(seq_before, seq_after, gap_cause)` — aggregator may emit retries
+- CS-FR1: Read `ticks:{exchange}:{symbol}` streams via Redis consumer group; on first connect start from current position (`$`) — if the stream has been trimmed to MAXLEN (>45,000 entries at startup), emit a gap marker for the skipped range; on restart resume from last-ack'd position
+- CS-FR2: Parse both `type=tick` and `type=gap` entries from the stream; on unknown message type log WARN and XACK without processing — do not stall the consumer
+- CS-FR3: Deduplicate gap markers on `(exchange, symbol, seq_before, seq_after, gap_cause)` — both `exchange` and `symbol` are required fields in the dedup key; aggregator may emit retries
 
 **L2 Order Book Maintenance**
-- CS-FR25: Maintain in-memory L2 order book per symbol: `event_type=snapshot` resets state, `event_type=update` applies deltas
-- CS-FR27: On `event_type=snapshot`: immediately flush the current 1-second accumulator and reinitialize OB state from the snapshot data
+- CS-FR25: Maintain in-memory L2 order book per symbol: `event_type=snapshot` resets state, `event_type=update` applies deltas; zero-size delta removes the price level
+- CS-FR27: On `event_type=snapshot`: immediately flush the current 1-second accumulator with `is_partial=true` and reinitialize OB state; call `accumulator.Reset()` before feeding new ticks
 
 **1-Second Aggregation**
 - CS-FR4: Compute 1-second OHLCV bars (open, high, low, close, volume, quote_volume, trade_count, twap)
@@ -970,7 +970,10 @@ Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
 - CS-FR24: Publish to `alerts:flush_failure` Redis stream on daily flush failure
 
 **Configuration**
-- CS-FR26: Load all configuration from env vars: `REDIS_URL`, `QUESTDB_ILP_ADDR`, `SYMBOLS_KUCOIN`, `SYMBOLS_BYBIT`, `B2_*` credentials, `BLOCK_TRADE_WINDOW`, `LOG_LEVEL`
+- CS-FR26: Load all configuration from env vars: `REDIS_URL`, `QUESTDB_ILP_ADDR`, `SYMBOLS_KUCOIN`, `SYMBOLS_BYBIT`, `B2_ACCESS_KEY_ID`, `B2_SECRET_ACCESS_KEY`, `B2_BUCKET_NAME`, `B2_ENDPOINT`, `BLOCK_TRADE_WINDOW`, `BLOCK_TRADE_MIN_SAMPLE`, `LOG_LEVEL`, `CANDLE_STREAM_MAXLEN`, `CANDLE_SERVICE_PORT`, `CANDLE_PARTIAL_PUBLISH_MS`, `CANDLE_CONSUMER_GROUP`, `COLD_START_BUFFER_MAX`, `QUESTDB_ILP_FLUSH_MS`
+
+**Observability**
+- CS-FR28: Expose `/health` (consumer lag per symbol, QuestDB write state, overall ok/degraded/critical), `/version` (git SHA, build timestamp), and `/metrics` (Prometheus) on `CANDLE_SERVICE_PORT`. Required metrics: `candle_bars_total{exchange,symbol}`, `candle_consumer_lag{exchange,symbol}`, `candle_questdb_write_latency_ms`, `candle_gap_count_total{exchange,symbol}`, `candle_flush_success_total`, `candle_flush_failure_total`, `candle_flush_alert_failure_total`, `candle_bar_close_dropped_total{exchange,symbol}`, `candle_redis_publish_failure_total{exchange,symbol}`, `candle_cascade_state_write_failure_total{exchange,symbol}`
 
 ### Non-Functional Requirements
 
@@ -981,7 +984,7 @@ Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
 - CS-NFR5: Daily B2 flush must complete within 4 hours of the day boundary
 - CS-NFR6: All credentials (Redis, QuestDB, B2) loaded exclusively from env vars
 - CS-NFR7: Service containerized and co-deployed via docker-compose alongside aggregator
-- CS-NFR8: Testable at minimum two layers: pure-function unit tests + integration tests using `fakeredis` (PyPI) and test-container QuestDB
+- CS-NFR8: Testable at four layers: L1 pure-function unit tests (MockClock injected), L2 mock interfaces (FakeRedis/FakeQuestDB), L3 mock Redis server in-process, L4 Toxiproxy + testcontainer QuestDB — no L5 (this service does not connect to exchanges)
 
 ### FR Coverage Map
 
@@ -1015,6 +1018,7 @@ Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
 | CS-FR22 | 9 | Daily B2 Parquet flush |
 | CS-FR23 | 9 | flush_manifest QuestDB write (DDL created in same story) |
 | CS-FR24 | 9 | alerts:flush_failure publish |
+| CS-FR28 | 5 | Observability: /health, /version, /metrics |
 
 ## Candle Service Epic List
 
@@ -1030,16 +1034,17 @@ Input documents: `prd.md`, `architecture.md`, `docs/data-contract.md`
 
 The operator can run the Candle Service alongside the aggregator, confirm it reads from Redis, and see basic OHLCV rows appearing in `snapshot_1s` in QuestDB.
 
-**FRs covered:** CS-FR1, CS-FR2, CS-FR3, CS-FR4, CS-FR18 (OHLCV fields), CS-FR25, CS-FR26, CS-FR27
+**FRs covered:** CS-FR1, CS-FR2, CS-FR3, CS-FR4, CS-FR18 (OHLCV fields), CS-FR25, CS-FR26, CS-FR27, CS-FR28
 
 **Implementation notes:**
-- Story 1: `snapshot_1s` CREATE TABLE DDL — full 67-column schema, all non-identity columns nullable. Written before any accumulator code. No migrations ever.
-- Story 2: Python project setup — `candle-service/` directory, pyproject.toml, Dockerfile, docker-compose update (add candle-service service)
-- Story 3: Redis consumer — consumer group per symbol, parse tick/gap messages, dedup gap markers, on snapshot event flush accumulator + reinit OB state (CS-FR27)
-- Story 4: L2 OB state machine — in-memory per symbol, snapshot resets, update applies deltas (CS-FR25)
-- Story 5: 1s OHLCV accumulator + QuestDB ILP writer — wall-clock second boundaries, write 8 OHLCV fields, leave remaining 59 columns null
+- Story 1: `snapshot_1s` CREATE TABLE DDL — full 67-column schema including `best_bid_open` and `best_ask_open`, all non-identity columns nullable. Written before any accumulator code. No migrations ever.
+- Story 2: Go project setup — `candle-service/` directory, `go.mod` (module `github.com/mrqdt/magnum-opus/candle-service`), multi-stage Dockerfile, docker-compose update (add candle-service with mem_limit, cpus, stop_grace_period)
+- Story 3: Redis consumer — consumer group per symbol, parse tick/gap/unknown messages, dedup gap markers on `(exchange, symbol, seq_before, seq_after, gap_cause)`, startup MAXLEN check, on snapshot event flush accumulator (is_partial=true) + reinit OB state + reset OFI (CS-FR27)
+- Story 4: L2 OB state machine — in-memory per symbol, snapshot resets, zero-size delta removes level, cold-start delta buffering until first snapshot, buffer overflow → gap marker with `gap_cause=cold_start_buffer_overflow`
+- Story 5: 1s OHLCV accumulator + QuestDB ILP writer — second boundaries driven by `time.Ticker` goroutine (NOT the Redis consumer); upsert key `(exchange, symbol, ts_second)`; write OHLCV fields, leave remaining columns null; WAL suspension detection + auto-resume; ILP retry with exponential backoff (initial=1s, max=30s)
+- Story 6: Observability — `/health`, `/version`, `/metrics` endpoints; Prometheus registry; slog handler wrapper for credential redaction. `/health` response: `{"status":"ok|degraded|critical","consumer_lag_max":N,"questdb_write_state":"ok|suspended","version":"git-sha"}`; must respond within 100ms
 
-**Done when:** `docker-compose up` starts the service, it connects to Redis, and QuestDB shows OHLCV rows in `snapshot_1s` for all configured symbols.
+**Done when:** `docker-compose up` starts the service, it connects to Redis, QuestDB shows OHLCV rows in `snapshot_1s` for all configured symbols, and `/health` returns ok.
 
 ---
 
@@ -1052,9 +1057,12 @@ The `snapshot_1s` rows contain all order-book-derived fields: mid-price path, sp
 **Implementation notes:**
 - All features in this epic are derived from the L2 OB state machine built in Epic 5
 - Validation story recommended first: confirm OB state machine produces correct books against known tick fixtures before computing features from it
-- OFI requires tracking book state changes across ticks (not just snapshots) — needs careful delta tracking in the accumulator
+- CS-FR7: `best_bid_open`/`best_ask_open` captured at first tick of second; if no ticks arrive but book state is valid, carry last-known OB state into open and close fields — OB fields never null when state is known
+- CS-FR8: guard against empty book — return null if total volume on either side is zero
+- CS-FR9: guard against insufficient depth — return max available depth, not an error or panic
+- CS-FR10: OFI uses Cont et al. (2014) queue-flow imbalance definition; `features.OFIDelta()` is a pure stateless function; running sum lives in `accumulator/`; reset on gap event or snapshot reinit
 
-**Done when:** QuestDB `snapshot_1s` rows contain populated mid_price_*, spread_*, bid/ask_depth_*, weighted_*_price, depth_to_1pct_*, ofi, ofi_l1 fields.
+**Done when:** QuestDB `snapshot_1s` rows contain populated best_bid_open, best_ask_open, mid_price_*, spread_*, bid/ask_depth_*, weighted_*_price, depth_to_1pct_*, ofi, ofi_l1 fields.
 
 ---
 
@@ -1066,9 +1074,9 @@ The `snapshot_1s` rows contain all trade-derived fields and quality metadata. Th
 
 **Implementation notes:**
 - All features in this epic are derived from trade events (`event_type=trade`) in the tick stream — independent of the OB state machine
-- CS-FR12 block trade threshold: rolling 99th-percentile over last N trades per symbol (N = `BLOCK_TRADE_WINDOW`, default 1000). Stateful with edge cases — deserves its own story, not bundled with trade flow
-- Empty-second null-row: when no ticks arrive in a second, write a row with ts/exchange/symbol and all computed fields null
-- gap_count increments once per gap marker received in the window; bar_count always increments
+- CS-FR12 block trade threshold: rolling 99th-percentile over last N trades per symbol (N = `BLOCK_TRADE_WINDOW`, default 1000); cold-start writes null until `BLOCK_TRADE_MIN_SAMPLE` (default 100) trades seen — deserves its own story
+- Empty-second null-row: OB state fields carried from last-known state; all trade/OHLCV/feature fields null (CS-FR18)
+- CS-FR17: gap_count attributed to the second containing `gap_ts`, not the second the marker is consumed; bar_count always increments
 
 **Done when:** QuestDB `snapshot_1s` rows contain all 67 fields populated for active seconds; empty seconds produce null rows; gap markers correctly increment gap_count.
 
@@ -1081,12 +1089,15 @@ Bots can subscribe to 1m–1w candles via Redis streams. Both in-progress and cl
 **FRs covered:** CS-FR19, CS-FR20, CS-FR21
 
 **Implementation notes:**
-- Cascade engine: 1s → 1m → 5m → 15m → 1h → 4h → 1d → 1w. Clock boundary owned by an asyncio timer loop, NOT the Redis consumer (prevents off-by-one bar assignment bugs)
-- **Partial bar publish cadence: time-based (every 250ms per symbol per active timeframe), NOT on every tick.** Publishing on every tick at 2,400/sec × 400 symbols × 8 timeframes = ~7.7M Redis writes/minute — unsustainable. Cadence is configurable via env var
+- Cascade engine: 1s → 1m → 5m → 15m → 1h → 4h → 1d → 1w. Bar-close boundary owned by a `time.Ticker` goroutine (NOT the Redis consumer). Bar-close signal sent through a capacity-1 channel so the consumer drains its current batch before processing the close — no mutex needed with single-goroutine-per-symbol model.
+- Cascade accumulator persistence: write accumulator state to Redis (`candle:acc:{exchange}:{symbol}:{tf}`) as a HASH on each 1s bar close. On startup, reconstruct in-progress higher-timeframe bars from QuestDB `snapshot_1s` rows since the last closed boundary; fall back to empty accumulator if QuestDB unavailable and record the gap.
+- **Partial bar publish cadence: time-based (every 250ms per symbol per active timeframe), NOT on every tick.** Cadence configurable via `CANDLE_PARTIAL_PUBLISH_MS`. Idle symbols (no updates in the 250ms window) are skipped.
+- 1w bar boundary: Monday 00:00:00 UTC. All timeframe boundaries use UTC.
 - Weekly bars also published to `candles:1w:{exchange}:{symbol}` alias
 - OB feature snapshots published to `ob_features:{exchange}:{symbol}` on each 1s bar close
+- All `candles:*` and `ob_features:*` streams trimmed to CANDLE_STREAM_MAXLEN (default 10,000)
 
-**Done when:** Redis streams receive candle messages at all 8 timeframes; bots can filter on `is_complete` to choose closed-bar-only or live-update behaviour; OB feature snapshots appear in `ob_features:*` streams.
+**Done when:** Redis streams receive candle messages at all 8 timeframes; bots can filter on `is_complete`; OB feature snapshots appear in `ob_features:*` streams; 1h/1d/1w bars survive a service restart without truncation.
 
 ---
 
@@ -1097,9 +1108,10 @@ Daily snapshots of `snapshot_1s` are archived to Backblaze B2. Flush failures ar
 **FRs covered:** CS-FR22, CS-FR23, CS-FR24
 
 **Implementation notes:**
-- `flush_manifest` CREATE TABLE DDL written in the same story as the first flush implementation — schema-first, no migrations
+- `flush_manifest` DDL written in the same story as the first flush. Fields: `ts_flush timestamp, exchange symbol, date_flushed date, row_count long, b2_path string, success boolean, error_msg string nullable, duration_ms long`
 - Daily Parquet flush: zstd compressed, Hive-partitioned by date, runs at configurable daily time
-- Flush must complete within 4 hours of day boundary (CS-NFR5)
-- On failure: write flush_manifest row with error field populated AND publish to `alerts:flush_failure`
+- Upload wrapped in `context.WithTimeout(4h)`; on cancellation or failure call `s3.AbortMultipartUpload` with a fresh context to prevent leaked B2 incomplete parts
+- Catch-up on startup: read `last_flush_date` from Redis; if key absent (first startup or Redis reset), skip catch-up and start from current day; otherwise flush all missing days sequentially. Before flushing each date, query `flush_manifest` for an existing `success=true` row — skip if found (idempotent against Redis loss)
+- On failure: write flush_manifest row with error field AND publish to `alerts:flush_failure`; if Redis write also fails, increment `candle_flush_alert_failure_total` Prometheus counter
 
 **Done when:** QuestDB data older than 30 days is present in B2; flush_manifest shows successful flush records; a simulated failure produces an entry in both flush_manifest and alerts:flush_failure.

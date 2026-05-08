@@ -781,3 +781,141 @@ foundational types. Write these first; everything else depends on them.
 - snake_case for all serialized fields (Redis, QuestDB, slog, Prometheus labels)
 - string for all price/size values — never float64
 - Run `make test-l1` before committing any change to a pure package
+
+---
+
+# Candle Service Architecture
+
+_Added 2026-05-08. This section covers the Go Candle Service (Epics 5–9) — the second major component of magnum-opus._
+
+## Overview
+
+The Candle Service is a Go daemon that consumes normalized ticks from Redis Streams, maintains per-symbol L2 order book state, computes 1-second OHLCV + microstructure aggregates, cascades to 7 higher timeframes, and writes results to QuestDB. It is a separate Go module in the same repo.
+
+**Language:** Go — same toolchain, same patterns as the aggregator. Consistent test layer model, same interface-ownership rule, same concurrency idioms.
+
+**Concurrency model:** one goroutine per (exchange, symbol). Each goroutine owns its L2 book, accumulator, and OFI state — no shared mutable state. A separate `time.Ticker` goroutine per symbol drives second-boundary close; it sends a close signal through a channel so the consumer goroutine processes it in-order after draining the current XREADGROUP batch.
+
+## Module Initialization
+
+```bash
+go mod init github.com/mrqdt/magnum-opus/candle-service
+go get github.com/redis/go-redis/v9
+go get github.com/questdb/go-questdb-client/v3
+go get github.com/prometheus/client_golang
+go get github.com/stretchr/testify
+go get github.com/parquet-go/parquet-go          # Parquet flush
+go get github.com/aws/aws-sdk-go-v2/service/s3   # Backblaze B2 (S3-compatible)
+```
+
+## Package Layout
+
+```
+candle-service/
+  cmd/candle/               # composition root, env-var config, startup catch-up flush
+  internal/
+    config/                 # Config struct, Load(), sealed credential type (no Stringer)
+    symbol/                 # re-use aggregator's normalized symbol type (shared internal pkg)
+    orderbook/              # L2 book state machine (pure, L1-testable) — same interface as aggregator
+    accumulator/            # 1s OHLCV + feature accumulator (pure state machine, Clock injected)
+    features/               # pure feature-computation functions: OFI, Gini, skewness, percentile
+    consumer/               # Redis XREADGROUP loop, dedup filter, message dispatch
+    cascade/                # timeframe cascade engine (pure, Clock injected)
+    writer/questdb/         # QuestDB ILP writer — WAL detection, retry, upsert semantics
+    writer/redis/           # candle + ob_features stream publisher, MAXLEN trim
+    flush/                  # daily Parquet flush: QuestDB → B2; flush_manifest write
+    health/                 # /health /version /metrics HTTP server
+    metrics/                # named Prometheus vars, Register(prometheus.Registerer)
+    backoff/                # same exponential backoff policy as aggregator
+    testutil/               # MockClock, FakeRedis, FakeQuestDB, TickFixtureBuilder
+  Makefile                  # test-l1, test-l2, test-l3, test-l4 targets
+```
+
+## Key Architectural Decisions
+
+**Pure/IO separation — same rule as aggregator:**
+`orderbook/`, `accumulator/`, `features/`, `cascade/` import nothing from this codebase — zero IO, fully L1-testable. `consumer/`, `writer/*/`, `flush/` own all IO.
+
+**`accumulator/` as a pure state machine:**
+The accumulator receives ticks and a `BarClose` signal (from the ticker goroutine via channel), returns a completed bar value, and resets. `Clock` is injected — `time.Now()` is banned outside `cmd/candle/`. This makes second-boundary behavior fully deterministic in L1 tests.
+
+**OFI state lives in `accumulator/`, reset on gap/snapshot:**
+`accumulator.Apply(tick)` maintains the prior-book-state snapshot needed for OFI delta computation. On `BarClose`, accumulator resets OFI. On `GapEvent` or `SnapshotEvent`, caller invokes `accumulator.Reset()` before feeding new ticks — this is the only path that resets OFI mid-second.
+
+**Cascade persistence via Redis:**
+Higher-timeframe accumulators are serialized to Redis on each 1s close (`candle:acc:{exchange}:{symbol}:{tf}`). On startup, `cmd/candle/` reconstructs in-progress bars before starting consumer goroutines. If Redis is unavailable at startup, service starts with empty accumulators and emits a gap marker for the incomplete bars.
+
+**Upsert semantics in QuestDB:**
+`snapshot_1s` rows are written with deduplication key `(exchange, symbol, ts_second)`. The ILP writer issues an `INSERT ... ON CONFLICT IGNORE` equivalent (QuestDB WAL dedup). This makes crash-before-XACK restarts safe — the same bar is written twice but only one row survives.
+
+**Credential sanitization — identical to aggregator:**
+Dual strategy: sealed `config.Credential` type (no `Stringer`, no `fmt.Stringer`) + slog handler wrapper in `cmd/candle/main.go` that redacts known credential patterns at all levels including DEBUG. B2 credentials (`B2_ACCESS_KEY_ID`, `B2_SECRET_ACCESS_KEY`) are covered by the same redaction list.
+
+## Naming Conventions
+
+All conventions from the aggregator apply unchanged:
+- Go code: PascalCase exported, camelCase unexported, `ErrXxx` sentinels, no `I`-prefix interfaces
+- Prometheus metrics: `candle_{noun}_{unit}_total` pattern, snake_case labels
+- slog fields: snake_case, `error` (never `err`)
+- QuestDB columns: snake_case
+- Redis fields: snake_case, string prices, int64 timestamps
+
+**Candle-specific Prometheus prefix:** `candle_` (not `aggregator_`)
+
+## Test Architecture (L1–L4)
+
+Mirrors the aggregator exactly:
+
+| Layer | Scope | Build tag | CI |
+|---|---|---|---|
+| L1 | `orderbook/`, `accumulator/`, `features/`, `cascade/` — zero IO, MockClock | none | yes |
+| L2 | `consumer/`, `writer/*/` with mock interfaces; FakeRedis, FakeQuestDB | `l2` | yes |
+| L3 | Mock Redis server in-process; full consumer loop | `l3` | no |
+| L4 | Toxiproxy + testcontainer QuestDB; fault injection | `l4` | no |
+
+**MockClock** is critical for L1 tests of `accumulator/` and `cascade/` — second-boundary behavior must be testable without sleeping.
+
+**TickFixtureBuilder** in `testutil/` provides deterministic tick sequences including gap events, snapshot events, zero-size deltas, and empty-second scenarios.
+
+## docker-compose Integration
+
+```yaml
+candle-service:
+  image: ghcr.io/mrqdt/magnum-opus/candle-service:${VERSION}
+  env_file: .env
+  mem_limit: 400m
+  cpus: 1.0
+  stop_grace_period: 15s
+  depends_on: [redis, questdb]
+  ports: ["${CANDLE_SERVICE_PORT:-8081}:8081"]
+```
+
+## Data Flow
+
+    Redis ticks:{exchange}:{symbol}
+      → consumer/consumer.go           (XREADGROUP batch, dedup filter)
+      → consumer/dispatch.go           (route tick/gap/snapshot/unknown to per-symbol goroutine)
+      → per-symbol goroutine:
+          → orderbook.Apply(delta)     (pure, updates L2 state)
+          → accumulator.Apply(tick)    (pure, updates OHLCV + OFI + features)
+          → [on BarClose signal]:
+              → accumulator.Close()    (pure, returns completed Bar)
+              → writer/questdb         (ILP write, upsert, WAL recovery)
+              → writer/redis           (candles:* + ob_features:* publish)
+              → cascade.Apply(bar)     (pure, updates higher-TF accumulators)
+              → writer/redis           (persist cascade state)
+          → [on GapEvent]:
+              → accumulator.Reset()   (clears OFI + prior book state)
+      → health/handlers.go             (reads in-memory consumer state for /health)
+      → flush/daily.go                 (daily goroutine: QuestDB → Parquet → B2)
+
+## AI Agent Guidelines
+
+All aggregator guidelines apply. Additional rules for the Candle Service:
+
+- `accumulator.Reset()` must be called on every gap event and snapshot event — never skip it
+- OFI accumulator and prior-book-state are fields inside `accumulator/` — never computed in `features/`
+- `time.Ticker` for second boundaries lives in `cmd/candle/` and sends on a typed channel — never call `time.Now()` inside `accumulator/` or `cascade/`
+- Partial bars emitted on snapshot flush carry `is_partial=true` — downstream consumers must handle this field
+- Block trade classification must check `len(window) >= BLOCK_TRADE_MIN_SAMPLE` before computing the percentile threshold — null is correct output during warm-up, not zero
+- Gap attribution: always use `gap_ts` from the gap marker to determine which second's `gap_count` to increment

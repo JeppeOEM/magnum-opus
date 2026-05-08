@@ -97,7 +97,7 @@ The service is successful when the following conditions hold continuously in pro
 
 ### Journey 4: Candle Service — Reading the Stream (Integration Consumer)
 
-**Opening scene.** The Candle Service (Python) starts up after a 4-minute maintenance window. It has missed ~240 seconds of ticks per symbol. It begins reading from its last-acknowledged position in `ticks:bybit:BTCUSDT` via its Redis consumer group.
+**Opening scene.** The Go Candle Service starts up after a 4-minute maintenance window. It has missed ~240 seconds of ticks per symbol. It begins reading from its last-acknowledged position in `ticks:bybit:BTCUSDT` via its Redis consumer group.
 
 **Rising action.** The Candle Service reads ticks in order. At one position it encounters a gap marker: `{type:"gap", gap_cause:"external_disconnect", seq_before:98234701, seq_after:98236548}`. It does not need to query any external system to understand this — the cause and sequence bounds are in the message itself. It marks the bars that span this gap as `has_gap=true`.
 
@@ -244,7 +244,7 @@ Gap marker schema (same stream, same consumer group):
 
 `gap_cause` is one of four exhaustive values: `internal_buffer_overflow`, `internal_merge_error`, `external_disconnect`, `external_rate_limit`. No other values are valid.
 
-Stream retention: Redis Streams trimmed by length (MAXLEN). Target retention: last 10,000 entries per stream (sufficient for Candle Service consumer lag recovery without unbounded memory growth).
+Stream retention: Redis Streams trimmed by length (MAXLEN). Target retention: last 50,000 entries per stream (~20 seconds of buffer at 2,400 ticks/sec; sufficient for Candle Service consumer lag recovery without unbounded memory growth; ~1 GB Redis memory across 400 streams at ~50 bytes/entry).
 
 **`gaps:log` Redis Stream**
 
