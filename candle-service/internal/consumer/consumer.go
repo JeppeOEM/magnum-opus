@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -88,6 +90,11 @@ type Consumer struct {
 	// per-second dedup set: cleared on each BarClose
 	seenIDs   map[string]struct{}
 	tickCount int // ticks in current second; guards zero-tick partial flush on snapshot
+	// blue-green shadow mode
+	shadowMode   atomic.Bool
+	shadowMu     sync.Mutex
+	lastShadowID string // last processed shadow message ID; "" before first XREAD
+	xreadCursor  string // internal XREAD start cursor; "0-0" until first message
 }
 
 // New constructs a Consumer for one (exchange, symbol).
@@ -128,8 +135,148 @@ func (c *Consumer) WithPartialPublish(ch <-chan PartialPublishSig, publisher Par
 	return c
 }
 
+// WithShadowMode enables shadow XREAD mode for blue-green warmup.
+// In shadow mode the consumer uses XREAD (no consumer group), does not XACK,
+// does not call Flush, and does not respond to barClose/partialPublish signals.
+// Returns c for chaining with New().
+func (c *Consumer) WithShadowMode() *Consumer {
+	c.shadowMode.Store(true)
+	c.shadowMu.Lock()
+	c.lastShadowID = ""     // no messages processed yet
+	c.xreadCursor = "0-0"  // start reading from beginning of stream
+	c.shadowMu.Unlock()
+	return c
+}
+
+// LastShadowID returns the ID of the most recently processed XREAD message.
+// Returns "" before any message has been processed; safe to call from any goroutine.
+func (c *Consumer) LastShadowID() string {
+	c.shadowMu.Lock()
+	defer c.shadowMu.Unlock()
+	return c.lastShadowID
+}
+
+// ShadowLag returns the number of entries in the stream after lastShadowID.
+// Returns 0 when caught up, before first XREAD, or on error.
+func (c *Consumer) ShadowLag(ctx context.Context) int64 {
+	c.shadowMu.Lock()
+	id := c.lastShadowID
+	c.shadowMu.Unlock()
+	if id == "" {
+		// No messages processed yet — lag is the full stream length.
+		xlen, err := c.rdb.XLen(ctx, c.streamKey).Result()
+		if err != nil {
+			return 0
+		}
+		return xlen
+	}
+	entries, err := c.rdb.XRange(ctx, c.streamKey, id, "+").Result()
+	if err != nil {
+		c.logger.WarnContext(ctx, "consumer: shadow lag query failed", "error", err)
+		return 0
+	}
+	return computeShadowLag(int64(len(entries)))
+}
+
+// computeShadowLag converts an XRANGE count (inclusive of lastShadowID) to lag.
+// Returns 0 when at tip (only lastShadowID in results).
+func computeShadowLag(xrangeCount int64) int64 {
+	lag := xrangeCount - 1
+	if lag < 0 {
+		lag = 0
+	}
+	return lag
+}
+
+// Promote transitions the consumer from shadow XREAD to active XREADGROUP.
+// Ensures the consumer group exists, sets the group cursor to lastShadowID,
+// and clears the shadow mode flag so Run() enters the XREADGROUP loop.
+// Promote transitions the consumer from shadow XREAD to active XREADGROUP.
+// lastShadowID is the last processed shadow message ID (from LastShadowID()).
+// Empty string means no messages were processed; group cursor is set to "$" (tip).
+// Creates the group at cursorID directly (single step — no two-step SetID window).
+func (c *Consumer) Promote(lastShadowID string) error {
+	ctx := context.Background()
+	cursorID := lastShadowID
+	if cursorID == "" {
+		cursorID = "$" // no messages processed — start from stream tip
+	}
+	err := c.rdb.XGroupCreateMkStream(ctx, c.streamKey, c.consumerGroup, cursorID).Err()
+	if err != nil && !isGroupExistsErr(err) {
+		return fmt.Errorf("consumer: promote: ensure group: %w", err)
+	}
+	if isGroupExistsErr(err) {
+		// Group already exists — update its cursor.
+		if err2 := c.rdb.XGroupSetID(ctx, c.streamKey, c.consumerGroup, cursorID).Err(); err2 != nil {
+			return fmt.Errorf("consumer: promote: set group id: %w", err2)
+		}
+	}
+	c.shadowMu.Lock()
+	c.lastShadowID = lastShadowID
+	c.shadowMu.Unlock()
+	c.shadowMode.Store(false) // signals runShadow to exit
+	c.logger.Info("promoted: switched from shadow XREAD to XREADGROUP",
+		"last_shadow_id", lastShadowID)
+	return nil
+}
+
+// XAutoClaimPending claims all pending messages from the old slot (min-idle-time 0)
+// and processes them through the normal dispatch path.
+// Call after Promote() to recover any un-ACKed messages from the old slot.
+// XAutoClaimPending claims all pending messages from the old slot (min-idle-time 0)
+// and processes them through the normal dispatch path.
+// Loops until the next-start cursor is "0-0" to handle > 1000 pending messages.
+// Must be called from the consumer goroutine after Promote().
+func (c *Consumer) XAutoClaimPending(ctx context.Context) error {
+	start := "0-0"
+	total := 0
+	for {
+		msgs, next, err := c.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   c.streamKey,
+			Group:    c.consumerGroup,
+			Consumer: c.consumerName,
+			MinIdle:  0,
+			Start:    start,
+			Count:    1000,
+		}).Result()
+		if err != nil {
+			return fmt.Errorf("consumer: xautoclaim: %w", err)
+		}
+		for _, msg := range msgs {
+			if err := c.handleMessage(ctx, msg); err != nil {
+				c.logger.ErrorContext(ctx, "consumer: xautoclaim dispatch failed", "id", msg.ID, "error", err)
+			}
+		}
+		total += len(msgs)
+		if next == "0-0" {
+			break
+		}
+		start = next
+	}
+	c.logger.InfoContext(ctx, "XAUTOCLAIM recovered messages from old slot", "count", total)
+	return nil
+}
+
 // Run reads from the Redis stream until ctx is cancelled.
+// If started in shadow mode (WithShadowMode), runs XREAD warmup first,
+// then transitions to XREADGROUP after Promote() is called.
 func (c *Consumer) Run(ctx context.Context) error {
+	if c.shadowMode.Load() {
+		if err := c.runShadow(ctx); err != nil {
+			return err
+		}
+		// Shadow loop exited after promotion. Reset accumulator and dedup state
+		// from the consumer goroutine (the only goroutine that owns this state),
+		// then claim any pending messages left by the old slot.
+		c.acc.Reset()
+		c.seenIDs = make(map[string]struct{})
+		c.tickCount = 0
+		if err := c.XAutoClaimPending(ctx); err != nil {
+			c.logger.ErrorContext(ctx, "xautoclaim on promotion failed", "error", err)
+			// Non-fatal — continue into XREADGROUP loop.
+		}
+	}
+
 	firstConnect, err := c.ensureGroup(ctx)
 	if err != nil {
 		return fmt.Errorf("consumer: ensure group: %w", err)
@@ -356,4 +503,96 @@ func (c *Consumer) recordGapDedup(ctx context.Context, g GapMarker) error {
 	}
 	// Trim to 10,000 most recent entries.
 	return c.rdb.ZRemRangeByRank(ctx, key, 0, -10001).Err()
+}
+
+// runShadow runs the shadow XREAD loop until ctx is cancelled or Promote() is called.
+func (c *Consumer) runShadow(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if !c.shadowMode.Load() {
+			return nil // promoted — hand off to XREADGROUP loop
+		}
+
+		c.shadowMu.Lock()
+		startID := c.xreadCursor
+		c.shadowMu.Unlock()
+
+		msgs, err := c.rdb.XRead(ctx, &redis.XReadArgs{
+			Streams: []string{c.streamKey, startID},
+			Count:   100,
+			Block:   1000 * time.Millisecond,
+		}).Result()
+
+		if err != nil {
+			if errors.Is(err, redis.Nil) || errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("consumer: xread (shadow): %w", err)
+		}
+
+		for _, stream := range msgs {
+			for _, msg := range stream.Messages {
+				c.handleShadowMessage(msg)
+			}
+		}
+	}
+}
+
+// handleShadowMessage processes a message in shadow mode: updates book and accumulator
+// state for warmup, but never XACKs, never calls Flush.
+func (c *Consumer) handleShadowMessage(msg redis.XMessage) {
+	c.shadowMu.Lock()
+	c.lastShadowID = msg.ID // last processed; exposed via LastShadowID()
+	c.xreadCursor = msg.ID  // internal XREAD cursor; used by runShadow
+	c.shadowMu.Unlock()
+
+	parsed := parseMessage(msg.Values)
+
+	if parsed.Type == EventTick && parsed.Tick.Level == 0 && parsed.Tick.Size == "0" {
+		return // discard zero-volume trades
+	}
+
+	switch parsed.Type {
+	case EventTick:
+		prevBid, prevBidSz, prevAsk, prevAskSz := c.book.BestQuote()
+		isTrade := parsed.Tick.Level == 0
+		var obKind OBEventKind
+		if !isTrade {
+			if parsed.Tick.Size == "0" {
+				obKind = OBEventCancel
+			} else if c.book.HasLevel(parsed.Tick.Side, parsed.Tick.Price) {
+				obKind = OBEventModify
+			} else {
+				obKind = OBEventAdd
+			}
+		}
+		c.book.ApplyTick(*parsed.Tick)
+		currBid, currBidSz, currAsk, currAskSz := c.book.BestQuote()
+		c.acc.Apply(parsed.Tick.Price, parsed.Tick.Size, isTrade, parsed.Tick.Side, parsed.Tick.TsMs,
+			prevBid, prevBidSz, prevAsk, prevAskSz,
+			currBid, currBidSz, currAsk, currAskSz)
+		if !isTrade {
+			parsedSize, _ := strconv.ParseFloat(parsed.Tick.Size, 64)
+			c.acc.ApplyOBEvent(obKind, parsed.Tick.Side, parsedSize)
+		}
+
+	case EventGap:
+		c.acc.IncrementGap()
+		c.book.ApplyGap(*parsed.Gap)
+
+	case EventSnapshot:
+		c.acc.Reset()
+		c.book.ApplySnapshot(*parsed.Snapshot)
+
+	case EventUnknown:
+		c.logger.Warn("shadow: unknown event type — skipping", "id", msg.ID,
+			"event_type", msg.Values["event_type"])
+	}
 }

@@ -1,5 +1,5 @@
 # generated: 2026-05-05
-# last_updated: 2026-05-08
+# last_updated: 2026-05-09
 # updated: epic 5 stories renumbered (migration runner added as 5-1, old 1-6 → 2-7); epic 9 stories expanded (DDL split to 9-1, flush+catchup 9-2, alerting 9-3, blue-green 9-4)
 # project: magnum-opus
 # project_key: NOKEY
@@ -36,7 +36,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-08
+last_updated: 2026-05-09
 project: magnum-opus
 project_key: NOKEY
 tracking_system: file-system
@@ -111,16 +111,16 @@ development_status:
   epic-7-retrospective: done
 
   # ─── Epic 8: Multi-Timeframe Cascade & Redis Output ────────────────────────
-  epic-8: in-progress
+  epic-8: done
   8-1-cascade-engine-and-clock-boundary: done
   8-2-redis-candle-stream-publisher: done
-  8-3-ob-feature-snapshot-publisher: backlog
-  epic-8-retrospective: optional
+  8-3-ob-feature-snapshot-publisher: done
+  epic-8-retrospective: done
 
   # ─── Epic 9: Cold Storage & Operations ─────────────────────────────────────
-  epic-9: backlog
-  9-1-flush-manifest-ddl: backlog
-  9-2-daily-parquet-flush-and-catchup: backlog
-  9-3-flush-failure-alerting: backlog
-  9-4-blue-green-deployment: backlog
-  epic-9-retrospective: optional
+  epic-9: done
+  9-1-flush-manifest-ddl: done
+  9-2-daily-parquet-flush-and-catchup: done
+  9-3-flush-failure-alerting: done
+  9-4-blue-green-deployment: done
+  epic-9-retrospective: done

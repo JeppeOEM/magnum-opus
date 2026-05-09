@@ -1,4 +1,4 @@
-// Package redis publishes cascade OHLCV bars to Redis Streams.
+// Package redis publishes cascade OHLCV bars and OB feature snapshots to Redis Streams.
 // Pure: no time.Now(), no goroutines, no init(). Single-goroutine ownership per symbol.
 package redis
 
@@ -9,6 +9,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/mrqdt/magnum-opus/candle-service/internal/accumulator"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/cascade"
 )
 
@@ -130,4 +131,40 @@ func floatOrEmpty(f *float64) string {
 		return ""
 	}
 	return strconv.FormatFloat(*f, 'f', -1, 64)
+}
+
+// PublishOBFeatures publishes a 1-second OB feature snapshot to ob_features:{exchange}:{symbol}.
+// Published on each 1s bar close (not on 250ms partial cadence).
+// bar must be the closed accumulator.Bar from acc.CurrentBar() — called before acc.BarReset().
+func (p *Publisher) PublishOBFeatures(ctx context.Context, bar accumulator.Bar) {
+	fields := obFields(bar)
+	key := "ob_features:" + p.exchange + ":" + p.symbol
+	if err := p.xadd(ctx, key, p.maxLen, fields); err != nil {
+		slog.ErrorContext(ctx, "ob features stream xadd failed",
+			"exchange", p.exchange, "symbol", p.symbol, "error", err)
+		if p.failureFn != nil {
+			p.failureFn()
+		}
+	}
+}
+
+// obFields serialises an accumulator.Bar to the ob_features Redis stream field map.
+func obFields(bar accumulator.Bar) map[string]any {
+	return map[string]any{
+		"ts":              strconv.FormatInt(bar.TsSecMs, 10),
+		"exchange":        bar.Exchange,
+		"symbol":          bar.Symbol,
+		"best_bid":        floatOrEmpty(bar.BestBid),
+		"best_ask":        floatOrEmpty(bar.BestAsk),
+		"bid_depth_l1":    floatOrEmpty(bar.BidDepthL1Close),
+		"ask_depth_l1":    floatOrEmpty(bar.AskDepthL1Close),
+		"bid_depth_l2":    floatOrEmpty(bar.BidDepthL2Close),
+		"ask_depth_l2":    floatOrEmpty(bar.AskDepthL2Close),
+		"bid_depth_top10": floatOrEmpty(bar.BidDepthTop10Close),
+		"ask_depth_top10": floatOrEmpty(bar.AskDepthTop10Close),
+		"bid_depth_total": floatOrEmpty(bar.BidDepthTotalClose),
+		"ask_depth_total": floatOrEmpty(bar.AskDepthTotalClose),
+		"ofi":             floatOrEmpty(bar.OFI),
+		"ofi_l1":          floatOrEmpty(bar.OFIL1),
+	}
 }

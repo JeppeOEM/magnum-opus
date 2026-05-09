@@ -1,6 +1,6 @@
 # Story 8.2: Redis Candle Stream Publisher
 
-Status: review
+Status: done
 
 ## Story
 

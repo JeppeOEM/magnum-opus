@@ -36,6 +36,16 @@ type Config struct {
 	CandleCloseStreamMaxLen int // CANDLE_CLOSE_STREAM_MAXLEN, default 500
 	// Partial publish cadence
 	CandlePartialPublishMs int // CANDLE_PARTIAL_PUBLISH_MS, default 250
+	// Blue-green deployment
+	ShadowMode           bool // CANDLE_SHADOW_MODE, default false
+	DeployHealthTimeoutS int  // DEPLOY_HEALTH_TIMEOUT_S, default 60
+	// Backblaze B2 cold storage
+	B2KeyID           string // B2_KEY_ID
+	B2AppKey          string // B2_APP_KEY
+	B2Bucket          string // B2_BUCKET
+	B2Endpoint        string // B2_ENDPOINT
+	FlushTimeUTC      string // FLUSH_TIME_UTC, default "03:00"
+	FlushDateOverride string // FLUSH_DATE_OVERRIDE, default ""
 }
 
 // Load reads configuration from environment variables.
@@ -61,6 +71,14 @@ func Load() Config {
 		CandleStreamMaxLen:      getEnvInt("CANDLE_STREAM_MAXLEN", 10000),
 		CandleCloseStreamMaxLen: getEnvInt("CANDLE_CLOSE_STREAM_MAXLEN", 500),
 		CandlePartialPublishMs:  getEnvInt("CANDLE_PARTIAL_PUBLISH_MS", 250),
+		ShadowMode:              os.Getenv("CANDLE_SHADOW_MODE") == "true",
+		DeployHealthTimeoutS:    getEnvInt("DEPLOY_HEALTH_TIMEOUT_S", 60),
+		B2KeyID:                 getEnv("B2_KEY_ID", ""),
+		B2AppKey:                getEnv("B2_APP_KEY", ""),
+		B2Bucket:                getEnv("B2_BUCKET", ""),
+		B2Endpoint:              getEnv("B2_ENDPOINT", ""),
+		FlushTimeUTC:            getEnv("FLUSH_TIME_UTC", "03:00"),
+		FlushDateOverride:       getEnv("FLUSH_DATE_OVERRIDE", ""),
 	}
 }
 

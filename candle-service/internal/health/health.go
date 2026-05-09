@@ -61,6 +61,22 @@ func (s *Server) WithMetrics(g prometheus.Gatherer) {
 	s.mux.Handle("/metrics", promhttp.HandlerFor(g, promhttp.HandlerOpts{}))
 }
 
+// WithPromotion registers a POST /promote handler that calls fn().
+// Idempotent: if fn is already a no-op (promoted flag set by caller), returns 200.
+// Only register when CANDLE_SHADOW_MODE=true.
+func (s *Server) WithPromotion(fn func()) *Server {
+	s.mux.HandleFunc("/promote", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		fn()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+	return s
+}
+
 // Handler returns the HTTP handler for use with http.Server.
 func (s *Server) Handler() http.Handler { return s.mux }
 

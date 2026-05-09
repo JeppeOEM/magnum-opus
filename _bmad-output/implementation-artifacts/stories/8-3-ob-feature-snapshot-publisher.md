@@ -1,6 +1,6 @@
 # Story 8.3: OB Feature Snapshot Publisher
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -275,11 +275,16 @@ No changes to `consumer.go` — ob_features is published from `accWriter.Flush()
 
 ## Tasks / Subtasks
 
-- [ ] Add `PublishOBFeatures(ctx, bar accumulator.Bar)` and `obFields()` helper to `internal/writer/redis/publisher.go` (AC 1–2, AC 5)
-- [ ] Update `accWriter.Flush()` in `cmd/candle/main.go` to call `publisher.PublishOBFeatures(ctx, bar)` at step 5 (AC 3)
-- [ ] Add L2 tests to `internal/writer/redis/publisher_l2_test.go` (AC 6)
-- [ ] `go build ./...` and `make test-l1` pass (AC 7)
-- [ ] `make test-l2` passes with all new L2 tests (AC 7)
+- [x] Add `PublishOBFeatures(ctx, bar accumulator.Bar)` and `obFields()` helper to `internal/writer/redis/publisher.go` (AC 1–2, AC 5)
+- [x] Update `accWriter.Flush()` in `cmd/candle/main.go` to call `publisher.PublishOBFeatures(ctx, bar)` at step 5 (AC 3)
+- [x] Add L2 tests to `internal/writer/redis/publisher_l2_test.go` (AC 6)
+- [x] `go build ./...` and `make test-l1` pass (AC 7)
+- [x] `make test-l2` passes with all new L2 tests (AC 7)
+
+### Review Findings
+
+- [x] [Review][Defer] `OFI` and `OFIL1` are identical in the accumulator — `bar.OFI` and `bar.OFIL1` both assigned from `ofiSum`; `ofi_l1` provides no L1-isolated signal [accumulator.go:529–530] — deferred, pre-existing
+- [x] [Review][Defer] `best_bid`/`best_ask` reflect last trade-tick close quote, not current OB top — `hasCloseQuote` is not set by `SeedFromLastKnown`; empty seconds show `""` even when OB state is known [accumulator.go:568–571] — deferred, pre-existing
 
 ---
 
@@ -287,7 +292,12 @@ No changes to `consumer.go` — ob_features is published from `accWriter.Flush()
 
 ### Completion Notes
 
-_To be filled in by dev agent_
+All 7 ACs satisfied:
+- `PublishOBFeatures` and `obFields` added to `publisher.go`; reuses existing `floatOrEmpty` helper; no new failure counter wiring needed (covered by existing `SetFailureCounter`)
+- `accumulator` import added; no cycle (leaf package imports only `features/`)
+- `accWriter.Flush()` in `main.go` calls `PublishOBFeatures(aw.ctx, bar)` at step 5, inside the `if aw.publisher != nil` guard, after `PublishBars`, before `BarReset`
+- 5 L2 tests added: AllFields, NilFields, StreamKey, FailureCounter, MAXLEN
+- `go build ./...` clean; `make test-l1` all pass; `make test-l2` all pass (including `internal/writer/redis` 5.081s)
 
 ### File List
 
@@ -297,4 +307,4 @@ _To be filled in by dev agent_
 
 ### Change Log
 
-_To be filled in by dev agent_
+- 2026-05-08: Implemented PublishOBFeatures + obFields in publisher.go; wired Flush step 5 in main.go; added 5 L2 tests; all gates pass

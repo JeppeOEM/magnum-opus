@@ -44,6 +44,7 @@ services:
     environment:
       CANDLE_SLOT: blue
       CANDLE_SERVICE_PORT: "8081"
+      CANDLE_SHADOW_MODE: ${CANDLE_SHADOW_MODE:-false}
       REDIS_URL: redis://redis:6379
       QUESTDB_ILP_ADDR: questdb:9009
       QUESTDB_HTTP_ADDR: questdb:9000
@@ -74,6 +75,7 @@ services:
     environment:
       CANDLE_SLOT: green
       CANDLE_SERVICE_PORT: "8081"
+      CANDLE_SHADOW_MODE: ${CANDLE_SHADOW_MODE:-false}
       REDIS_URL: redis://redis:6379
       QUESTDB_ILP_ADDR: questdb:9009
       QUESTDB_HTTP_ADDR: questdb:9000
@@ -101,7 +103,7 @@ services:
     restart: unless-stopped
 
   questdb:
-    image: questdb/questdb:8.2.1
+    image: questdb/questdb:latest
     ports:
       - "9000:9000"
       - "9009:9009"

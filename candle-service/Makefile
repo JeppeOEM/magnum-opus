@@ -3,11 +3,13 @@ GOTEST := go test
 # ── L1: unit tests, no external dependencies ──────────────────────────────────
 .PHONY: test-l1
 test-l1:
-	@echo "==> L1 tests (config + health + cascade)"
+	@echo "==> L1 tests (config + health + cascade + consumer shadow)"
 	@$(GOTEST) -count=1 -race \
 		./internal/config/... \
 		./internal/health/... \
-		./internal/cascade/...
+		./internal/cascade/... \
+		./internal/flusher/... \
+		./internal/consumer/...
 	@echo "==> init() logging ban"
 	@files=$$(find ./internal ./cmd -name '*.go' -not -name '*_test.go' \
 		| xargs grep -l 'func init()' 2>/dev/null \
@@ -37,6 +39,23 @@ test-l4:
 # ── All local layers (L1+L2) ──────────────────────────────────────────────────
 .PHONY: test-all
 test-all: test-l1 test-l2
+
+# ── Coverage run (L1+L2) ──────────────────────────────────────────────────────
+.PHONY: test-cover
+test-cover:
+	@echo "==> Coverage run (L1)"
+	@$(GOTEST) -count=1 -race -coverprofile=coverage-l1.out \
+		./internal/config/... \
+		./internal/health/... \
+		./internal/cascade/... \
+		./internal/flusher/... \
+		./internal/consumer/...
+	@echo "==> Coverage run (L2)"
+	@$(GOTEST) -count=1 -tags l2 -coverprofile=coverage-l2.out ./...
+	@echo "==> L1 coverage summary"
+	@go tool cover -func=coverage-l1.out
+	@echo "==> L2 coverage summary"
+	@go tool cover -func=coverage-l2.out
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 .PHONY: build

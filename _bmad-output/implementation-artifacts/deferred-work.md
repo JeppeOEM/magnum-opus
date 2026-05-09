@@ -1,5 +1,26 @@
 # Deferred Work
 
+## Deferred from: code review of 9-2-daily-parquet-flush-and-catchup (2026-05-08)
+
+- **Full-day in-memory materialization without size bound** — entire CSV and Parquet bytes in memory simultaneously; hundreds of MB on dense days; streaming to S3 requires significant rework.
+- **`errMsg` SQL-escape insufficient** — single-quote doubling only; internal Go error strings contain no SQL-special characters in practice; low risk.
+- **`s3Client()` allocates new HTTP transport per flush** — no TLS session reuse; negligible overhead for once-daily operation.
+- **`FlushDateOverride` accepts today or future date without guard** — operator-controlled override; partial-day data flushed silently; document in ops runbook.
+- **`readManifestLastSuccess` ORDER BY date_flushed returns oldest backfill target after FLUSH_DATE_OVERRIDE** — idempotency guard in `runCatchup` prevents double-upload; wasted manifest queries only.
+- **`publishFlushAlert` calls `f.clk.Now()` without documented Clock concurrency guarantee** — production wall-clock is safe; no fake Clock planned for this path.
+- **`parseInt32` silently drops values exceeding int32 range** — OB activity counts well within int32 for 1-second windows; add logging if large-value symbols emerge.
+- **`flush_manifest` written via HTTP /exec INSERT instead of ILP** — dev notes explicitly authorize this as the simpler testable alternative; no ILP dependency in flusher.
+
+## Deferred from: code review of 9-1-flush-manifest-ddl (2026-05-08)
+
+- **No DEDUP UPSERT KEYS on flush_manifest** — retried flushes produce duplicate rows; idempotency is application-level (story 9-2 catch-up checks `success=true` before inserting).
+- **PARTITION BY YEAR with no TTL** — rows accumulate forever; 1 row/day volume keeps this manageable; can add `TTL 3y` or similar in a future ops migration.
+- **`success BOOLEAN` nullable** — QuestDB WAL has no NOT NULL constraint syntax; application always populates this field.
+- **`error_msg STRING` unbounded in schema** — story 9-3 truncates to 512 chars at application layer before insert.
+- **`b2_path STRING` unconstrained** — empty vs null indistinguishable in schema; application enforces non-empty on success.
+- **`duration_ms LONG` signed** — QuestDB has no CHECK constraints; negative values (clock skew) silently accepted; application concern.
+- **SYMBOL CAPACITY hint absent on `exchange`** — defaults to 128 vs 2–3 actual values; cosmetic inconsistency with `snapshot_1s` pattern (`SYMBOL CAPACITY 8` there).
+
 ## Deferred from: code review of 5-2-migration-runner (2026-05-08)
 
 - **Phantom migration**: DDL applied but `schema_migrations` INSERT fails → blocks startup permanently on re-run for non-idempotent DDL (`candle-service/internal/migrator/migrator.go:240`) — QuestDB REST has no multi-statement transactions; current migration files use `IF NOT EXISTS`; inherent limitation documented in package comment.
@@ -117,3 +138,8 @@
 - `blockwindow.Window.Add` uses O(n) copy-shift — 999 element copies per tick at default 1000-entry window; replace with circular buffer when CPU cost becomes measurable
 - Redis key `candle:btw:{exchange}:{symbol}` has no TTL — removed symbols leave stale entries indefinitely; add TTL or cleanup sweep when symbol rotation is implemented
 - `blockwindow.New(windowSize, minSample)` silently produces a permanently cold window when `minSample > windowSize`; add validation log or error when formalizing config hardening
+
+## Deferred from: code review of 8-3-ob-feature-snapshot-publisher (2026-05-08)
+
+- `OFI` and `OFIL1` are identical in the accumulator — both assigned from `ofiSum` with no separate L1-only delta path; `ofi_l1` provides no L1-isolated signal downstream (`accumulator.go:529–530`)
+- `best_bid`/`best_ask` in `ob_features` reflect the last trade-tick close quote, not the current OB top — `hasCloseQuote` is not set by `SeedFromLastKnown`, so empty seconds show `""` even when OB state is fully known (`accumulator.go:568–571`)

@@ -32,6 +32,7 @@ import (
 	"github.com/mrqdt/magnum-opus/candle-service/internal/metrics"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/migrator"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/orderbook"
+	"github.com/mrqdt/magnum-opus/candle-service/internal/flusher"
 	questdbwriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/questdb"
 	rediswriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/redis"
 )
@@ -102,7 +103,8 @@ func (aw *accWriter) Flush(isPartial bool) error {
 		closedBars := aw.engine.Fold(bar, tsSecMs)
 		aw.persistCascadeHashes(closedBars)
 		if aw.publisher != nil {
-			aw.publisher.PublishBars(aw.ctx, closedBars)
+			aw.publisher.PublishBars(aw.ctx, closedBars)      // step 4: candles: + candles:close:
+			aw.publisher.PublishOBFeatures(aw.ctx, bar)       // step 5: ob_features:
 		}
 	}
 	aw.acc.BarReset()
@@ -271,6 +273,32 @@ func main() {
 	}
 	defer rdb.Close()
 
+	// Start the daily Parquet flush goroutine when B2 credentials are configured.
+	// m is already registered above; wire callbacks directly.
+	if cfg.B2KeyID != "" && cfg.B2Bucket != "" {
+		flushCfg := flusher.Config{
+			B2KeyID:           cfg.B2KeyID,
+			B2AppKey:          cfg.B2AppKey,
+			B2Bucket:          cfg.B2Bucket,
+			B2Endpoint:        cfg.B2Endpoint,
+			FlushTimeUTC:      cfg.FlushTimeUTC,
+			FlushDateOverride: cfg.FlushDateOverride,
+			QuestDBHTTPAddr:   cfg.QuestDBHTTPAddr,
+		}
+		f := flusher.New(flushCfg, rdb, logger, wallClock{},
+			m.FlushSuccessTotal.Inc,
+			m.FlushFailureTotal.Inc,
+			m.FlushAlertFailureTotal.Inc,
+		)
+		go func() {
+			if err := f.Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("flusher exited with error", "error", err)
+			}
+		}()
+	} else {
+		logger.Info("flush disabled: B2_KEY_ID or B2_BUCKET not set")
+	}
+
 	writerCfg := questdbwriter.WriterConfig{
 		ILPAddr:          cfg.QuestDBILPAddr,
 		HTTPAddr:         cfg.QuestDBHTTPAddr,
@@ -343,6 +371,9 @@ func main() {
 			p.exchange, p.symbol,
 			obAdapter, aw, barClose, logger).
 			WithPartialPublish(partialPublish, aw)
+		if cfg.ShadowMode {
+			c.WithShadowMode()
+		}
 
 		e := &symbolEntry{
 			exchange:       p.exchange,
@@ -416,6 +447,9 @@ func main() {
 		}(e.c, e)
 	}
 
+	// promoted tracks whether POST /promote has been called.
+	var promoted atomic.Bool
+
 	// Build the real StateFunc now that entries are populated.
 	stateFunc := func() health.HealthState {
 		var maxLag int64
@@ -431,16 +465,44 @@ func main() {
 				break
 			}
 		}
+		shadowLag := int64(0)
+		if cfg.ShadowMode && !promoted.Load() {
+			lagCtx, lagCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer lagCancel()
+			for _, e := range entries {
+				if lag := e.c.ShadowLag(lagCtx); lag > shadowLag {
+					shadowLag = lag
+				}
+			}
+		}
 		return health.HealthState{
 			ConsumerLagMax:    maxLag,
 			QuestDBWriteState: walState,
-			ShadowLag:         0,
+			ShadowLag:         shadowLag,
 		}
 	}
 
 	// Build and start the HTTP server with the real StateFunc — no handler swapping.
 	healthSrv := health.New(cfg.Slot, version, gitSHA, buildTime, stateFunc)
 	healthSrv.WithMetrics(reg)
+	if cfg.ShadowMode {
+		promoteFn := func() {
+			if promoted.Swap(true) {
+				return // already promoted — idempotent no-op
+			}
+			// Only set the group cursor and clear shadowMode here.
+			// acc.Reset, seenIDs clear, and XAutoClaimPending run in the consumer
+			// goroutine after runShadow() exits — safe because the consumer goroutine
+			// exclusively owns its accumulator and order book state.
+			for _, e := range entries {
+				if err := e.c.Promote(e.c.LastShadowID()); err != nil {
+					logger.Error("promote failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+				}
+			}
+			logger.Info("promoted: switched from shadow XREAD to XREADGROUP", "slot", cfg.Slot)
+		}
+		healthSrv.WithPromotion(promoteFn)
+	}
 	httpServer = &http.Server{
 		Addr:         ":" + cfg.ServicePort,
 		Handler:      healthSrv.Handler(),
@@ -678,7 +740,7 @@ func (h *slotHandler) WithGroup(name string) slog.Handler {
 }
 
 // sensitiveKeys: attribute keys containing any of these substrings are redacted.
-var sensitiveKeys = []string{"password", "b2_access", "b2_secret", "secret_key"}
+var sensitiveKeys = []string{"password", "b2_access", "b2_secret", "secret_key", "b2_key_id", "b2_app_key"}
 
 // redactHandler wraps a slog.Handler and redacts sensitive attribute values.
 type redactHandler struct {

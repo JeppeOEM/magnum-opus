@@ -1,3 +1,4 @@
+SHELL      := /bin/bash
 VERSION    := $(shell git describe --tags --always 2>/dev/null || echo dev)
 GIT_SHA    := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 BUILD_TIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -5,7 +6,9 @@ REPORTS    := test-results
 
 export VERSION GIT_SHA BUILD_TIME
 
-.PHONY: up down logs test test-l1 test-l2 test-l3 test-l4 test-chain
+.PHONY: up down logs \
+        dev dev-infra dev-infra-down dev-aggregator dev-candle \
+        test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
 ## Spin up all services — filtered logs by default, VERBOSE=1 for raw JSON
 up:
@@ -51,3 +54,76 @@ test-chain:
 	STATUS=$$?; \
 	docker compose -f docker-compose.test.yml down; \
 	exit $$STATUS
+
+## Candle service L1 + L2 tests
+test-candle:
+	$(MAKE) -C candle-service test-all
+
+## Both services in sequence — aggregator (L1+L2+L3 with 95% gate) then candle-service (L1+L2 with coverage summary)
+test-all:
+	@echo "══════════════════════════════════════════════════"
+	@echo "  aggregator"
+	@echo "══════════════════════════════════════════════════"
+	$(MAKE) -C aggregator test-all
+	@echo "══════════════════════════════════════════════════"
+	@echo "  candle-service"
+	@echo "══════════════════════════════════════════════════"
+	$(MAKE) -C candle-service test-cover
+
+# ── Dev ───────────────────────────────────────────────────────────────────────
+
+## Start Redis + QuestDB in Docker (detached)
+dev-infra:
+	docker compose up -d redis questdb
+	@echo "Redis and QuestDB are up (localhost:6379, localhost:9000, localhost:9009)"
+
+## Stop Redis + QuestDB
+dev-infra-down:
+	docker compose stop redis questdb
+	docker compose rm -f redis questdb
+
+## Run aggregator locally (reads .env if present)
+dev-aggregator:
+	@set -a; [ -f .env ] && . .env; set +a; \
+	cd aggregator && \
+	LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
+	QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
+	KUCOIN_PUBLIC=$${KUCOIN_PUBLIC:-true} \
+	CONFIG_FILE=../config.yaml \
+	go run ./cmd/aggregator/
+
+## Run candle service locally, blue slot (reads candle-service/.env if present)
+dev-candle:
+	@set -a; [ -f candle-service/.env ] && . candle-service/.env; set +a; \
+	cd candle-service && \
+	LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
+	CANDLE_SLOT=$${CANDLE_SLOT:-blue} \
+	go run ./cmd/candle/
+
+## Start infra + both services (interleaved logs, Ctrl+C stops all)
+dev: dev-infra
+	@echo "==> aggregator + candle-service (Ctrl+C stops both)"
+	@set -a; [ -f .env ] && . .env; set +a; \
+	set -a; [ -f candle-service/.env ] && . candle-service/.env; set +a; \
+	( cd aggregator && \
+	  LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	  REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
+	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
+	  KUCOIN_PUBLIC=$${KUCOIN_PUBLIC:-true} \
+	  CONFIG_FILE=../config.yaml \
+	  go run ./cmd/aggregator/ ) & AGG=$$!; \
+	( cd candle-service && \
+	  LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	  REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
+	  CANDLE_SLOT=$${CANDLE_SLOT:-blue} \
+	  go run ./cmd/candle/ ) & CANDLE=$$!; \
+	trap "kill $$AGG $$CANDLE 2>/dev/null" INT TERM EXIT; \
+	wait $$AGG $$CANDLE

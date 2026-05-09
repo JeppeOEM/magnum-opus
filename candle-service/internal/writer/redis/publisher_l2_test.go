@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mrqdt/magnum-opus/candle-service/internal/accumulator"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/cascade"
 	rediswriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/redis"
 )
@@ -233,4 +234,156 @@ func TestPublishBars_MultipleTimeframes(t *testing.T) {
 	exists, err := rdb.Exists(ctx, "candles:1w:bybit:BTCUSDT").Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), exists, "no weekly alias key must be created")
+}
+
+// makeOBBar builds an accumulator.Bar with known OB close fields for ob_features tests.
+func makeOBBar(tsMs int64) accumulator.Bar {
+	bid := 50000.0
+	ask := 50001.0
+	bidL1 := 1.5
+	askL1 := 2.0
+	bidL2 := 3.0
+	askL2 := 4.0
+	bidTop10 := 10.0
+	askTop10 := 12.0
+	bidTotal := 20.0
+	askTotal := 22.0
+	ofi := 0.5
+	return accumulator.Bar{
+		TsSecMs:         tsMs,
+		Exchange:        "kucoin",
+		Symbol:          "BTC-USDT",
+		BestBid:         &bid,
+		BestAsk:         &ask,
+		BidDepthL1Close: &bidL1,
+		AskDepthL1Close: &askL1,
+		BidDepthL2Close: &bidL2,
+		AskDepthL2Close: &askL2,
+		BidDepthTop10Close: &bidTop10,
+		AskDepthTop10Close: &askTop10,
+		BidDepthTotalClose: &bidTotal,
+		AskDepthTotalClose: &askTotal,
+		OFI:             &ofi,
+		OFIL1:           &ofi,
+	}
+}
+
+func TestPublishOBFeatures_AllFields(t *testing.T) {
+	rdb, _ := setupMiniredis(t)
+	ctx := context.Background()
+	pub := rediswriter.New(rdb, "kucoin", "BTC-USDT", 10000, 500)
+
+	bar := makeOBBar(1_000_000)
+	pub.PublishOBFeatures(ctx, bar)
+
+	l, err := rdb.XLen(ctx, "ob_features:kucoin:BTC-USDT").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), l)
+
+	msgs, err := rdb.XRange(ctx, "ob_features:kucoin:BTC-USDT", "-", "+").Result()
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	v := msgs[0].Values
+	assert.Equal(t, "1000000", v["ts"])
+	assert.Equal(t, "kucoin", v["exchange"])
+	assert.Equal(t, "BTC-USDT", v["symbol"])
+	assert.Equal(t, "50000", v["best_bid"])
+	assert.Equal(t, "50001", v["best_ask"])
+	assert.Equal(t, "1.5", v["bid_depth_l1"])
+	assert.Equal(t, "2", v["ask_depth_l1"])
+	assert.Equal(t, "3", v["bid_depth_l2"])
+	assert.Equal(t, "4", v["ask_depth_l2"])
+	assert.Equal(t, "10", v["bid_depth_top10"])
+	assert.Equal(t, "12", v["ask_depth_top10"])
+	assert.Equal(t, "20", v["bid_depth_total"])
+	assert.Equal(t, "22", v["ask_depth_total"])
+	assert.Equal(t, "0.5", v["ofi"])
+	assert.Equal(t, "0.5", v["ofi_l1"])
+}
+
+func TestPublishOBFeatures_NilFields(t *testing.T) {
+	rdb, _ := setupMiniredis(t)
+	ctx := context.Background()
+	pub := rediswriter.New(rdb, "kucoin", "BTC-USDT", 10000, 500)
+
+	// Bar with all pointer fields nil (no OB data this second).
+	bar := accumulator.Bar{
+		TsSecMs:  2_000_000,
+		Exchange: "kucoin",
+		Symbol:   "BTC-USDT",
+	}
+	pub.PublishOBFeatures(ctx, bar)
+
+	msgs, err := rdb.XRange(ctx, "ob_features:kucoin:BTC-USDT", "-", "+").Result()
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	v := msgs[0].Values
+	// nil fields must serialize to "" not "<nil>"
+	assert.Equal(t, "", v["best_bid"])
+	assert.Equal(t, "", v["best_ask"])
+	assert.Equal(t, "", v["bid_depth_l1"])
+	assert.Equal(t, "", v["ask_depth_l1"])
+	assert.Equal(t, "", v["ofi"])
+	assert.Equal(t, "", v["ofi_l1"])
+	// ts, exchange, symbol are always non-nil
+	assert.Equal(t, "2000000", v["ts"])
+}
+
+func TestPublishOBFeatures_StreamKey(t *testing.T) {
+	rdb, _ := setupMiniredis(t)
+	ctx := context.Background()
+	pub := rediswriter.New(rdb, "bybit", "BTCUSDT", 10000, 500)
+
+	bar := makeOBBar(3_000_000)
+	bar.Exchange = "bybit"
+	bar.Symbol = "BTCUSDT"
+	pub.PublishOBFeatures(ctx, bar)
+
+	// Correct key must exist.
+	l, err := rdb.XLen(ctx, "ob_features:bybit:BTCUSDT").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), l)
+
+	// No TF-suffixed or close-variant keys.
+	exists, err := rdb.Exists(ctx, "ob_features:bybit:BTCUSDT:1s").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), exists, "no TF-suffixed key must exist")
+
+	exists, err = rdb.Exists(ctx, "ob_features:close:bybit:BTCUSDT").Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), exists, "no ob_features:close: variant must exist")
+}
+
+func TestPublishOBFeatures_FailureCounter(t *testing.T) {
+	rdb, mr := setupMiniredis(t)
+	ctx := context.Background()
+	pub := rediswriter.New(rdb, "kucoin", "BTC-USDT", 10000, 500)
+
+	var counterCalls int
+	pub.SetFailureCounter(func() { counterCalls++ })
+
+	// Stop miniredis to force XADD failure.
+	mr.Close()
+
+	bar := makeOBBar(4_000_000)
+	pub.PublishOBFeatures(ctx, bar)
+
+	assert.GreaterOrEqual(t, counterCalls, 1, "failure counter should be called on XADD error")
+}
+
+func TestPublishOBFeatures_MAXLEN(t *testing.T) {
+	rdb, _ := setupMiniredis(t)
+	ctx := context.Background()
+	pub := rediswriter.New(rdb, "kucoin", "BTC-USDT", 2, 500)
+
+	for i := 0; i < 5; i++ {
+		bar := makeOBBar(int64(1_000_000 + i*1_000))
+		pub.PublishOBFeatures(ctx, bar)
+	}
+
+	l, err := rdb.XLen(ctx, "ob_features:kucoin:BTC-USDT").Result()
+	require.NoError(t, err)
+	assert.LessOrEqual(t, l, int64(3), "ob_features stream length should be ≤ maxLen+1")
 }
