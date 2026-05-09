@@ -416,8 +416,8 @@ func (c *Consumer) handleMessage(ctx context.Context, msg redis.XMessage) error 
 		c.book.ApplySnapshot(*parsed.Snapshot)
 
 	case EventUnknown:
-		c.logger.WarnContext(ctx, "unknown event type — skipping", "id", msg.ID,
-			"event_type", msg.Values["event_type"])
+		c.logger.WarnContext(ctx, "unknown message type — skipping", "id", msg.ID,
+			"type", msg.Values["type"], "event_type", msg.Values["event_type"])
 	}
 
 	return nil
@@ -592,7 +592,7 @@ func (c *Consumer) handleShadowMessage(msg redis.XMessage) {
 		c.book.ApplySnapshot(*parsed.Snapshot)
 
 	case EventUnknown:
-		c.logger.Warn("shadow: unknown event type — skipping", "id", msg.ID,
-			"event_type", msg.Values["event_type"])
+		c.logger.Warn("shadow: unknown message type — skipping", "id", msg.ID,
+			"type", msg.Values["type"], "event_type", msg.Values["event_type"])
 	}
 }

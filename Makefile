@@ -11,16 +11,18 @@ export VERSION GIT_SHA BUILD_TIME
         test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
 ## Spin up all services — filtered logs by default, VERBOSE=1 for raw JSON
+## Defaults to candle-blue slot; override with SLOT=green
 up:
 	@if [ "$(VERBOSE)" = "1" ]; then \
-		docker compose up --build; \
+		docker compose --profile candle-$(or $(SLOT),blue) up --build; \
 	else \
-		docker compose up --build 2>&1 | python3 scripts/logfmt.py; \
+		docker compose --profile candle-$(or $(SLOT),blue) up --build 2>&1 | python3 scripts/logfmt.py; \
 	fi
 
-## Stop and remove containers
+## Stop and remove all containers (including test infra)
 down:
-	docker compose down
+	docker compose --profile candle-blue --profile candle-green down
+	docker compose -f docker-compose.test.yml down 2>/dev/null || true
 
 ## Tail aggregator logs (when running detached)
 logs:
@@ -32,7 +34,7 @@ monitoring-logs:
 
 ## Warnings and errors only — no status line, no INFO noise
 watch:
-	@docker compose up --build 2>&1 | python3 scripts/logfmt.py --alerts
+	@docker compose --profile candle-$(or $(SLOT),blue) up --build 2>&1 | python3 scripts/logfmt.py --alerts
 
 ## L1 tests — pure functions, coverage gate
 test-l1:

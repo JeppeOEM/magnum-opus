@@ -152,7 +152,7 @@ func TestConsumer_MaxLenCheck_NoGapBelowThreshold(t *testing.T) {
 	c := newTestConsumer(t, rdb, book, &stubAcc{}, make(chan BarCloseSig, 1))
 	// c.streamOverflowThresh is 5 from newTestConsumer; add 3 entries (below threshold).
 	for i := 0; i < 3; i++ {
-		mr.XAdd("ticks:kucoin:BTC-USDT", "*", []string{"event_type", "tick"})
+		mr.XAdd("ticks:kucoin:BTC-USDT", "*", []string{"type", "tick", "event_type", "update"})
 	}
 
 	err := c.checkMaxLen(context.Background())
@@ -167,7 +167,7 @@ func TestConsumer_MaxLenCheck_GapAboveThreshold(t *testing.T) {
 	c := newTestConsumer(t, rdb, book, &stubAcc{}, make(chan BarCloseSig, 1))
 	// threshold is 5; add 6 entries.
 	for i := 0; i < 6; i++ {
-		mr.XAdd("ticks:kucoin:BTC-USDT", "*", []string{"event_type", "tick"})
+		mr.XAdd("ticks:kucoin:BTC-USDT", "*", []string{"type", "tick", "event_type", "update"})
 	}
 
 	err := c.checkMaxLen(context.Background())
@@ -182,8 +182,8 @@ func TestConsumer_XAckBeforeDispatch(t *testing.T) {
 	ctx := context.Background()
 
 	msgID, c, book, _ := setupStreamWithMessage(t, rdb, map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50000", "size": "1.0", "side": "buy", "level": "0",
+		"type": "tick", "event_type": "trade", "seq": "1", "ts_exchange": "100",
+		"price": "50000", "size": "1.0", "side": "buy",
 	})
 
 	msgs := readOne(t, rdb)
@@ -206,8 +206,8 @@ func TestConsumer_ZeroVolumeTrade_Discarded(t *testing.T) {
 	ctx := context.Background()
 
 	_, c, book, _ := setupStreamWithMessage(t, rdb, map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50000", "size": "0", "side": "buy", "level": "0",
+		"type": "tick", "event_type": "trade", "seq": "1", "ts_exchange": "100",
+		"price": "50000", "size": "0", "side": "buy",
 	})
 
 	msgs := readOne(t, rdb)
@@ -228,11 +228,11 @@ func TestConsumer_SnapshotFlushesAccumulator(t *testing.T) {
 
 	// First add a tick so tickCount > 0, then a snapshot.
 	rdb.XAdd(ctx, &redis.XAddArgs{Stream: "ticks:kucoin:BTC-USDT", Values: map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50000", "size": "1.0", "side": "buy", "level": "0",
+		"type": "tick", "event_type": "trade", "seq": "1", "ts_exchange": "100",
+		"price": "50000", "size": "1.0", "side": "buy",
 	}})
 	rdb.XAdd(ctx, &redis.XAddArgs{Stream: "ticks:kucoin:BTC-USDT", Values: map[string]any{
-		"event_type": "snapshot", "seq": "10", "ts": "200",
+		"type": "snapshot", "seq": "10", "ts": "200",
 	}})
 
 	msgs, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -258,7 +258,7 @@ func TestConsumer_SnapshotZeroTick_NoFlush(t *testing.T) {
 	ctx := context.Background()
 
 	_, c, _, acc := setupStreamWithMessage(t, rdb, map[string]any{
-		"event_type": "snapshot", "seq": "10", "ts": "200",
+		"type": "snapshot", "seq": "10", "ts": "200",
 	})
 
 	msgs := readOne(t, rdb)
@@ -275,7 +275,7 @@ func TestConsumer_GapDedup_DuplicateDiscarded(t *testing.T) {
 	ctx := context.Background()
 
 	gapFields := map[string]any{
-		"event_type": "gap", "seq_before": "1", "seq_after": "2",
+		"type": "gap", "seq_before": "1", "seq_after": "2",
 		"gap_cause": "external_disconnect", "gap_ts": "300",
 		"exchange": "kucoin", "symbol": "BTC-USDT",
 	}
@@ -308,7 +308,7 @@ func TestConsumer_UnknownEventType_Skipped(t *testing.T) {
 	ctx := context.Background()
 
 	_, c, book, _ := setupStreamWithMessage(t, rdb, map[string]any{
-		"event_type": "heartbeat", "ts": "500",
+		"type": "heartbeat", "ts": "500",
 	})
 
 	msgs := readOne(t, rdb)
@@ -328,7 +328,7 @@ func TestConsumer_GapEvent_IncrementsAccGapCount(t *testing.T) {
 	ctx := context.Background()
 
 	gapFields := map[string]any{
-		"event_type": "gap", "seq_before": "10", "seq_after": "20",
+		"type": "gap", "seq_before": "10", "seq_after": "20",
 		"gap_cause": "external_disconnect", "gap_ts": "500",
 		"exchange": "kucoin", "symbol": "BTC-USDT",
 	}
@@ -372,8 +372,8 @@ func TestConsumer_OBEventKind_Add(t *testing.T) {
 	book := &stubBookWithLevel{levels: map[string]bool{}} // no levels known
 	acc := &stubAcc{}
 	_, c, _, _ := setupStreamWithMessage(t, rdb, map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50000", "size": "1.5", "side": "buy", "level": "1", // OB delta
+		"type": "tick", "event_type": "update", "seq": "1", "ts_exchange": "100",
+		"price": "50000", "size": "1.5", "side": "buy", // OB delta
 	})
 	// Replace the consumer's book and acc with ones that record OBEventKind
 	c2 := newTestConsumer(t, rdb, book, acc, make(chan BarCloseSig, 1))
@@ -404,8 +404,8 @@ func TestConsumer_OBEventKind_Modify(t *testing.T) {
 	require.NoError(t, rdb.XGroupCreateMkStream(ctx, "ticks:kucoin:BTC-USDT", "test-group", "0-0").Err())
 
 	rdb.XAdd(ctx, &redis.XAddArgs{Stream: "ticks:kucoin:BTC-USDT", Values: map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50000", "size": "2.0", "side": "buy", "level": "1", // existing level
+		"type": "tick", "event_type": "update", "seq": "1", "ts_exchange": "100",
+		"price": "50000", "size": "2.0", "side": "buy", // existing level
 	}})
 
 	msgs, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -430,8 +430,8 @@ func TestConsumer_OBEventKind_Cancel(t *testing.T) {
 	require.NoError(t, rdb.XGroupCreateMkStream(ctx, "ticks:kucoin:BTC-USDT", "test-group", "0-0").Err())
 
 	rdb.XAdd(ctx, &redis.XAddArgs{Stream: "ticks:kucoin:BTC-USDT", Values: map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50100", "size": "0", "side": "sell", "level": "1", // zero-size = cancel
+		"type": "tick", "event_type": "update", "seq": "1", "ts_exchange": "100",
+		"price": "50100", "size": "0", "side": "sell", // zero-size = cancel
 	}})
 
 	msgs, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
@@ -454,8 +454,8 @@ func TestConsumer_TradeTick_NoApplyOBEvent(t *testing.T) {
 	book := &stubBookWithLevel{levels: map[string]bool{}}
 	acc := &stubAcc{}
 	_, c, _, _ := setupStreamWithMessage(t, rdb, map[string]any{
-		"event_type": "tick", "seq": "1", "ts": "100",
-		"price": "50000", "size": "1.0", "side": "buy", "level": "0", // trade tick
+		"type": "tick", "event_type": "trade", "seq": "1", "ts_exchange": "100",
+		"price": "50000", "size": "1.0", "side": "buy", // trade tick
 	})
 	c2 := newTestConsumer(t, rdb, book, acc, make(chan BarCloseSig, 1))
 

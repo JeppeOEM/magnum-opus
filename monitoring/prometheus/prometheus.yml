@@ -17,7 +17,7 @@ scrape_configs:
 
   - job_name: 'candle-service'
     static_configs:
-      - targets: ['candle-blue:8081', 'candle-green:8081']
+      - targets: ['candle-blue:8081']
 
   # Future services: add one stanza here
   # - job_name: 'trading-bot'

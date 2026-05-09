@@ -7,15 +7,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseMessage_Tick(t *testing.T) {
+// Tests use the actual aggregator wire format (schema v1):
+//   type="tick"     + event_type="update"|"trade" + ts_exchange=<unix ms>
+//   type="gap"      (no event_type)
+//   type="snapshot" (reserved; not written by aggregator in production)
+
+func TestParseMessage_Tick_OBUpdate(t *testing.T) {
 	fields := map[string]any{
-		"event_type": "tick",
-		"seq":        "1234",
-		"ts":         "1700000000000",
-		"price":      "42000.50",
-		"size":       "0.5",
-		"side":       "buy",
-		"level":      "0",
+		"type":        "tick",
+		"event_type":  "update",
+		"seq":         "1234",
+		"ts_exchange": "1700000000000",
+		"ts_local":    "1700000000001",
+		"price":       "42000.50",
+		"size":        "0.5",
+		"side":        "buy",
 	}
 	msg := parseMessage(fields)
 	require.Equal(t, EventTick, msg.Type)
@@ -25,29 +31,36 @@ func TestParseMessage_Tick(t *testing.T) {
 	assert.Equal(t, "42000.50", msg.Tick.Price)
 	assert.Equal(t, "0.5", msg.Tick.Size)
 	assert.Equal(t, "buy", msg.Tick.Side)
-	assert.Equal(t, 0, msg.Tick.Level)
+	assert.Equal(t, 1, msg.Tick.Level) // OB update → Level=1 (non-zero → isTrade=false)
 	assert.Nil(t, msg.Gap)
 	assert.Nil(t, msg.Snapshot)
 }
 
-func TestParseMessage_Tick_OBLevel(t *testing.T) {
+func TestParseMessage_Tick_Trade(t *testing.T) {
 	fields := map[string]any{
-		"event_type": "tick",
-		"seq":        "5",
-		"ts":         "100",
-		"price":      "100.0",
-		"size":       "1.0",
-		"side":       "sell",
-		"level":      "3",
+		"type":        "tick",
+		"event_type":  "trade",
+		"seq":         "5678",
+		"ts_exchange": "1700000001000",
+		"ts_local":    "1700000001001",
+		"price":       "42100.00",
+		"size":        "1.5",
+		"side":        "sell",
 	}
 	msg := parseMessage(fields)
 	require.Equal(t, EventTick, msg.Type)
-	assert.Equal(t, 3, msg.Tick.Level)
+	require.NotNil(t, msg.Tick)
+	assert.Equal(t, int64(5678), msg.Tick.Seq)
+	assert.Equal(t, int64(1700000001000), msg.Tick.TsMs)
+	assert.Equal(t, "42100.00", msg.Tick.Price)
+	assert.Equal(t, "1.5", msg.Tick.Size)
+	assert.Equal(t, "sell", msg.Tick.Side)
+	assert.Equal(t, 0, msg.Tick.Level) // trade → Level=0 (isTrade=true)
 }
 
 func TestParseMessage_Gap(t *testing.T) {
 	fields := map[string]any{
-		"event_type": "gap",
+		"type":       "gap",
 		"seq_before": "100",
 		"seq_after":  "200",
 		"gap_cause":  "external_disconnect",
@@ -68,9 +81,9 @@ func TestParseMessage_Gap(t *testing.T) {
 
 func TestParseMessage_Snapshot(t *testing.T) {
 	fields := map[string]any{
-		"event_type": "snapshot",
-		"seq":        "999",
-		"ts":         "1700000002000",
+		"type": "snapshot",
+		"seq":  "999",
+		"ts":   "1700000002000",
 	}
 	msg := parseMessage(fields)
 	require.Equal(t, EventSnapshot, msg.Type)
@@ -81,7 +94,7 @@ func TestParseMessage_Snapshot(t *testing.T) {
 
 func TestParseMessage_Unknown(t *testing.T) {
 	fields := map[string]any{
-		"event_type": "heartbeat",
+		"type": "heartbeat",
 	}
 	msg := parseMessage(fields)
 	assert.Equal(t, EventUnknown, msg.Type)
@@ -90,24 +103,24 @@ func TestParseMessage_Unknown(t *testing.T) {
 	assert.Nil(t, msg.Snapshot)
 }
 
-func TestParseMessage_MissingEventType(t *testing.T) {
+func TestParseMessage_MissingType(t *testing.T) {
 	msg := parseMessage(map[string]any{})
 	assert.Equal(t, EventUnknown, msg.Type)
 }
 
 func TestParseMessage_ZeroVolumeTrade(t *testing.T) {
 	fields := map[string]any{
-		"event_type": "tick",
-		"seq":        "1",
-		"ts":         "100",
-		"price":      "50000",
-		"size":       "0",
-		"side":       "buy",
-		"level":      "0",
+		"type":        "tick",
+		"event_type":  "trade",
+		"seq":         "1",
+		"ts_exchange": "100",
+		"price":       "50000",
+		"size":        "0",
+		"side":        "buy",
 	}
 	msg := parseMessage(fields)
 	require.Equal(t, EventTick, msg.Type)
-	// size "0" with level 0 signals a zero-volume trade — consumer discards it
+	// size "0" with Level=0 signals a zero-volume trade — consumer discards it
 	assert.Equal(t, "0", msg.Tick.Size)
 	assert.Equal(t, 0, msg.Tick.Level)
 }

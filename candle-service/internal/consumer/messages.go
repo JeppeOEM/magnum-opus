@@ -48,19 +48,31 @@ type ParsedMessage struct {
 
 // parseMessage converts a raw Redis stream field map into a ParsedMessage.
 // All field values in Redis streams are strings.
+//
+// Wire format (aggregator schema v1):
+//
+//	Tick:     type="tick",     event_type="update"|"trade", ts_exchange=<unix ms>
+//	Gap:      type="gap"       (no event_type field)
+//	Snapshot: type="snapshot"  (not written by aggregator; reserved for future use)
 func parseMessage(fields map[string]any) ParsedMessage {
-	et, _ := fields["event_type"].(string)
-	switch et {
+	msgType := getString(fields["type"])
+	evtType := getString(fields["event_type"])
+
+	switch msgType {
 	case "tick":
+		level := 1 // OB update
+		if evtType == "trade" {
+			level = 0
+		}
 		return ParsedMessage{
 			Type: EventTick,
 			Tick: &Tick{
 				Seq:   parseInt64(fields["seq"]),
-				TsMs:  parseInt64(fields["ts"]),
+				TsMs:  parseInt64(fields["ts_exchange"]),
 				Price: getString(fields["price"]),
 				Size:  getString(fields["size"]),
 				Side:  getString(fields["side"]),
-				Level: int(parseInt64(fields["level"])),
+				Level: level,
 			},
 		}
 	case "gap":

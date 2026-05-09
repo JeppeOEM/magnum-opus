@@ -64,14 +64,15 @@ func TestShadowModeNoFlush(t *testing.T) {
 	msg := redis.XMessage{
 		ID: "1000-0",
 		Values: map[string]interface{}{
-			"event_type": "tick",
-			"exchange":   "kucoin",
-			"symbol":     "BTC-USDT",
-			"side":       "sell",
-			"price":      "60000",
-			"size":       "1",
-			"ts":         "1746000000000",
-			"level":      "0",
+			"type":        "tick",
+			"event_type":  "trade",
+			"exchange":    "kucoin",
+			"symbol":      "BTC-USDT",
+			"side":        "sell",
+			"price":       "60000",
+			"size":        "1",
+			"ts_exchange": "1746000000000",
+			"ts_local":    "1746000000001",
 		},
 	}
 

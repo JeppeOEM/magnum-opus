@@ -22,5 +22,6 @@ RUN CGO_ENABLED=0 go build \
 # Stage 2: minimal runtime image — no Go toolchain
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /candle /candle
+COPY --from=builder /build/migrations /migrations
 USER nonroot:nonroot
 ENTRYPOINT ["/candle"]
