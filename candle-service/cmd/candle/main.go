@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -443,7 +444,7 @@ func main() {
 		wg.Add(1)
 		go func(c *consumer.Consumer, e *symbolEntry) {
 			defer wg.Done()
-			if err := c.Run(ctx); err != nil {
+			if err := c.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				logger.Error("consumer exited with error",
 					"exchange", e.exchange, "symbol", e.symbol, "error", err)
 			}

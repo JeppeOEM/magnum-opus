@@ -134,8 +134,8 @@ func TestGapsCondition(t *testing.T) {
 	// No gaps — healthy
 	assert.Equal(t, 1.0, reg.GapHealthy(300, 1000))
 
-	// Record a gap at t=800; window=300 → cutoff=700; 800>=700 → unhealthy
-	reg.RecordGap("ex", "A", 800)
+	// Record a persistent gap at t=800; window=300 → cutoff=700; 800>=700 → unhealthy
+	reg.RecordGap("ex", "A", "internal_merge_error", 800)
 	assert.Equal(t, 0.0, reg.GapHealthy(300, 1000))
 
 	// Advance time so gap is outside window; cutoff=600; 800>=600 → still unhealthy
@@ -151,11 +151,22 @@ func TestGapHealthyWindow(t *testing.T) {
 	reg.PreInit(nil)
 
 	// Gap at t=700, window=300, nowUnix=1000 → cutoff=700; 700>=700 → unhealthy (boundary inclusive)
-	reg.RecordGap("ex", "A", 700)
+	reg.RecordGap("ex", "A", "internal_merge_error", 700)
 	assert.Equal(t, 0.0, reg.GapHealthy(300, 1000), "gap at exactly cutoff must be unhealthy")
 
 	// nowUnix=1001 → cutoff=701; 700<701 → healthy
 	assert.Equal(t, 1.0, reg.GapHealthy(300, 1001), "gap just outside window must be healthy")
+}
+
+func TestRecordGap_TransientCausesIgnored(t *testing.T) {
+	r := prometheus.NewRegistry()
+	reg := metrics.New(r)
+	reg.PreInit(nil)
+
+	// external_disconnect and internal_buffer_overflow are transient — must not affect health
+	reg.RecordGap("ex", "A", "external_disconnect", 1000)
+	reg.RecordGap("ex", "A", "internal_buffer_overflow", 1000)
+	assert.Equal(t, 1.0, reg.GapHealthy(300, 1000), "transient gaps must not affect health gauge")
 }
 
 // metricsByCondition returns a map[condition]value for a named GaugeVec.

@@ -20,6 +20,7 @@ Real-time crypto market data pipeline. Two Go services connect live exchange Web
 - [Blue-Green Deployment](#blue-green-deployment)
 - [Configuration Reference](#configuration-reference)
 - [Useful Commands](#useful-commands)
+- [Log Message Reference](#log-message-reference)
 
 ---
 
@@ -602,3 +603,197 @@ cd candle-service && make build     # → bin/candle
 cd aggregator     && go vet ./...
 cd candle-service && go vet ./...
 ```
+
+---
+
+## Log Message Reference
+
+Every log line is structured JSON. Entries are grouped by service and level. **WARN** means something unexpected happened but the system recovered automatically. **ERROR** means either a fatal startup failure or a persistent problem that requires attention.
+
+---
+
+### Aggregator — startup
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `aggregator: failed to connect to QuestDB ILP` | QuestDB is not reachable at the configured `QUESTDB_ILP_ADDR`. Usually means QuestDB hasn't finished starting yet — with Docker Compose healthchecks this should not appear during normal startup. Appears in dev mode if QuestDB is down. |
+| ERROR | `aggregator: kucoin connect failed` | The KuCoin WebSocket handshake failed (token fetch or dial error). The process exits; Docker will restart it. |
+| ERROR | `aggregator: kucoin subscribe failed` | Connected to KuCoin but the subscription request was rejected or timed out. The process exits. |
+| ERROR | `aggregator: bybit connect failed` | Same as the KuCoin variant but for Bybit. |
+| ERROR | `aggregator: bybit subscribe failed` | Same as the KuCoin variant but for Bybit. |
+| ERROR | `aggregator: no exchanges configured` | Neither `KUCOIN_SYMBOLS` nor `BYBIT_SYMBOLS` has any entries. Nothing to subscribe to; the process exits immediately. |
+| ERROR | `aggregator: startup gate failed` | The coordinator's startup health check failed. Rare — indicates a programming error in coordinator initialization. |
+| ERROR | `aggregator: HTTP server error` | The `/health /metrics /version` HTTP server crashed. The process is still running but you cannot scrape metrics or health. |
+
+---
+
+### Aggregator — coordinator
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| WARN | `coordinator: tick dropped — symbol channel full` | The internal channel from the exchange feed to the per-symbol worker is full. This means the worker goroutine is too slow to keep up (e.g., QuestDB writes are blocking). Ticks are lost for that symbol until the channel drains. Sustained occurrences mean the QuestDB write path is a bottleneck. |
+| WARN | `coordinator: gap detected` (with `cause=external_disconnect`) | A sequence number skip was detected in the live tick stream. The exchange had a brief reconnect or internal gap event. The candle service receives a gap marker via the Redis stream and clears its order book levels; the book refills from the live stream without needing a new snapshot. This appears at every startup due to the WebSocket reconnect sequence and is normal. |
+| WARN | `coordinator: unexpected snapshot result discarded` | A REST snapshot result arrived while the worker was in `StateLive` (no longer waiting for one). This happens when a second snapshot completes after the book was already built. The result is discarded safely. |
+| WARN | `coordinator: stale snapshot, requesting new` | The REST snapshot arrived but its sequence number was older than the oldest buffered delta — the book could not be built from it. A new snapshot is requested. Sustained occurrences mean the snapshot endpoint is very slow relative to the exchange tick rate. |
+| ERROR | `coordinator: panic in symbol goroutine` | A Go panic occurred inside a per-symbol worker. The coordinator catches it, emits an `internal_merge_error` gap marker, requests a fresh snapshot, and restarts the goroutine. The stack trace is logged alongside this message. |
+| ERROR | `coordinator: stale snapshot re-request failed` | After detecting a stale snapshot, the re-request to the snapshot goroutine failed. The symbol stays in cold-start state until the next reconnect cycle. |
+| ERROR | `coordinator: WriteGap (stream) failed` | Writing a gap marker to the Redis tick stream failed. The candle service will not receive this gap notification and its order book may drift. Usually a Redis connectivity issue. |
+| ERROR | `coordinator: WriteGap (ilp) failed` | Writing a gap marker to QuestDB via ILP failed. The gap event is missing from the `snapshot_1s` audit trail. Usually a QuestDB connectivity issue. |
+| ERROR | `coordinator: stream.Write failed` | Writing a tick event to the Redis stream failed. That tick is lost from the stream permanently; the candle service will not see it. |
+| ERROR | `coordinator: ilp.Write failed` | Writing a tick event to QuestDB via ILP failed. The raw tick row is missing from storage. |
+| ERROR | `coordinator: WriteSnapshot failed — candle service stays in cold-start` | The snapshot signal could not be written to the Redis stream. The candle service's order book stays in cold-start (buffering deltas) until the next reconnect brings a new snapshot signal. This is the most impactful single-stream error. |
+| ERROR | `coordinator: ILP writer close failed during shutdown` | On graceful shutdown, flushing the QuestDB ILP buffer failed. Some buffered rows may be lost. |
+
+---
+
+### Aggregator — KuCoin exchange
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `kucoin: reconnect token fetch` | Fetching a new WebSocket token from the KuCoin REST API failed (network error or auth failure). Retried with exponential backoff. |
+| ERROR | `kucoin: reconnect dial` | WebSocket dial to KuCoin's endpoint failed. Retried with exponential backoff. |
+| ERROR | `kucoin: re-subscribe after reconnect` | Reconnected but the subscription message was rejected. |
+| ERROR | `kucoin: server error message` | KuCoin sent an explicit error frame. The `data` field contains the raw exchange error payload. |
+| ERROR | `kucoin: parse l2 update` | A level-2 order book update message could not be parsed. The tick is dropped. |
+| ERROR | `kucoin: parse trade` | A trade message could not be parsed. The tick is dropped. |
+| ERROR | `kucoin: symbols not confirmed within timeout, retrying` | After subscribing, KuCoin did not send acknowledgements for all symbols within the confirmation timeout. |
+| ERROR | `kucoin: confirm retry failed` | The retry after a confirmation timeout also failed. |
+| WARN | `kucoin: spurious ack for unknown subscription ID` | An acknowledgement arrived for a subscription ID that is not tracked. Indicates a race between reconnect and ack delivery. Benign. |
+| WARN | `kucoin: ticks channel full, dropping` | The internal buffer between the KuCoin read loop and the coordinator is full. Same root cause as `coordinator: tick dropped`. |
+| WARN | `kucoin: pong timeout` | KuCoin did not respond to a WebSocket ping within the timeout. The connection is treated as dead and a reconnect begins. |
+| WARN | `kucoin: signals channel full` | The subscription-signal channel is full during a reconnect. The reconnect path is too slow relative to incoming events. |
+| WARN | `kucoin: token renewal failed` | Background token renewal (KuCoin tokens expire) failed for one attempt. Retried automatically. |
+| ERROR | `kucoin: token renewal exhausted retries, triggering reconnect` | All token renewal attempts failed. A full WebSocket reconnect is forced to obtain a fresh token. |
+
+---
+
+### Aggregator — Bybit exchange
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `bybit mux: reconnect factory failed` | Creating a new WebSocket connection to Bybit failed during a reconnect attempt. |
+| ERROR | `bybit mux: re-subscribe after reconnect` | Reconnected but the re-subscription failed. |
+| ERROR | `bybit: parse l2 update` | An L2 order book update message from Bybit could not be parsed. The tick is dropped. |
+| ERROR | `bybit: parse trade` | A trade message could not be parsed. The tick is dropped. |
+| ERROR | `bybit mux: symbols unconfirmed after timeout, retrying` | Subscription acknowledgements did not arrive within the timeout. |
+| ERROR | `bybit mux: confirm retry failed` | Retry after confirmation timeout also failed. |
+| WARN | `bybit mux: subscribe nack` | Bybit explicitly rejected a subscription. The `ret_msg` field contains the exchange's reason. |
+| WARN | `bybit mux: spurious ack for unknown req_id` | An acknowledgement arrived for an unknown request ID. Benign race during reconnect. |
+| WARN | `bybit mux: ticks channel full, dropping tick` | Same as the KuCoin equivalent. |
+| WARN | `bybit mux: signals channel full, dropping` | Same as the KuCoin equivalent. |
+| WARN | `bybit mux: pong timeout, closing connection` | No pong received; connection closed and reconnect begins. |
+
+---
+
+### Aggregator — QuestDB writer
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `questdb: ILP write failed` | A batch of rows could not be sent to QuestDB over ILP. Retried. Sustained occurrences mean QuestDB is down or overloaded. |
+| ERROR | `questdb: ILP write failed during drain` | Same as above but during the shutdown drain flush. Some rows may be lost. |
+| ERROR | `questdb: flush retry exhausted` | All retry attempts for a batch failed. That batch of rows is permanently lost. |
+| WARN | `questdb: WAL check failed` | The background WAL health probe could not query QuestDB's WAL status. Transient network hiccup. |
+| WARN | `questdb: WAL suspended, issuing RESUME WAL` | QuestDB's WAL engine has suspended (usually because the disk is full or the write batch size exceeded limits). The writer automatically issues `RESUME WAL` to recover. |
+| WARN | `questdb: RESUME WAL failed` | The `RESUME WAL` command itself failed. Manual intervention may be needed via the QuestDB SQL console at port 9000. |
+| WARN | `questdb: WAL resumed successfully` | Confirms that `RESUME WAL` worked. The writer is healthy again. |
+
+---
+
+### Candle service — startup
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `metrics registration failed` | Prometheus metric registration failed — duplicate metric names or incompatible label sets. Indicates a code bug; the process exits. |
+| ERROR | `migration failed` | The QuestDB SQL migration (e.g., creating `snapshot_1s` or `flush_manifest`) failed. QuestDB may be down or the schema already has an incompatible definition. The process exits. |
+| ERROR | `redis connect failed` | Cannot reach Redis. The process exits. |
+| ERROR | `questdb writer init failed` | Could not establish the QuestDB ILP connection for a symbol. The process exits. |
+| ERROR | `cascade reconstruction: QuestDB check failed` | On startup, while verifying that in-progress candle bars were correctly restored, the QuestDB row count query failed. The bar continues with what was restored from Redis. |
+| WARN | `cascade reconstruction incomplete` | Startup verification found that a partially-open bar has fewer QuestDB rows than expected (less than 95% of the expected count based on elapsed time). The bars will still be flushed at close time, but the incomplete QuestDB history means any queries over that time range will show gaps. Usually caused by a crash during a period of sustained QuestDB write failures. |
+
+---
+
+### Candle service — consumer
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `consumer exited with error` | The main consumer read loop returned a non-cancellation error. The goroutine for that (exchange, symbol) pair has stopped; no more bars will be produced until the service is restarted. |
+| ERROR | `consumer: xautoclaim dispatch failed` | During promotion from shadow to live mode, a pending message claimed via XAUTOCLAIM could not be processed. The message is skipped; a gap may appear in the bar sequence. |
+| ERROR | `xautoclaim on promotion failed` | The XAUTOCLAIM call itself failed when taking ownership of the old slot's pending messages. Non-fatal — the consumer continues into XREADGROUP but the old slot's unacked messages stay pending until they time out. |
+| ERROR | `accumulator flush failed` | At bar close time (every second), the accumulator could not flush its computed fields to the QuestDB writer. The bar for that second is lost. Usually caused by a full write buffer or QuestDB connectivity issue. |
+| WARN | `stream overflow gap emitted` | The Redis tick stream for a symbol has grown beyond the overflow threshold. This happens when the candle service falls too far behind (e.g., candle service was down while the aggregator kept writing). The order book is cleared to avoid stale state. The stream self-heals as the consumer catches up. |
+| WARN | `orderbook gap emitted` | The order book's internal state machine emitted a gap. The `gap_cause` field explains which sub-case triggered it (see below). |
+| WARN | `partial flush on snapshot failed` | When a snapshot signal arrives, the candle service tries to flush the current in-progress bar before resetting the order book. That flush failed; the partial bar data for that second is lost. |
+| WARN | `unknown message type — skipping` | A Redis stream message had an unrecognised `type` field. This would indicate the aggregator wrote a message type that this version of the candle service does not understand. Check for version mismatches between the two services. |
+| WARN | `xack failed for dup` | A duplicate message was detected (already processed this second) but the XACK to remove it from the pending list failed. The message will be reclaimed by XAUTOCLAIM on the next start and re-deduplicated harmlessly. |
+| WARN | `xack failed for zero-vol trade` | A zero-volume trade tick was discarded (these carry no information) but the XACK failed. Same recovery as above. |
+| WARN | `consumer: lag query failed` | The Redis XPENDING lag query failed. The lag metric will not be updated for this cycle but the consumer continues. |
+| WARN | `consumer: shadow lag query failed` | Same as above but during shadow mode. |
+
+---
+
+### Candle service — order book gap causes
+
+These appear as the `gap_cause` field alongside `orderbook gap emitted`.
+
+| `gap_cause` | Meaning |
+|-------------|---------|
+| `external_disconnect` | The aggregator detected a sequence skip in the live exchange feed. Levels are cleared; the book refills from the live stream without needing a new snapshot. Normal at startup; occasional during operation. |
+| `internal_merge_error` | The aggregator's REST snapshot arrived stale (older than the delta buffer). The aggregator requests a new snapshot and the candle service waits for it in cold-start mode. |
+| `cold_start_buffer_overflow` | Before the first snapshot arrived, the pre-snapshot delta buffer filled up completely. The buffer is discarded and the book waits for the next snapshot. This means the snapshot is taking too long relative to the tick rate. Should not appear in normal operation — if it repeats, the snapshot endpoint is unreachable or the cold-start buffer size (`CANDLE_COLD_BUF_SIZE`) is too small. |
+| `snapshot_superseded` | A second snapshot signal arrived before the book finished applying the first. The first is discarded and the book rebuilds from the new one. |
+| `seq_reset` | The snapshot's sequence number was dramatically lower than the highest buffered delta, indicating the exchange reset its sequence counter (common after Bybit reconnects). The cold buffer is discarded and the book waits for the next snapshot. |
+| `stream_overflow` | The Redis tick stream grew beyond the overflow threshold (consumer too far behind). Levels cleared; book refills from the live stream. |
+
+---
+
+### Candle service — flusher (daily Parquet export)
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `daily flush failed` | The scheduled daily Parquet flush for yesterday's data failed. The `date` field identifies which day. The flusher will retry on the next day's schedule and catch-up logic will attempt to re-flush missed days on restart. |
+| ERROR | `catch-up failed` | On startup, the catch-up loop (which flushes any days missed since the last successful flush) encountered a fatal error before completing. Individual day failures are logged separately; this covers failures in the catch-up coordination itself. |
+| ERROR | `catch-up: flush failed, continuing` | One specific missed day could not be flushed during catch-up. The flusher continues with the remaining days rather than aborting. |
+| ERROR | `flush manifest: request build failed` | Building the SQL INSERT for the `flush_manifest` audit table failed. The flush happened but is not recorded as successful; catch-up will re-attempt it on the next restart. |
+| ERROR | `flush manifest: write failed` | The `flush_manifest` INSERT could not be sent to QuestDB. Same consequence as above. |
+| ERROR | `flush manifest: QuestDB exec error` | QuestDB accepted the manifest write request but returned an error in the response body. |
+| ERROR | `flush alert publish failed` | After a flush failure, the candle service tried to publish a Redis alert notification and that also failed. |
+| WARN | `catch-up: manifest check failed, attempting flush anyway` | Checking whether a date was already flushed (idempotency check) failed. The flusher re-attempts the flush regardless, which is safe because Parquet flush is idempotent. |
+| WARN | `flush: failed to update last_flush_date in Redis` | The flush succeeded but the Redis key tracking the last successful flush date could not be updated. On the next restart, catch-up will see this date as un-flushed and attempt it again (harmlessly, due to idempotency). |
+| WARN | `catch-up: Redis last_flush_date unparseable, falling back to manifest` | The stored last flush date in Redis could not be parsed as a date. The flusher falls back to querying the `flush_manifest` table to determine what has already been done. |
+
+---
+
+### Candle service — QuestDB writer
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| WARN | `questdb: ILP write failed, retrying` | A write attempt failed and will be retried. Transient network hiccup to QuestDB. |
+| WARN | `questdb: flush on close failed` | During shutdown, the final buffer flush to QuestDB failed. Some in-flight bar data may be lost. |
+| WARN | `questdb: WAL probe failed` | The background WAL health check query failed. Same as the aggregator equivalent. |
+| WARN | `questdb: WAL suspended — issuing RESUME WAL` | WAL engine suspended. Automatic recovery via `RESUME WAL`. |
+| ERROR | `questdb: RESUME WAL failed` | Automatic recovery failed. Check QuestDB logs and disk space. |
+| ERROR | `questdb: WAL drain write failed` | During shutdown drain, a WAL-related write failed. |
+
+---
+
+### Candle service — Redis publisher
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `candle stream xadd failed` | Writing a completed 1s bar to the `candles:kucoin:BTC-USDT` Redis stream failed. Downstream consumers will not see this bar. |
+| ERROR | `candle close stream xadd failed` | Writing a bar-close event to the close stream failed. Downstream consumers that rely on close events will miss this one. |
+| ERROR | `candle partial stream xadd failed` | Writing a partial (in-progress) bar update to the partials stream failed. |
+| ERROR | `ob features stream xadd failed` | Writing order book feature fields to the OB features stream failed. |
+
+---
+
+### Candle service — blue-green (deployment)
+
+| Level | Message | Why it happens |
+|-------|---------|----------------|
+| ERROR | `promote failed` | The `POST /promote` call (switching from shadow to live mode) failed for a symbol. That symbol stays in shadow mode. |
+| ERROR | `final flush failed` | On shutdown, the final bar flush for a symbol failed. The last partial second of data is lost. |
+| ERROR | `writer close failed` | On shutdown, closing the QuestDB ILP writer for a symbol failed. Some buffered rows may be lost. |
+| ERROR | `http shutdown error` | The HTTP server failed to shut down cleanly within the grace period. |
+| WARN | `block trade window persist failed` | The rolling block-trade size window could not be saved to Redis at bar close. On restart, the window will be empty and the block trade threshold will take a few minutes to warm up. |
+| ERROR | `cascade state write failed` | After a bar close, writing the updated cascade state (partially-built multi-timeframe bars) to Redis failed. On the next restart, those bars will be partially missing from the reconstructed state. |

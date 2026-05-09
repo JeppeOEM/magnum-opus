@@ -361,6 +361,11 @@ func (c *Consumer) handleMessage(ctx context.Context, msg redis.XMessage) error 
 
 	// XACK before dispatch — see package doc.
 	if err := c.rdb.XAck(ctx, c.streamKey, c.consumerGroup, msg.ID).Err(); err != nil {
+		// Context cancelled during shutdown: unacknowledged messages are
+		// reclaimed by XAUTOCLAIM on next start — not a real error.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("consumer: xack %s: %w", msg.ID, err)
 	}
 	c.seenIDs[msg.ID] = struct{}{}

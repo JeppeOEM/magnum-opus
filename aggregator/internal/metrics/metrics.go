@@ -103,9 +103,14 @@ func (reg *Registry) PreInit(pairs []SymbolKey) {
 }
 
 // RecordGap records that a gap occurred at nowUnix for the given (exchange, symbol).
+// Only persistent causes (internal_merge_error, external_rate_limit) affect health;
+// transient external_disconnect gaps are counted but excluded from the health window.
 // nowUnix is time.Now().Unix() from the caller (clock injection pattern — time.Now() is
 // banned in internal packages).
-func (reg *Registry) RecordGap(exchange, symbol string, nowUnix int64) {
+func (reg *Registry) RecordGap(exchange, symbol, cause string, nowUnix int64) {
+	if cause == "external_disconnect" || cause == "internal_buffer_overflow" {
+		return
+	}
 	key := exchange + "/" + symbol
 	reg.lastGapMu.Lock()
 	reg.lastGapTimes[key] = nowUnix
