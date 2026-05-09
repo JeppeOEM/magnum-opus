@@ -6,7 +6,7 @@ REPORTS    := test-results
 
 export VERSION GIT_SHA BUILD_TIME
 
-.PHONY: up down logs \
+.PHONY: up down logs watch monitoring-logs \
         dev dev-infra dev-infra-down dev-aggregator dev-candle \
         test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
@@ -25,6 +25,14 @@ down:
 ## Tail aggregator logs (when running detached)
 logs:
 	docker compose logs -f aggregator
+
+## Tail monitoring stack logs (Prometheus, Alertmanager, Grafana)
+monitoring-logs:
+	docker compose logs -f prometheus alertmanager grafana
+
+## Warnings and errors only — no status line, no INFO noise
+watch:
+	@docker compose up --build 2>&1 | python3 scripts/logfmt.py --alerts
 
 ## L1 tests — pure functions, coverage gate
 test-l1:

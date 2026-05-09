@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  - job_name: 'aggregator'
+    static_configs:
+      - targets: ['aggregator:8080']
+
+  - job_name: 'candle-service'
+    static_configs:
+      - targets: ['candle-blue:8081', 'candle-green:8081']
+
+  # Future services: add one stanza here
+  # - job_name: 'trading-bot'
+  #   static_configs:
+  #     - targets: ['trading-bot:8082']

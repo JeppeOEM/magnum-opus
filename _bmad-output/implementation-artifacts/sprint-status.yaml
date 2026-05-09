@@ -124,3 +124,11 @@ development_status:
   9-3-flush-failure-alerting: done
   9-4-blue-green-deployment: done
   epic-9-retrospective: done
+
+  # ─── Epic 10: Unified Monitoring ───────────────────────────────────────────
+  epic-10: done
+  10-1-aggregator-health-gauge: done
+  10-2-candle-service-health-gauge: done
+  10-3-prometheus-alertmanager-config: done
+  10-4-grafana-provisioned-dashboard: done
+  10-5-docker-compose-and-makefile: done

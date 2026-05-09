@@ -1,0 +1,53 @@
+groups:
+  - name: magnum_opus_health
+    rules:
+
+      # CRITICAL — trading data stopped flowing
+      - alert: FeedsDown
+        expr: min(aggregator_health{condition="feeds"}) == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Aggregator feed(s) disconnected"
+          description: "One or more exchange feeds have been disconnected for >1m"
+
+      # WARNING — candle consumer falling behind
+      - alert: ConsumerLagHigh
+        expr: min(candle_health{condition="consumer_lag"}) == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Candle consumer lag high"
+          description: "Consumer lag >1000 messages for >3m"
+
+      # WARNING — QuestDB WAL suspended
+      - alert: QuestDBSuspended
+        expr: min(candle_health{condition="questdb"}) == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "QuestDB WAL suspended"
+          description: "Candle service WAL buffer active — writes buffered, not committed"
+
+      # INFO — Parquet flush failing
+      - alert: FlushFailing
+        expr: min(candle_health{condition="flush"}) == 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Parquet flush failing"
+          description: "Daily Parquet flush has been failing for >10m"
+
+      # INFO — gap events occurring in aggregator
+      - alert: AggregatorGapsDetected
+        expr: min(aggregator_health{condition="gaps"}) == 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Aggregator gap events detected"
+          description: "Order book gaps have been occurring for >5m — data quality may be degraded"

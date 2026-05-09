@@ -103,6 +103,7 @@ func (w *Worker) Run(ctx context.Context) {
 					_ = w.ilp.WriteGap(ctx, w.exch, w.sym, gap)
 					if w.metrics != nil {
 						w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gapdetector.CauseInternalMergeError)).Inc()
+						w.metrics.RecordGap(w.exch, string(w.sym), w.clock.Now().Unix())
 					}
 					// Reset so the first live tick after recovery doesn't trigger a spurious
 					// external-disconnect gap against the stale pre-panic lastSeq.
@@ -185,6 +186,7 @@ func (w *Worker) handleTick(ctx context.Context, tick exchange.Tick) {
 				}
 				if w.metrics != nil {
 					w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gap.Cause)).Inc()
+					w.metrics.RecordGap(w.exch, string(w.sym), w.clock.Now().Unix())
 				}
 			}
 		}
@@ -203,6 +205,7 @@ func (w *Worker) handleTick(ctx context.Context, tick exchange.Tick) {
 				}
 				if w.metrics != nil {
 					w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gap.Cause)).Inc()
+					w.metrics.RecordGap(w.exch, string(w.sym), w.clock.Now().Unix())
 				}
 			}
 		}
@@ -259,6 +262,7 @@ func (w *Worker) handleSnapshot(ctx context.Context, result SnapshotResult) {
 		_ = w.ilp.WriteGap(ctx, w.exch, w.sym, gap)
 		if w.metrics != nil {
 			w.metrics.GapTotal.WithLabelValues(w.exch, string(w.sym), string(gapdetector.CauseInternalMergeError)).Inc()
+			w.metrics.RecordGap(w.exch, string(w.sym), w.clock.Now().Unix())
 		}
 		if err := w.requestSnapshot(ctx, ns); err != nil {
 			slog.Error("coordinator: stale snapshot re-request failed",

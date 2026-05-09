@@ -198,8 +198,34 @@ def _run_verbose():
     except KeyboardInterrupt:
         pass
 
+def _run_alerts():
+    """Print only WARN and ERROR lines immediately — no status line, no INFO."""
+    try:
+        for line in sys.stdin:
+            line = line.rstrip("\n")
+            m = _PREFIX.match(line)
+            content = line[m.end():] if m else line
+            try:
+                log = json.loads(content)
+            except Exception:
+                continue
+            level = log.get("level", "").upper()
+            if level not in ("ERROR", "WARN"):
+                continue
+            ts     = log.get("time", "")[:19].replace("T", " ")
+            msg    = log.get("msg", "")
+            extras = [(k, v) for k, v in log.items() if k not in ("time", "level", "msg")]
+            color  = "\033[31m✗ ERROR\033[0m" if level == "ERROR" else "\033[33m⚠ WARN \033[0m"
+            extra_str = "  ".join(f"\033[2m{k}\033[0m={v}" for k, v in extras)
+            print(f"[{ts}] {color}  {msg}  {extra_str}".rstrip(), flush=True)
+    except KeyboardInterrupt:
+        pass
+
 if __name__ == "__main__":
-    if "--verbose" in sys.argv or "-v" in sys.argv:
+    args = sys.argv[1:]
+    if "--verbose" in args or "-v" in args:
         _run_verbose()
+    elif "--alerts" in args or "-a" in args:
+        _run_alerts()
     else:
         _run_aggregated()

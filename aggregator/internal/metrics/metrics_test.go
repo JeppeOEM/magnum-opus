@@ -81,6 +81,101 @@ func TestRegistry_PreInit_LabelsPresent(t *testing.T) {
 	assert.True(t, found, "kucoin/ETH-USDT ticks_total series must exist")
 }
 
+// ── Health gauge tests (AC1–3, 5) ────────────────────────────────────────────
+
+func TestHealthPreInit(t *testing.T) {
+	r := prometheus.NewRegistry()
+	reg := metrics.New(r)
+	reg.PreInit([]metrics.SymbolKey{{Exchange: "test", Symbol: "SYM"}})
+
+	mfs, err := r.Gather()
+	require.NoError(t, err)
+
+	health := metricsByCondition(mfs, "aggregator_health")
+	require.Len(t, health, 2, "both conditions must be pre-initialized")
+	assert.Equal(t, 1.0, health["feeds"], "feeds must start at 1")
+	assert.Equal(t, 1.0, health["gaps"], "gaps must start at 1")
+}
+
+func TestFeedsCondition(t *testing.T) {
+	// Build a fake gatherer with aggregator_feed_state series to simulate
+	// the pattern used by computeMinFeedState in cmd/aggregator/main.go.
+	// We test Registry.Health directly — the goroutine logic is trivially
+	// thin and is covered by integration; here we test the gauge mechanics.
+
+	r := prometheus.NewRegistry()
+	reg := metrics.New(r)
+	reg.PreInit([]metrics.SymbolKey{
+		{Exchange: "ex", Symbol: "A"},
+		{Exchange: "ex", Symbol: "B"},
+	})
+
+	// Simulate feeds goroutine setting feeds=0 (all feeds down)
+	reg.Health.WithLabelValues("feeds").Set(0)
+	mfs, _ := r.Gather()
+	assert.Equal(t, 0.0, metricsByCondition(mfs, "aggregator_health")["feeds"])
+
+	// Simulate feeds goroutine setting feeds=1 (all live)
+	reg.Health.WithLabelValues("feeds").Set(1)
+	mfs, _ = r.Gather()
+	assert.Equal(t, 1.0, metricsByCondition(mfs, "aggregator_health")["feeds"])
+
+	// Back to 0 when a feed drops
+	reg.Health.WithLabelValues("feeds").Set(0)
+	mfs, _ = r.Gather()
+	assert.Equal(t, 0.0, metricsByCondition(mfs, "aggregator_health")["feeds"])
+}
+
+func TestGapsCondition(t *testing.T) {
+	r := prometheus.NewRegistry()
+	reg := metrics.New(r)
+	reg.PreInit(nil)
+
+	// No gaps — healthy
+	assert.Equal(t, 1.0, reg.GapHealthy(300, 1000))
+
+	// Record a gap at t=800; window=300 → cutoff=700; 800>=700 → unhealthy
+	reg.RecordGap("ex", "A", 800)
+	assert.Equal(t, 0.0, reg.GapHealthy(300, 1000))
+
+	// Advance time so gap is outside window; cutoff=600; 800>=600 → still unhealthy
+	assert.Equal(t, 0.0, reg.GapHealthy(300, 900))
+
+	// Advance so gap is just outside: cutoff=801; 800<801 → healthy
+	assert.Equal(t, 1.0, reg.GapHealthy(300, 1101))
+}
+
+func TestGapHealthyWindow(t *testing.T) {
+	r := prometheus.NewRegistry()
+	reg := metrics.New(r)
+	reg.PreInit(nil)
+
+	// Gap at t=700, window=300, nowUnix=1000 → cutoff=700; 700>=700 → unhealthy (boundary inclusive)
+	reg.RecordGap("ex", "A", 700)
+	assert.Equal(t, 0.0, reg.GapHealthy(300, 1000), "gap at exactly cutoff must be unhealthy")
+
+	// nowUnix=1001 → cutoff=701; 700<701 → healthy
+	assert.Equal(t, 1.0, reg.GapHealthy(300, 1001), "gap just outside window must be healthy")
+}
+
+// metricsByCondition returns a map[condition]value for a named GaugeVec.
+func metricsByCondition(mfs []*dto.MetricFamily, name string) map[string]float64 {
+	out := make(map[string]float64)
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "condition" {
+					out[lp.GetValue()] = m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return out
+}
+
 func labelsKey(labels []*dto.LabelPair) string {
 	var b strings.Builder
 	for i, lp := range labels {

@@ -287,7 +287,10 @@ func main() {
 		}
 		f := flusher.New(flushCfg, rdb, logger, wallClock{},
 			m.FlushSuccessTotal.Inc,
-			m.FlushFailureTotal.Inc,
+			func() {
+				m.FlushFailureTotal.Inc()
+				m.RecordFlushFailure(time.Now().Unix())
+			},
 			m.FlushAlertFailureTotal.Inc,
 		)
 		go func() {
@@ -561,7 +564,7 @@ func main() {
 		}()
 	}
 
-	// Lag polling goroutine — every 5 seconds, update each symbol's lag atomic.
+	// Lag polling goroutine — every 5 seconds, update each symbol's lag atomic and health gauges.
 	if len(entries) > 0 {
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
@@ -571,6 +574,8 @@ func main() {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+					var maxLag int64
+					walOK := true
 					for _, e := range entries {
 						lag := e.c.Lag(ctx)
 						if lag < 0 {
@@ -578,7 +583,24 @@ func main() {
 						}
 						e.lag.Store(lag)
 						m.ConsumerLag.WithLabelValues(e.exchange, e.symbol).Set(float64(lag))
+						if lag > maxLag {
+							maxLag = lag
+						}
+						if e.w.IsWALSuspended() {
+							walOK = false
+						}
 					}
+					lagHealth := 1.0
+					if maxLag > 1000 {
+						lagHealth = 0.0
+					}
+					m.Health.WithLabelValues("consumer_lag").Set(lagHealth)
+					walHealth := 1.0
+					if !walOK {
+						walHealth = 0.0
+					}
+					m.Health.WithLabelValues("questdb").Set(walHealth)
+					m.Health.WithLabelValues("flush").Set(m.FlushHealthy(900, time.Now().Unix()))
 				}
 			}
 		}()

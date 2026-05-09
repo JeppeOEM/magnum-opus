@@ -4,6 +4,7 @@ package metrics
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -27,6 +28,10 @@ type Metrics struct {
 	WALDropTotal                  prometheus.Counter
 	RedisPublishFailureTotal      *prometheus.CounterVec
 	CascadeStateWriteFailureTotal *prometheus.CounterVec
+	Health                        *prometheus.GaugeVec
+
+	flushFailureMu      sync.Mutex
+	lastFlushFailureUnix int64 // Unix seconds; 0 = never failed
 }
 
 // Register creates all metrics, registers them with reg, and initializes all
@@ -89,6 +94,11 @@ func Register(reg prometheus.Registerer, pairs []ExchangeSymbol) (*Metrics, erro
 			Name: "candle_cascade_state_write_failure_total",
 			Help: "Total cascade accumulator Redis write failures.",
 		}, []string{"exchange", "symbol"}),
+
+		Health: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "candle_health",
+			Help: "Service health per condition: 1=ok, 0=failing.",
+		}, []string{"condition"}),
 	}
 
 	collectors := []prometheus.Collector{
@@ -103,6 +113,7 @@ func Register(reg prometheus.Registerer, pairs []ExchangeSymbol) (*Metrics, erro
 		m.WALDropTotal,
 		m.RedisPublishFailureTotal,
 		m.CascadeStateWriteFailureTotal,
+		m.Health,
 	}
 	for _, c := range collectors {
 		if err := reg.Register(c); err != nil {
@@ -120,6 +131,32 @@ func Register(reg prometheus.Registerer, pairs []ExchangeSymbol) (*Metrics, erro
 		m.RedisPublishFailureTotal.WithLabelValues(p.Exchange, p.Symbol)
 		m.CascadeStateWriteFailureTotal.WithLabelValues(p.Exchange, p.Symbol)
 	}
+	// Health starts healthy — lag polling goroutine updates every 5s once running.
+	m.Health.WithLabelValues("consumer_lag").Set(1)
+	m.Health.WithLabelValues("questdb").Set(1)
+	m.Health.WithLabelValues("flush").Set(1)
 
 	return m, nil
+}
+
+// RecordFlushFailure records that a flush failure occurred at nowUnix.
+// nowUnix is time.Now().Unix() from the caller (time.Now() is banned in internal/).
+func (m *Metrics) RecordFlushFailure(nowUnix int64) {
+	m.flushFailureMu.Lock()
+	m.lastFlushFailureUnix = nowUnix
+	m.flushFailureMu.Unlock()
+}
+
+// FlushHealthy returns 1.0 if no flush failure occurred within windowSecs, 0.0 otherwise.
+func (m *Metrics) FlushHealthy(windowSecs, nowUnix int64) float64 {
+	m.flushFailureMu.Lock()
+	t := m.lastFlushFailureUnix
+	m.flushFailureMu.Unlock()
+	if t == 0 {
+		return 1.0 // never failed
+	}
+	if nowUnix-t <= windowSecs {
+		return 0.0
+	}
+	return 1.0
 }

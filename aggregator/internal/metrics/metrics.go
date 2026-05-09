@@ -2,7 +2,11 @@
 // It is a leaf package — it imports no other internal package.
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // SymbolKey identifies a (exchange, symbol) pair without importing internal/symbol.
 type SymbolKey struct {
@@ -13,11 +17,15 @@ type SymbolKey struct {
 // Registry holds all aggregator Prometheus metrics.
 // Create with New; call PreInit before coordinator.Run().
 type Registry struct {
-	TicksTotal             *prometheus.CounterVec
-	GapTotal               *prometheus.CounterVec
-	FeedState              *prometheus.GaugeVec
-	ConsumerLagMs          *prometheus.GaugeVec
-	QuestDBWriteLatencyMs  prometheus.Histogram
+	TicksTotal            *prometheus.CounterVec
+	GapTotal              *prometheus.CounterVec
+	FeedState             *prometheus.GaugeVec
+	ConsumerLagMs         *prometheus.GaugeVec
+	QuestDBWriteLatencyMs prometheus.Histogram
+	Health                *prometheus.GaugeVec
+
+	lastGapMu    sync.Mutex
+	lastGapTimes map[string]int64
 }
 
 // New creates all metrics and registers them with r.
@@ -49,6 +57,13 @@ func New(r prometheus.Registerer) *Registry {
 			Help:    "QuestDB ILP batch write latency in milliseconds.",
 			Buckets: prometheus.DefBuckets,
 		}),
+
+		Health: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "aggregator_health",
+			Help: "Service health per condition: 1=ok, 0=failing.",
+		}, []string{"condition"}),
+
+		lastGapTimes: make(map[string]int64),
 	}
 	r.MustRegister(
 		reg.TicksTotal,
@@ -56,6 +71,7 @@ func New(r prometheus.Registerer) *Registry {
 		reg.FeedState,
 		reg.ConsumerLagMs,
 		reg.QuestDBWriteLatencyMs,
+		reg.Health,
 	)
 	return reg
 }
@@ -81,4 +97,30 @@ func (reg *Registry) PreInit(pairs []SymbolKey) {
 			reg.GapTotal.WithLabelValues(p.Exchange, p.Symbol, cause)
 		}
 	}
+	// Health starts healthy — goroutine will update every 5s once feeds connect.
+	reg.Health.WithLabelValues("feeds").Set(1)
+	reg.Health.WithLabelValues("gaps").Set(1)
+}
+
+// RecordGap records that a gap occurred at nowUnix for the given (exchange, symbol).
+// nowUnix is time.Now().Unix() from the caller (clock injection pattern — time.Now() is
+// banned in internal packages).
+func (reg *Registry) RecordGap(exchange, symbol string, nowUnix int64) {
+	key := exchange + "/" + symbol
+	reg.lastGapMu.Lock()
+	reg.lastGapTimes[key] = nowUnix
+	reg.lastGapMu.Unlock()
+}
+
+// GapHealthy returns 1.0 if no gap occurred within windowSecs of nowUnix, 0.0 otherwise.
+func (reg *Registry) GapHealthy(windowSecs, nowUnix int64) float64 {
+	cutoff := nowUnix - windowSecs
+	reg.lastGapMu.Lock()
+	defer reg.lastGapMu.Unlock()
+	for _, t := range reg.lastGapTimes {
+		if t >= cutoff {
+			return 0.0
+		}
+	}
+	return 1.0
 }

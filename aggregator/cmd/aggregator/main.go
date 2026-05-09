@@ -172,6 +172,21 @@ func main() {
 	// ── 10. Start coordinator and HTTP server ─────────────────────────────────
 	coord.Run(ctx)
 
+	// ── 11. Health-update goroutine (AC4) ─────────────────────────────────────
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				metricsReg.Health.WithLabelValues("feeds").Set(computeMinFeedState(promReg))
+				metricsReg.Health.WithLabelValues("gaps").Set(metricsReg.GapHealthy(300, time.Now().Unix()))
+			}
+		}
+	}()
+
 	go func() {
 		if err := httpSrv.Start(ctx); err != nil {
 			slog.Error("aggregator: HTTP server error", "err", err)
@@ -237,6 +252,24 @@ func runStartupGate(
 			}
 		}
 	}
+}
+
+// computeMinFeedState returns min(aggregator_feed_state) across all label series.
+// Returns 1.0 if no series exist (no feeds configured yet).
+func computeMinFeedState(g prometheus.Gatherer) float64 {
+	mfs, _ := g.Gather()
+	min := 1.0
+	for _, mf := range mfs {
+		if mf.GetName() != "aggregator_feed_state" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if v := m.GetGauge().GetValue(); v < min {
+				min = v
+			}
+		}
+	}
+	return min
 }
 
 // gatherUnconfirmedSymbols returns "{exchange}/{symbol}" strings for feeds with feed_state=0.
