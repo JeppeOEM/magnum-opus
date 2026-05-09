@@ -118,7 +118,7 @@ aggregator/
 
 **`exchange/transport/` boundary:** triggers reconnect events (connection lost, timeout detected); `reconnect/` manages reconnect *state*. This boundary must not blur — document it explicitly.
 
-**`symbol/` package:** zero imports from any other internal package; both exchange adapters produce a normalized symbol before any message crosses a package boundary. KuCoin (`BTC-USDT`) and Bybit (`BTCUSDT`) normalization happens here.
+**`symbol/` package:** zero imports from any other internal package; both exchange adapters produce a normalized symbol before any message crosses a package boundary. KuCoin (`BTC-USDT`) and Bybit (`BTCUSDT`) normalization happens here. Perp/futures symbols use a `.PERP` suffix on the normalized form: KuCoin `XBTUSDTM` → `BTCUSDT.PERP`, Bybit perp `BTCUSDT` (futures endpoint) → `BTCUSDT.PERP`. The `.PERP` suffix is the single source of truth for market type — no separate `market_type` enum in the symbol package. Stream keys derive from the normalized symbol, so spot and perp naturally use distinct keys (`ticks:bybit:BTCUSDT` vs `ticks:bybit:BTCUSDT.PERP`) without changing the key format.
 
 **Interfaces defined before implementations:** `StreamWriter`, `ILPWriter`, `Clock` (`type Clock interface { Now() time.Time }`) and the `SequenceEvent` type are defined first, with a failing test against each, before any concrete implementation is written.
 
@@ -149,6 +149,10 @@ aggregator/
 **Deferred (post-MVP):**
 - Symbol hot-reload without restart (by design: restart required)
 - Additional exchanges beyond KuCoin and Bybit
+- Perp/futures feed support — FR37–FR42 (planned, not yet implemented; architecture reserved via `.PERP` symbol convention and `funding:` stream key namespace)
+- **Hedge Arb Service** — dedicated Go service for pre-funded hedge arb (spot vs perp basis trading). Connects directly to exchange feeds (KuCoin/Bybit) rather than consuming from Redis, for minimal detection latency. Implementation deferred; two open design questions at implementation time:
+  1. **Data source:** subscribe to Redis `ticks:` streams (simple, ~1ms hop) OR open its own WebSocket connections to exchanges (zero hop, duplicates aggregator connection work)
+  2. **Code sharing:** reuse aggregator exchange/orderbook/symbol code via a shared `exchange-sdk` library module (`github.com/mrqdt/magnum-opus/exchange-sdk`) OR promote aggregator `internal/` packages to `pkg/` for cross-module import. Shared library is the cleaner long-term path but requires extracting: `symbol/`, `orderbook/`, `exchange/transport/`, `exchange/kucoin/`, `exchange/bybit/mux/`.
 
 ### Data Architecture
 
@@ -188,8 +192,10 @@ aggregator/
 ### API & Communication Patterns
 
 **Internal service communication: Redis Streams (pre-decided)**
-- ticks:{exchange}:{symbol} — aggregator → Candle Service
-- gaps:log — aggregator → monitoring/alerting
+- `ticks:{exchange}:{symbol}` — aggregator → Candle Service (spot symbols e.g. `ticks:bybit:BTCUSDT`)
+- `ticks:{exchange}:{symbol}.PERP` — aggregator → consumers for perpetual futures feeds (e.g. `ticks:bybit:BTCUSDT.PERP`)
+- `funding:{exchange}:{symbol}` — aggregator → arb strategies; periodic funding rate snapshot per perp symbol, published on each exchange funding rate update (not per-tick). Fields: `mark_price`, `index_price`, `funding_rate`, `predicted_funding_rate`, `next_funding_ts`, `open_interest`, `basis` (mark − index).
+- `gaps:log` — aggregator → monitoring/alerting
 - No direct RPC between aggregator and any other service.
 
 **Operational HTTP: /health, /version, /metrics (pre-decided)**
@@ -892,11 +898,12 @@ candle-service:
 
 ## Data Flow
 
-    Redis ticks:{exchange}:{symbol}
+    Redis ticks:{exchange}:{symbol}          (spot: e.g. ticks:bybit:BTCUSDT)
+    Redis ticks:{exchange}:{symbol}.PERP    (perp: e.g. ticks:bybit:BTCUSDT.PERP — same schema, market_type="perp")
       → consumer/consumer.go           (XREADGROUP batch, dedup filter)
       → consumer/dispatch.go           (route tick/gap/snapshot/unknown to per-symbol goroutine)
       → per-symbol goroutine:
-          → orderbook.Apply(delta)     (pure, updates L2 state)
+          → orderbook.Apply(delta)     (pure, updates L2 state; orderbook logic identical for spot and perp L2 books)
           → accumulator.Apply(tick)    (pure, updates OHLCV + OFI + features)
           → [on BarClose signal]:
               → accumulator.Close()    (pure, returns completed Bar)
@@ -919,3 +926,236 @@ All aggregator guidelines apply. Additional rules for the Candle Service:
 - Partial bars emitted on snapshot flush carry `is_partial=true` — downstream consumers must handle this field
 - Block trade classification must check `len(window) >= BLOCK_TRADE_MIN_SAMPLE` before computing the percentile threshold — null is correct output during warm-up, not zero
 - Gap attribution: always use `gap_ts` from the gap marker to determine which second's `gap_count` to increment
+
+---
+
+# Bot Service Architecture
+
+_Planned service. Python FastAPI. Handles all strategy execution, arb bots, trade persistence, and Prometheus observability._
+
+## Overview
+
+The Bot Service is a Python FastAPI daemon that runs trading strategies against live Redis streams. It uses a typed event bus with per-strategy asyncio threads, stores the complete order lifecycle in QuestDB, and exposes Prometheus metrics to Grafana. No frontend serving — Grafana is the observability layer, QuestDB is the trade store.
+
+## Service Responsibilities
+
+- Strategy execution: combined microstructure+TA bots, statistical arb, funding rate arb
+- Event bus: typed events from Redis streams routed to strategy threads
+- Trade persistence: `order_events` table in QuestDB via ILP
+- Prometheus `/metrics`: per-strategy P&L, positions, fills, drawdown, latency
+- Paper trading: `PaperExchangeClient` swap with latency simulation
+- Backtesting/replay: `ReplayEngine` feeds QuestDB history through live event bus
+
+## Core Architecture Decisions
+
+**Event bus:** Typed events (BarClose, Tick, OBSnapshot, FundingRate, AISignal, GapMarker, OrderFilled, OrderRejected). Smart barrier synchronization for multi-symbol strategies — holds BarClose events per timestamp until all symbols arrive, delivers unified `MultiBarClose`. Barrier timeout 500ms, delivers with missing symbols as None + GapMarker if applicable. Barrier matches on timeframe boundary floor (`ts // tf_ms * tf_ms`) to tolerate cross-exchange clock skew.
+
+**Strategy interface:** `subscribe(bus: EventBus)` registration method — runs at instantiation before event loop. Runtime conditional: can query QuestDB for dynamic symbol discovery, check regime, conditionally subscribe to AI signals. Registers multiple typed handlers per event type and timeframe. Routing table fixed after `subscribe()` completes.
+
+**Concurrency:** One asyncio event loop per strategy in a dedicated thread. Central Bus Manager thread reads all Redis streams, routes into per-strategy `asyncio.Queue`s via `run_coroutine_threadsafe()`. Crash in one thread cannot affect others.
+
+**Multi-timeframe DataFrames:** BaseStrategy maintains one rolling DataFrame per `(symbol, timeframe)` pair. `get_history(symbol, tf, n_bars)` cold-starts from QuestDB on first call. Every BarClose updates the relevant DataFrame before handler fires. Minimum lookback gate: `if len(df) < self.min_lookback: return` — no signals until lookback is satisfied.
+
+**Order management:** Per-strategy asyncio order queue + worker coroutine. Strategy posts `OrderRequest` and continues. Order worker: direct `httpx` REST call to KuCoin/Bybit (no ccxt). Private WebSocket per exchange for real-time fills (~10ms). On WebSocket silence >N seconds: REST poll fallback.
+
+**Position tracking:** In-memory during runtime. On startup: query exchange REST, reconcile against QuestDB. Open positions override dynamic symbol discovery on restart.
+
+**Open order state — three layers:**
+1. `self.open_orders` dict in-memory — checked before every new OrderRequest
+2. QuestDB write only after exchange confirmation — every outcome persisted (open, rejected, failed, partially_filled)
+3. On restart: QuestDB non-terminal orders → reconcile vs exchange REST → orphans go to `order_alerts`, never auto-cancelled
+
+**Risk:** Per-strategy `max_position_pct` and `stop_loss_pct` enforced in BaseStrategy. Simultaneous opposite positions across strategies explicitly allowed by design — independent signals, independent exits.
+
+**Crash recovery:** Watchdog monitors threads with `thread.is_alive()`. Exponential backoff restart (5s→10s→30s→60s). Open positions from exchange reconciliation force-subscribed before dynamic discovery runs.
+
+**Heartbeat:** Per-strategy `bus_timeout_seconds` + `close_on_bus_timeout: bool`. On timeout: alert always. Market-sell open positions if `close_on_bus_timeout=True`. Default: `True` for microstructure, `False` for funding rate arb.
+
+**Funding rate arb:** Continuously subscribes to `FundingRate` events throughout position lifetime. Exit on: basis convergence, funding rate sign flip, or `next_funding_ts` within threshold with rate below minimum profitability.
+
+**Gap handling:** `GapMarker` events are mandatory subscriptions for all strategies. BaseStrategy invalidates signal computation on gap — not optional per strategy.
+
+**Paper trading:** `paper_trading = True` class var swaps `ExchangeClient` for `PaperExchangeClient`. Simulates latency from configurable distribution. Checks live tick stream for price movement during latency window. Writes to QuestDB `order_events` with `paper_trading=true` column.
+
+**Simultaneous opposite positions:** Explicitly allowed. Two strategies may hold opposite positions on the same symbol — valid by design. No portfolio-level netting or guards.
+
+## QuestDB Tables
+
+**`order_events`** — append-only order lifecycle log:
+```sql
+CREATE TABLE order_events (
+    ts                  TIMESTAMP,
+    order_id            SYMBOL,
+    client_order_id     SYMBOL,
+    strategy            SYMBOL,
+    exchange            SYMBOL,
+    symbol              SYMBOL,
+    market_type         SYMBOL,     -- spot / perp
+    side                SYMBOL,     -- buy / sell
+    order_type          SYMBOL,     -- limit / market
+    status              SYMBOL,     -- open/partially_filled/filled/cancelled/rejected/failed/orphaned
+    limit_price         DOUBLE,
+    stop_price          DOUBLE,
+    take_profit_price   DOUBLE,
+    requested_size      DOUBLE,
+    filled_size         DOUBLE,
+    remaining_size      DOUBLE,
+    avg_fill_price      DOUBLE,
+    fee                 DOUBLE,
+    fee_currency        SYMBOL,
+    realized_pnl        DOUBLE,
+    slippage            DOUBLE,
+    position_size_after DOUBLE,
+    signal_type         SYMBOL,
+    paper_trading       BOOLEAN,
+    backtest            BOOLEAN,
+    ts_placed           TIMESTAMP,
+    ts_exchange         TIMESTAMP
+) TIMESTAMP(ts) PARTITION BY DAY WAL;
+```
+
+**`order_alerts`** — orphaned or anomalous orders requiring operator attention:
+```sql
+CREATE TABLE order_alerts (
+    ts           TIMESTAMP,
+    order_id     SYMBOL,
+    strategy     SYMBOL,
+    alert_type   SYMBOL,   -- orphaned / reconciliation_mismatch / fill_without_order
+    detail       STRING,
+    resolved     BOOLEAN
+) TIMESTAMP(ts) PARTITION BY DAY WAL;
+```
+
+## Testing Strategy
+
+### Layer 1 — Code Correctness
+- **L1 unit:** Strategy signal computation with known DataFrames; NaN propagation; GapMarker invalidation; barrier synchronization logic; open order deduplication
+- **L2 integration:** Event bus routing; per-strategy thread isolation; order queue; position reconciliation; heartbeat timeout
+- **L3 chaos:** Kill Redis mid-session; kill QuestDB mid-write; inject gap markers; partition private WebSocket; verify all recovery paths
+- **Reconciliation fuzzing:** Crash at every stage of the order lifecycle (post-place pre-QuestDB, post-QuestDB pre-fill, mid-partial-fill) on exchange testnet — verify correct state reconstruction every time
+
+### Layer 2 — Strategy Signal Validation
+- **Fee impact analysis (first gate):** Compute minimum required edge per trade: `min_edge_bps = 2 × (maker_fee + expected_slippage_bps)`. If expected signal edge < min_edge: do not deploy.
+- **Walk-forward validation:** Train parameters on in-sample period (QuestDB historical data). Freeze completely. Run on out-of-sample period. Significant performance degradation = overfit signal.
+- **Stress testing on known events:** Pull LUNA collapse (2022-05), FTX collapse (2022-11), and any flash crash periods from QuestDB/Parquet. Run strategy specifically on those windows. Verify stop-loss and emergency exit paths work.
+- **Monte Carlo on trade order:** Shuffle historical trade results 10,000 times. If P&L degrades severely when trade order is randomized, strategy exploits autocorrelation that may not persist.
+
+### Layer 3 — Realistic Simulation
+- **Paper trading (30+ days):** Run on live market data with `PaperExchangeClient`. Compare paper fill prices vs actual market prices at fill timestamps — calibrate latency distribution if simulated fills are consistently better than achievable.
+- **Slippage calibration:** Use `ob_features.depth_to_1pct_bid` / `depth_to_1pct_ask` for target symbols at typical signal times to set realistic `slippage_bps` in `PaperExchangeClient`.
+
+### Layer 4 — Staged Real Money Deployment
+- **Exchange testnet first:** Connect to KuCoin/Bybit testnet with real API calls. Run full reconciliation chaos test against testnet — place orders, crash deliberately at each lifecycle stage, verify recovery.
+- **Minimum size live (30–60 days):** Deploy with minimum exchange order size. Run paper mode simultaneously — compare real vs simulated fills to validate slippage model.
+- **Capital ladder:** Minimum size → 10% intended capital (if metrics pass) → 25% → 50% → 100%. Never jump from paper to full capital.
+- **Go/no-go metrics per step:** Sharpe ratio, max drawdown, fill rate (`filled_size/requested_size`), real vs simulated slippage deviation, zero reconciliation failures.
+
+## Package Layout
+
+```
+bot-service/
+  main.py                    # FastAPI app, startup, env-var config, watchdog
+  bus/
+    event_types.py           # BarClose, Tick, OBSnapshot, FundingRate, AISignal, GapMarker, ...
+    event_bus.py             # Bus Manager, Redis consumers, routing table, barrier
+    barrier.py               # MultiBarClose barrier with timeout and floor-ts matching
+  strategy/
+    base.py                  # BaseStrategy ABC: subscribe(), open_orders, risk gate, NaN guard, heartbeat
+    registry.py              # file watcher: strategies/active/ → spawn, inactive/ → stop
+  exchange/
+    kucoin.py                # KuCoin REST (httpx) + private WebSocket
+    bybit.py                 # Bybit REST (httpx) + private WebSocket
+    paper.py                 # PaperExchangeClient: latency sim + tick-based fill
+  replay/
+    engine.py                # ReplayEngine: QuestDB → event bus in accelerated time
+    backtest.py              # walk-forward harness, Monte Carlo utility
+  persistence/
+    questdb.py               # ILP writer for order_events and order_alerts
+    reconciliation.py        # exchange reconciliation on startup
+  metrics/
+    prometheus.py            # all Prometheus gauges, counters, histograms
+  strategies/
+    active/                  # .py files watched by registry — spawned as strategy threads
+    inactive/                # .py files here are stopped
+```
+
+## Backtesting — Backtrader + Shared Signal Layer
+
+Backtrader is the backtesting engine. It is event-driven (matching the live architecture), supports custom data feeds and indicators, and handles P&L accounting, drawdown, Sharpe, and trade logs out of the box.
+
+**The code duplication problem and solution:**
+Backtrader strategies use `next()`; live strategies use `on_event()` handlers. Signal logic is extracted into pure functions in `strategy/signals/` with no framework dependency. Both the live `BaseStrategy` and Backtrader `bt.Strategy` call the same functions — signal logic written once, tested once.
+
+```python
+# strategy/signals/ma_cross.py — pure, no framework dependency
+def compute_signal(df: pd.DataFrame, fast: int, slow: int) -> float: ...
+
+# Live
+class MACrossLive(BaseStrategy):
+    def on_1m_bar(self, event):
+        if compute_signal(self.df["BTCUSDT"]["1m"], 9, 21) > 0:
+            self.place_order(...)
+
+# Backtrader
+class MACrossBacktest(bt.Strategy):
+    def next(self):
+        if compute_signal(self._to_df(), 9, 21) > 0:
+            self.buy(...)
+```
+
+**Custom QuestDB data feed:**
+`QuestDBFeed` subclasses `bt.feeds.PandasData`. Queries QuestDB `snapshot_1s` + cascade candle tables + Parquet cold storage via pandas. All 67 microstructure features added as extra lines:
+
+```python
+class QuestDBFeed(bt.feeds.PandasData):
+    lines = ('ofi', 'ofi_l1', 'bid_depth_l1_open', 'ask_depth_l1_open',
+             'realized_vol', 'trade_sign_autocorr', 'funding_rate', ...)
+    params = tuple((col, -1) for col in lines)
+```
+
+**Commission model:** Custom `bt.CommissionInfo` subclass matching exact KuCoin/Bybit maker/taker fee schedules. Funding rate cost applied for perp strategies.
+
+**Backtrader provides out of the box:**
+- Walk-forward validation via date range splits
+- Realistic OHLC-based fill simulation
+- Drawdown, Sharpe, trade log via `bt.analyzers`
+- Multi-symbol strategy support
+- Monte Carlo via `TradeAnalyzer` result shuffling
+
+**Results:** Written to QuestDB `order_events` with `backtest=True` — queryable in Grafana alongside paper and live results.
+
+## Package Layout
+
+```
+bot-service/
+  main.py                    # FastAPI app, startup, env-var config, watchdog
+  bus/
+    event_types.py           # BarClose, Tick, OBSnapshot, FundingRate, AISignal, GapMarker, ...
+    event_bus.py             # Bus Manager, Redis consumers, routing table, barrier
+    barrier.py               # MultiBarClose barrier: timeout + floor-ts matching
+  strategy/
+    base.py                  # BaseStrategy ABC: subscribe(), open_orders, risk gate, NaN guard, GapMarker handler, heartbeat
+    registry.py              # file watcher: strategies/active/ → spawn, inactive/ → stop
+    signals/                 # pure signal functions — no framework dependency
+      __init__.py
+      ma_cross.py
+      spread_arb.py
+      funding_rate_arb.py
+  backtest/
+    feed.py                  # QuestDBFeed — bt.feeds.PandasData + 67 microstructure feature lines
+    commission.py            # KuCoin/Bybit fee model for bt.CommissionInfo
+    runner.py                # walk-forward harness, stress test runner (LUNA, FTX windows)
+    monte_carlo.py           # shuffle TradeAnalyzer results, recompute P&L distribution
+  exchange/
+    kucoin.py                # REST (httpx) + private WebSocket
+    bybit.py                 # REST (httpx) + private WebSocket
+    paper.py                 # PaperExchangeClient: latency sim + tick-based fill
+  persistence/
+    questdb.py               # ILP writer: order_events + order_alerts
+    reconciliation.py        # startup: exchange REST → QuestDB cross-reference
+  metrics/
+    prometheus.py            # Prometheus gauges, counters, histograms
+  strategies/
+    active/                  # .py files watched by registry — spawned as strategy threads
+    inactive/                # .py files here → strategy thread stopped
+```

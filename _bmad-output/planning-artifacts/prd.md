@@ -219,6 +219,7 @@ Tick message schema (NDJSON, published as Redis stream entry):
   "type": "tick",
   "exchange": "bybit",
   "symbol": "BTCUSDT",
+  "market_type": "spot",
   "seq": 98234701,
   "ts_exchange": 1746230040123,
   "ts_local": 1746230040145,
@@ -228,6 +229,31 @@ Tick message schema (NDJSON, published as Redis stream entry):
   "event": "update"
 }
 ```
+
+Perp tick — additional fields present when `market_type` is `"perp"` (symbol has `.PERP` suffix):
+```json
+{
+  "type": "tick",
+  "exchange": "bybit",
+  "symbol": "BTCUSDT.PERP",
+  "market_type": "perp",
+  "seq": 98234701,
+  "ts_exchange": 1746230040123,
+  "ts_local": 1746230040145,
+  "side": "bid",
+  "price": "67234.50",
+  "size": "0.142",
+  "event": "update",
+  "mark_price": "67230.00",
+  "index_price": "67215.50",
+  "funding_rate": "0.0001",
+  "predicted_funding_rate": "0.00008",
+  "next_funding_ts": 1746259200000,
+  "open_interest": "12500.42"
+}
+```
+
+`market_type` is always present. Perp-specific fields (`mark_price`, `index_price`, `funding_rate`, `predicted_funding_rate`, `next_funding_ts`, `open_interest`) are only present when `market_type = "perp"` — omitted entirely for spot ticks.
 
 Gap marker schema (same stream, same consumer group):
 ```json
@@ -303,12 +329,14 @@ KUCOIN_API_KEY, KUCOIN_API_SECRET, KUCOIN_API_PASSPHRASE
 BYBIT_API_KEY, BYBIT_API_SECRET
 REDIS_URL=redis://localhost:6379
 QUESTDB_ILP_ADDR=localhost:9009
-SYMBOLS_KUCOIN=BTC-USDT,ETH-USDT,...   # comma-separated, up to 200
-SYMBOLS_BYBIT=BTCUSDT,ETHUSDT,...       # comma-separated, up to 200
+SYMBOLS_KUCOIN=BTC-USDT,ETH-USDT,...         # spot symbols, comma-separated, up to 200
+SYMBOLS_BYBIT=BTCUSDT,ETHUSDT,...             # spot symbols, comma-separated, up to 200
+SYMBOLS_KUCOIN_PERP=XBTUSDTM,ETHUSDTM,...    # perp/futures symbols (KuCoin Futures exchange format)
+SYMBOLS_BYBIT_PERP=BTCUSDT,ETHUSDT,...        # perp symbols (Bybit Derivatives endpoint)
 LOG_LEVEL=info
 ```
 
-Symbol lists are loaded at startup. Changing symbols requires a restart.
+Spot and perp symbol lists are configured separately. Perp symbols use exchange-native naming (KuCoin Futures `XBTUSDTM`, Bybit Derivatives `BTCUSDT`) and are normalized internally to `{BASE}{QUOTE}.PERP`. Symbol lists are loaded at startup. Changing symbols requires a restart.
 
 ### Startup & Shutdown Behaviour
 
@@ -434,6 +462,15 @@ All feeds must confirm within 90 seconds of startup or the service exits non-zer
 
 - **FR35:** The service can load exchange API credentials exclusively from environment variables at runtime
 - **FR36:** The service can prevent API credentials from appearing in log output, error messages, or panic stack traces
+
+### Perp/Futures Market Support (planned — not yet implemented)
+
+- **FR37:** The service can subscribe to perpetual futures L2 order book, trade, and funding rate WebSocket feeds for configured perp symbols on KuCoin Futures and Bybit Derivatives endpoints, alongside existing spot feeds
+- **FR38:** The service can capture and include perp-specific market metrics (`mark_price`, `index_price`, `funding_rate`, `predicted_funding_rate`, `next_funding_ts`, `open_interest`) in tick messages for perp symbols
+- **FR39:** All tick messages include a `market_type` field with value `"spot"` or `"perp"`; perp-specific fields are present only when `market_type = "perp"`
+- **FR40:** The service normalizes perp symbol names from exchange-native formats (KuCoin `XBTUSDTM` → `BTCUSDT.PERP`, Bybit perp `BTCUSDT` → `BTCUSDT.PERP`) to a consistent `{BASE}{QUOTE}.PERP` convention, producing distinct Redis stream keys from spot feeds without changing the `ticks:{exchange}:{symbol}` key format
+- **FR41:** The operator can configure perp symbol lists separately from spot symbol lists via `SYMBOLS_KUCOIN_PERP` and `SYMBOLS_BYBIT_PERP` environment variables
+- **FR42:** The service can publish periodic funding rate snapshots to a dedicated `funding:{exchange}:{symbol}` Redis Stream whenever funding rate data changes, containing `mark_price`, `index_price`, `funding_rate`, `predicted_funding_rate`, `next_funding_ts`, `open_interest`, and `basis` (mark − index)
 
 ## Non-Functional Requirements
 
