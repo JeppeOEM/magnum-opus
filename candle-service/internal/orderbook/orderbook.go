@@ -142,14 +142,22 @@ func (ob *OrderBook) ApplySnapshot(s SnapshotEvent) {
 	ob.maxColdSeq = 0
 }
 
-// ApplyGap resets the book and cold-start buffer.
+// ApplyGap clears the book levels and cold-start buffer.
+//
+// snapshotSeen is only reset to false for causes where the aggregator will
+// re-snapshot (internal_merge_error). For external_disconnect and
+// external_rate_limit the aggregator stays live and will never send a new
+// snapshot signal — clearing levels is enough; deltas continue being applied
+// directly once the book refills from the live stream.
 func (ob *OrderBook) ApplyGap(g GapMarker) {
 	ob.bids = make(map[string]string)
 	ob.asks = make(map[string]string)
 	ob.coldBuf = nil
 	ob.maxColdSeq = 0
-	ob.snapshotSeen = false
-	ob.snapSeq = 0
+	if g.GapCause == "internal_merge_error" {
+		ob.snapshotSeen = false
+		ob.snapSeq = 0
+	}
 }
 
 // BestQuote returns the best bid and ask prices and sizes.

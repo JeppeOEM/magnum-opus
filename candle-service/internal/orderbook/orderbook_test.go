@@ -270,24 +270,53 @@ func TestAllBids_EmptyAfterGap(t *testing.T) {
 	assert.Empty(t, ob.AllBids(), "AllBids must be empty after gap reset")
 }
 
-func TestApplyGap_ResetsBook(t *testing.T) {
+func TestApplyGap_ExternalDisconnect_KeepsSnapshotSeen(t *testing.T) {
+	// external_disconnect means the aggregator is still live and will NOT send a
+	// new snapshot signal. snapshotSeen must stay true so ticks keep applying
+	// directly instead of buffering forever in the cold-start loop.
 	ob, _ := newOB(t)
 	ob.ApplySnapshot(snap(0))
 	ob.ApplyTick(bidTick(1, "50000", "2.0"))
 
 	ob.ApplyGap(orderbook.GapMarker{GapCause: "external_disconnect"})
 
-	// Book should be reset and back to cold-start state.
+	// Levels cleared — BestQuote empty immediately after gap.
 	bp, _, _, _ := ob.BestQuote()
 	assert.Empty(t, bp)
 
-	// New snapshot should work cleanly.
-	ob.ApplySnapshot(snap(2))
-	ob.ApplyTick(bidTick(3, "49000", "1.5"))
-	ob.ApplyTick(askTick(4, "49100", "0.5"))
+	// Ticks must apply directly (no new snapshot needed — snapshotSeen is still true).
+	ob.ApplyTick(bidTick(2, "49000", "1.5"))
+	ob.ApplyTick(askTick(3, "49100", "0.5"))
 	bp, bs, _, _ := ob.BestQuote()
-	assert.Equal(t, "49000", bp)
+	assert.Equal(t, "49000", bp, "ticks must apply directly after external_disconnect gap")
 	assert.Equal(t, "1.5", bs)
+}
+
+func TestApplyGap_InternalMergeError_ResetsSnapshotSeen(t *testing.T) {
+	// internal_merge_error means the aggregator reset its own OB and will re-snapshot.
+	// snapshotSeen must be cleared so we wait for the incoming snapshot signal.
+	ob, _ := newOB(t)
+	ob.ApplySnapshot(snap(0))
+	ob.ApplyTick(bidTick(1, "50000", "2.0"))
+
+	ob.ApplyGap(orderbook.GapMarker{GapCause: "internal_merge_error"})
+
+	// Levels cleared.
+	bp, _, _, _ := ob.BestQuote()
+	assert.Empty(t, bp)
+
+	// Ticks must be buffered (cold start) until a new snapshot arrives.
+	ob.ApplyTick(bidTick(2, "49000", "1.5"))
+	ob.ApplyTick(askTick(3, "49100", "0.5"))
+	bp, _, _, _ = ob.BestQuote()
+	assert.Empty(t, bp, "ticks must be buffered after internal_merge_error gap")
+
+	// New snapshot with seq > buffered ticks so replay produces an empty book.
+	ob.ApplySnapshot(snap(10))
+	ob.ApplyTick(bidTick(11, "48000", "0.8"))
+	ob.ApplyTick(askTick(12, "48100", "0.2"))
+	bp, _, _, _ = ob.BestQuote()
+	assert.Equal(t, "48000", bp, "ticks must apply after new snapshot following internal_merge_error")
 }
 
 // ─── HasLevel ─────────────────────────────────────────────────────────────────

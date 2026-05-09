@@ -188,6 +188,10 @@ func (p *panicStream) Write(ctx context.Context, tick exchange.Tick) error {
 	return p.real.Write(ctx, tick)
 }
 
+func (p *panicStream) WriteSnapshot(ctx context.Context, exch string, sym symbol.Symbol, seq uint64, tsMs int64) error {
+	return p.real.WriteSnapshot(ctx, exch, sym, seq, tsMs)
+}
+
 func (p *panicStream) WriteGap(ctx context.Context, exch string, sym symbol.Symbol, gap gapdetector.GapEvent) error {
 	return p.real.WriteGap(ctx, exch, sym, gap)
 }

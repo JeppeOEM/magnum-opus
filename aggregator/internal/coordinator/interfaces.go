@@ -13,13 +13,13 @@ import (
 
 // StreamWriter publishes normalized tick events and gap markers to Redis Streams.
 //
-// Schema version: 1
+// Schema version: 2
 //
 // Redis Stream key pattern: ticks:{exchange}:{symbol}
 //
 // Tick message fields (XADD ticks:{exchange}:{symbol}):
 //
-//	type        string  "tick" — discriminates from gap markers in the same stream
+//	type        string  "tick" — discriminates from gap/snapshot in the same stream
 //	exchange    string  "kucoin" | "bybit"
 //	symbol      string  canonical symbol (symbol.Symbol.String())
 //	seq         string  exchange.Tick.Seq (uint64 formatted as decimal)
@@ -28,7 +28,15 @@ import (
 //	side        string  "bid" | "ask" — empty string for trade events
 //	price       string  exact wire string, e.g. "29500.50" — never float64
 //	size        string  exact wire string — never float64
-//	event_type  string  Tick.Type.String() → "update" | "trade" | "snapshot"
+//	event_type  string  Tick.Type.String() → "update" | "trade"
+//
+// Snapshot signal fields (XADD ticks:{exchange}:{symbol}):
+//
+//	type        string  "snapshot" — signals that the aggregator book is now live
+//	exchange    string  same as tick
+//	symbol      string  same as tick
+//	seq         string  snapshot sequence number (uint64 as decimal)
+//	ts          string  Unix milliseconds at snapshot time
 //
 // Gap marker fields (written in-band to ticks:{exchange}:{symbol} AND to gaps:log):
 //
@@ -55,6 +63,12 @@ import (
 type StreamWriter interface {
 	// Write publishes a normalized tick event to ticks:{exchange}:{symbol}.
 	Write(ctx context.Context, tick exchange.Tick) error
+
+	// WriteSnapshot publishes a snapshot signal to ticks:{exchange}:{symbol}.
+	// Called once per symbol when the aggregator book transitions from buffering to live.
+	// Best-effort: a failure is logged and the candle service stays in cold-start until
+	// the next reconnect triggers a new snapshot.
+	WriteSnapshot(ctx context.Context, exch string, sym symbol.Symbol, seq uint64, tsMs int64) error
 
 	// WriteGap publishes an in-band gap marker to ticks:{exchange}:{symbol}
 	// and also appends the marker to gaps:log.

@@ -278,6 +278,11 @@ func (w *Worker) handleSnapshot(ctx context.Context, result SnapshotResult) {
 	w.lastSeq = result.Seq
 	w.lastMsgSeqEnd = result.Seq
 	w.recon.GoLive()
+	// Signal the candle service to exit cold-start and replay its buffered deltas.
+	if err := w.stream.WriteSnapshot(ctx, w.exch, w.sym, result.Seq, w.clock.Now().UnixMilli()); err != nil && ctx.Err() == nil {
+		slog.Error("coordinator: WriteSnapshot failed — candle service stays in cold-start",
+			"exchange", w.exch, "symbol", string(w.sym), "err", err)
+	}
 	if w.metrics != nil {
 		w.metrics.FeedState.WithLabelValues(w.exch, string(w.sym)).Set(1)
 	}

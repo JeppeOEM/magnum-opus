@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mrqdt/magnum-opus/aggregator/internal/exchange"
@@ -107,6 +108,25 @@ func TestWrite_GapMarker(t *testing.T) {
 	gf := gapEntries[0].Fields
 	require.Equal(t, "gap", gf["type"])
 	require.Equal(t, "4", gf["seq_gap"]) // 105 - 100 - 1
+}
+
+func TestWriteSnapshot(t *testing.T) {
+	fake := mock.NewFakeRedis()
+	w := newWriter(fake)
+
+	require.NoError(t, w.WriteSnapshot(context.Background(), "kucoin", testSym, 42000, 1700000000000))
+
+	entries := fake.Entries("ticks:kucoin:BTC-USDT")
+	require.Len(t, entries, 1)
+	f := entries[0].Fields
+	assert.Equal(t, "snapshot", f["type"])
+	assert.Equal(t, "kucoin", f["exchange"])
+	assert.Equal(t, "BTC-USDT", f["symbol"])
+	assert.Equal(t, "42000", f["seq"])
+	assert.Equal(t, "1700000000000", f["ts"])
+
+	// snapshot must NOT appear in gaps:log
+	assert.Empty(t, fake.Entries("gaps:log"))
 }
 
 func TestWrite_RetryOnFailure(t *testing.T) {

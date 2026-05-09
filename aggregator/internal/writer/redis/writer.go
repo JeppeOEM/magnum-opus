@@ -116,6 +116,22 @@ func (w *Writer) Write(ctx context.Context, tick exchange.Tick) error {
 	return nil
 }
 
+// WriteSnapshot publishes a snapshot signal to ticks:{exchange}:{symbol}.
+// Best-effort: no retry, no gap fallback. A failure delays cold-start exit on the candle
+// service but does not cause data loss — the next reconnect will trigger another snapshot.
+func (w *Writer) WriteSnapshot(ctx context.Context, exch string, sym symbol.Symbol, seq uint64, tsMs int64) error {
+	stream := fmt.Sprintf("ticks:%s:%s", exch, sym.String())
+	fields := map[string]any{
+		"type":     "snapshot",
+		"exchange": exch,
+		"symbol":   sym.String(),
+		"seq":      strconv.FormatUint(seq, 10),
+		"ts":       strconv.FormatInt(tsMs, 10),
+	}
+	_, err := w.client.XAdd(ctx, stream, fields, maxStreamLen)
+	return err
+}
+
 // WriteGap publishes an in-band gap marker to ticks:{exchange}:{symbol} and to gaps:log.
 func (w *Writer) WriteGap(ctx context.Context, exch string, sym symbol.Symbol, gap gapdetector.GapEvent) error {
 	inband := map[string]any{

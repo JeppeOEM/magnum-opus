@@ -638,7 +638,7 @@ func main() {
 // fromMs and toMs are Unix milliseconds and are multiplied by 1000 before querying.
 func querySnapshotCount(ctx context.Context, httpAddr, exchange, symbol string, fromMs, toMs int64) (int64, error) {
 	query := fmt.Sprintf(
-		"SELECT count() FROM snapshot_1s WHERE exchange='%s' AND symbol='%s' AND ts_second >= %d AND ts_second < %d",
+		"SELECT count() FROM snapshot_1s WHERE exchange='%s' AND symbol='%s' AND ts >= %d AND ts < %d",
 		exchange, symbol, fromMs*1000, toMs*1000,
 	)
 	u := "http://" + httpAddr + "/exec?query=" + url.QueryEscape(query)
