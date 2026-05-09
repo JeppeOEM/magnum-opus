@@ -226,16 +226,82 @@ make dev-infra-down     # stops and removes Redis + QuestDB
 
 No login required (anonymous Viewer). One pre-provisioned dashboard: **Magnum Opus**.
 
-| Row | What it shows |
-|-----|---------------|
-| **System Health Overview** | Single-stat OK/FAILING for aggregator and candle service |
-| **Condition Matrix** | All individual health conditions across both services as a colour-coded table |
-| **Aggregator — USE** | Ticks/s per symbol, consumer lag (ms), gap rate + feed state |
-| **Candle Service — USE** | Bars/s per symbol, consumer lag (messages), flush + publish failures |
-| **Gaps** | Gap rate by cause (why), gap rate by symbol (which), cumulative gap counts table |
-| **Warnings & Errors** | Aggregated WARN/ERROR counts by service + message; recent log stream with deduplication |
-
 The dashboard time range controls all panels. Set it to "Last 1 hour" for normal monitoring; "Last 15 minutes" for debugging an active incident.
+
+---
+
+#### Row: System Health Overview
+
+Two large stat panels — one per service. Green **OK** / Red **FAILING**.
+
+| Panel | Metric | What it means |
+|-------|--------|---------------|
+| **Aggregator** | `min(aggregator_health)` | Takes the minimum across all `aggregator_health{condition}` gauges. Red if *any* condition is failing. |
+| **Candle Service** | `min(candle_health)` | Same for `candle_health{condition}`. Red if *any* condition is failing. |
+
+A red panel here means something is wrong but does not tell you what — expand the Condition Matrix row below it for the specific condition.
+
+---
+
+#### Row: Condition Matrix
+
+**Panel: Health Conditions (all services)**
+
+A colour-coded table of every individual `aggregator_health` and `candle_health` label/value pair. Each cell is either green (1 = OK) or red (0 = FAILING).
+
+| Condition | Service | What it tracks |
+|-----------|---------|----------------|
+| `feeds` | aggregator | At least one exchange feed is connected and receiving ticks. Goes red if all feeds have been disconnected for over a minute. |
+| `gaps` | aggregator | No `internal_merge_error` or `external_rate_limit` gap has occurred in the last 5 minutes. Transient `external_disconnect` gaps do not affect this condition. |
+| `feeds` | candle | The Redis consumer group is actively reading from at least one tick stream. |
+| `gaps` | candle | No stream overflow or order book gap event has been recorded recently. |
+
+---
+
+#### Row: Aggregator — USE
+
+Three time-series panels following the USE method (Utilization / Saturation / Errors).
+
+| Panel | Query | What to look for |
+|-------|-------|-----------------|
+| **Ticks/s by symbol (Utilization)** | `rate(aggregator_ticks_total[1m])` | Normal operating rate for KuCoin BTC-USDT is roughly 5–50 ticks/s. A sudden drop to zero means the feed is down. A sustained rate much higher than usual can indicate an exchange data spike. |
+| **Consumer Lag ms by symbol (Saturation)** | `aggregator_consumer_lag_ms` | Lag between when a tick message was written to the Redis stream and when it was processed. Should stay near 0. Sustained lag above ~200 ms means the coordinator processing loop is backed up — usually a sign that QuestDB writes are slow. |
+| **Gap Rate + Feed State (Errors)** | `rate(aggregator_gap_total[5m])` + `aggregator_feed_state` | Two overlaid series. A non-zero gap rate is expected at startup (one `external_disconnect` spike per symbol). Any sustained gap rate, or `feed_state` dropping to 0, indicates the exchange connection is unstable. |
+
+---
+
+#### Row: Candle Service — USE
+
+| Panel | Query | What to look for |
+|-------|-------|-----------------|
+| **Bars/s by symbol (Utilization)** | `rate(candle_bars_total[1m])` | Should be approximately 1 bar/s per symbol (one 1-second bar per second). A value consistently below 1 means bars are being dropped or the consumer is falling behind. Zero means the consumer goroutine has stopped. |
+| **Consumer Lag (messages) by symbol (Saturation)** | `candle_consumer_lag` | Number of unprocessed messages sitting in the Redis stream consumer group. Should stay near 0. Rising lag means the candle service cannot keep up with the aggregator. If it exceeds the stream overflow threshold (~10 000 messages), an overflow gap is emitted and the order book resets. |
+| **Flush + Redis Publish Failures (Errors)** | `rate(candle_flush_failure_total[5m])` + `rate(candle_redis_publish_failure_total[5m])` | Two failure counters. `flush_failure` = QuestDB write failures (bars lost). `redis_publish_failure` = downstream Redis stream write failures (candle consumers receive no data for that bar). Either being non-zero means data is being silently dropped. |
+
+---
+
+#### Row: Gaps
+
+Three panels that together answer *why*, *which*, and *how many* gaps are happening.
+
+| Panel | Query | What to look for |
+|-------|-------|-----------------|
+| **Gap rate — by cause (why)** | `sum by (cause) (rate(aggregator_gap_total[5m]))` | Stacked by `cause` label. `external_disconnect` spikes at startup are normal. `internal_merge_error` means the REST snapshot pipeline is failing. `external_rate_limit` means the exchange is throttling requests. `internal_buffer_overflow` means the coordinator's tick channel is full. |
+| **Gap rate — by symbol (which)** | `sum by (exchange, symbol) (rate(aggregator_gap_total[5m]))` + `rate(candle_gap_count_total[5m])` | Shows whether gaps are hitting all symbols (exchange-wide problem) or only specific ones (symbol-specific). |
+| **Cumulative gap counts — cause × symbol (how many)** | `aggregator_gap_total > 0` | Bar gauge showing total lifetime gap counts per (cause, symbol) pair. Useful for identifying which symbols are chronically gappy across the uptime of the process. |
+
+---
+
+#### Row: Warnings & Errors
+
+Two panels backed by Loki (log aggregation).
+
+| Panel | Query | What to look for |
+|-------|-------|-----------------|
+| **Warn/Error counts — by service & message** | `sum by (service, level, msg) (count_over_time({...} \| json [$__range]))` | Table showing aggregated WARN/ERROR counts grouped by service name, level, and log message string for the selected time range. Use this to spot recurring errors — a message appearing hundreds of times is a persistent problem, not a transient one. The `msg` column matches exactly the strings in the [Log Message Reference](#log-message-reference). |
+| **Recent Warnings & Errors** | `{compose_project="magnum-opus", level=~"WARN\|ERROR"}` | Live log stream showing the most recent WARN and ERROR entries across all services. Deduplication is applied so repeated identical messages are collapsed. Expand any line to see the full structured fields (`exchange`, `symbol`, `error`, etc). |
+
+Both panels only show log lines that Promtail has shipped to Loki. Logs below WARN level (INFO, DEBUG) are filtered out at the Promtail pipeline stage and are not visible here — use `docker compose logs` for full verbosity.
 
 ### Prometheus — http://localhost:9090
 
@@ -353,13 +419,12 @@ When running via `make up`, `scripts/logfmt.py` parses these and renders a reada
 
 | Log message | Level | Meaning |
 |-------------|-------|---------|
-| `aggregator starting` | INFO | Normal startup |
-| `coordinator: book live` | INFO | Order book seeded — data quality good from this point |
-| `coordinator: gap detected` | WARN | Sequence gap in exchange feed — see `gap_cause` field |
-| `coordinator: panic in symbol goroutine` | ERROR | Rare internal error; service auto-recovers |
-| `candle: consumer cold-start buffer overflow` | WARN | Buffer filled before snapshot signal; gap emitted |
-| `candle: QuestDB WAL suspended` | WARN | QuestDB internal write stall; bars buffered in memory |
-| `candle: flusher: B2 upload failed` | ERROR | Parquet cold storage upload failed |
+| `coordinator: gap detected` | WARN | Sequence gap in exchange feed — see `gap_cause` field; normal at startup |
+| `coordinator: panic in symbol goroutine` | ERROR | Rare internal error; service auto-recovers with a fresh snapshot |
+| `orderbook gap emitted` | WARN | Candle service OB cleared — see `gap_cause` field in the [gap cause table](#candle-service--order-book-gap-causes) |
+| `questdb: WAL suspended — issuing RESUME WAL` | WARN | QuestDB write stall; automatic recovery attempted |
+| `daily flush failed` | ERROR | Daily Parquet export failed — catch-up will retry on next restart |
+| `consumer exited with error` | ERROR | Candle consumer goroutine stopped; restart required |
 
 ---
 
@@ -634,6 +699,7 @@ Every log line is structured JSON. Entries are grouped by service and level. **W
 | WARN | `coordinator: tick dropped — symbol channel full` | The internal channel from the exchange feed to the per-symbol worker is full. This means the worker goroutine is too slow to keep up (e.g., QuestDB writes are blocking). Ticks are lost for that symbol until the channel drains. Sustained occurrences mean the QuestDB write path is a bottleneck. |
 | WARN | `coordinator: gap detected` (with `cause=external_disconnect`) | A sequence number skip was detected in the live tick stream. The exchange had a brief reconnect or internal gap event. The candle service receives a gap marker via the Redis stream and clears its order book levels; the book refills from the live stream without needing a new snapshot. This appears at every startup due to the WebSocket reconnect sequence and is normal. |
 | WARN | `coordinator: unexpected snapshot result discarded` | A REST snapshot result arrived while the worker was in `StateLive` (no longer waiting for one). This happens when a second snapshot completes after the book was already built. The result is discarded safely. |
+| ERROR | `coordinator: snapshot fetch failed, retrying` | The REST snapshot request to the exchange returned an error. Retried with exponential backoff until it succeeds or the context is cancelled. Sustained occurrences mean the exchange REST API is down or rate-limiting snapshot requests. |
 | WARN | `coordinator: stale snapshot, requesting new` | The REST snapshot arrived but its sequence number was older than the oldest buffered delta — the book could not be built from it. A new snapshot is requested. Sustained occurrences mean the snapshot endpoint is very slow relative to the exchange tick rate. |
 | ERROR | `coordinator: panic in symbol goroutine` | A Go panic occurred inside a per-symbol worker. The coordinator catches it, emits an `internal_merge_error` gap marker, requests a fresh snapshot, and restarts the goroutine. The stack trace is logged alongside this message. |
 | ERROR | `coordinator: stale snapshot re-request failed` | After detecting a stale snapshot, the re-request to the snapshot goroutine failed. The symbol stays in cold-start state until the next reconnect cycle. |
@@ -724,6 +790,7 @@ Every log line is structured JSON. Entries are grouped by service and level. **W
 | WARN | `orderbook gap emitted` | The order book's internal state machine emitted a gap. The `gap_cause` field explains which sub-case triggered it (see below). |
 | WARN | `partial flush on snapshot failed` | When a snapshot signal arrives, the candle service tries to flush the current in-progress bar before resetting the order book. That flush failed; the partial bar data for that second is lost. |
 | WARN | `unknown message type — skipping` | A Redis stream message had an unrecognised `type` field. This would indicate the aggregator wrote a message type that this version of the candle service does not understand. Check for version mismatches between the two services. |
+| WARN | `shadow: unknown message type — skipping` | Same as above but observed during shadow mode (before promotion). The shadow consumer skips the message rather than erroring. |
 | WARN | `xack failed for dup` | A duplicate message was detected (already processed this second) but the XACK to remove it from the pending list failed. The message will be reclaimed by XAUTOCLAIM on the next start and re-deduplicated harmlessly. |
 | WARN | `xack failed for zero-vol trade` | A zero-volume trade tick was discarded (these carry no information) but the XACK failed. Same recovery as above. |
 | WARN | `consumer: lag query failed` | The Redis XPENDING lag query failed. The lag metric will not be updated for this cycle but the consumer continues. |
@@ -794,6 +861,8 @@ These appear as the `gap_cause` field alongside `orderbook gap emitted`.
 | ERROR | `promote failed` | The `POST /promote` call (switching from shadow to live mode) failed for a symbol. That symbol stays in shadow mode. |
 | ERROR | `final flush failed` | On shutdown, the final bar flush for a symbol failed. The last partial second of data is lost. |
 | ERROR | `writer close failed` | On shutdown, closing the QuestDB ILP writer for a symbol failed. Some buffered rows may be lost. |
+| ERROR | `flusher exited with error` | The flusher goroutine crashed with a non-cancellation error. Daily Parquet exports are stopped until the service is restarted. Only appears when B2 credentials are configured; flush is silently disabled otherwise. |
+| ERROR | `http server error` | The candle service's `/health /metrics /version` HTTP server crashed mid-run. The process is still alive but metrics cannot be scraped and `/promote` is unreachable. |
 | ERROR | `http shutdown error` | The HTTP server failed to shut down cleanly within the grace period. |
 | WARN | `block trade window persist failed` | The rolling block-trade size window could not be saved to Redis at bar close. On restart, the window will be empty and the block trade threshold will take a few minutes to warm up. |
 | ERROR | `cascade state write failed` | After a bar close, writing the updated cascade state (partially-built multi-timeframe bars) to Redis failed. On the next restart, those bars will be partially missing from the reconstructed state. |
