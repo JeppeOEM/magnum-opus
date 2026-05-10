@@ -174,7 +174,7 @@ development_status:
   # ─── Epic 15: First Strategy Implementations ─────────────────────────────────
   epic-15: in-progress
   15-1-fee-impact-analysis-gate: done
-  15-2-ofi-microstructure-bot: backlog
+  15-2-ofi-microstructure-bot: done
   15-3-ma-cross-baseline: backlog
   15-4-funding-rate-arb-blocked: backlog
   epic-15-retrospective: optional

@@ -102,6 +102,8 @@ class BaseStrategy(ABC):
         # Injected by registry before start_heartbeat() is called
         self._exchange_client: ExchangeClient | None = None
         self._exchange: str = ""
+        # Injected by registry; used by strategies to post OrderRequests
+        self._order_worker: object | None = None
         # Prevents concurrent emergency-close threads for the same symbol (thread explosion guard)
         self._emergency_close_lock = threading.Lock()
         self._emergency_close_in_flight: set[str] = set()

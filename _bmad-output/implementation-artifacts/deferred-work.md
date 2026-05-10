@@ -1,5 +1,16 @@
 # Deferred Work
 
+## Deferred from: code review of 15-2-ofi-microstructure-bot (2026-05-10)
+
+- **D-15-2-1: `_order_worker` typed as `object|None` lacks Protocol contract** (`base.py:106`) — Using `object` type forces `# type: ignore[attr-defined]` at every call site. A `Protocol` with `post(req: OrderRequest) -> None` would catch mismatches statically. Intentional for now to avoid import complexity.
+- **D-15-2-2: `size=max_position_pct` (0.05) passed directly to OrderRequest** (`ofi_bot.py:60`) — If OrderQueueWorker interprets `size` as a coin quantity rather than a portfolio fraction, the trade size will be wrong (0.05 BTC ≈ $5000). Needs validation against OrderQueueWorker's size interpretation when wiring live orders.
+- **D-15-2-3: Market orders bypass risk gate notional check** (`order_worker.py`) — `projected_notional = req.size * (req.limit_price or 0.0)` always evaluates to 0.0 for market orders (no limit_price), so the risk gate is permanently inert for all market entries.
+- **D-15-2-4: asyncio.Queue cross-loop safety for `_order_worker.post()`** (`order_worker.py`) — If OrderQueueWorker's run loop uses a different asyncio event loop than the strategy, `put_nowait` won't wake the consumer. Currently implicit that they share a loop; should be enforced or use thread-safe communication.
+- **D-15-2-5: `paper_trading=True` + `close_on_bus_timeout=True` spawns no-op daemon threads** (`base.py`) — On bus silence, `_bus_timeout_loop` spawns emergency-close threads that immediately return on the paper_trading guard. Under prolonged silence with open positions this floods daemon threads. Low impact while paper trading only.
+- **D-15-2-6: `ofi_signal` z-score references full `ofi` series for last value** (`ofi_signal.py`) — After `recent = ofi.iloc[-lookback:].dropna()`, the mean/std are computed on `recent` but `ofi.iloc[-1]` refers to the full (pre-dropna) series. If Inf values appear just before the window, `recent` fails the count guard while a valid signal exists. Pre-existing in ofi_signal.py; do not modify without test coverage.
+- **D-15-2-7: `sys.path.insert` repeated in every test function** (`test_ofi_bot.py`) — Five test functions each do `sys.path.insert(0, .../strategies/active)`. Should be moved to a conftest.py fixture or the strategies dir should be a proper package.
+- **D-15-2-8: `subscribe()` history retry creates a thread-safety race on `_dfs`** (`base.py`) — `_schedule_history_retry` fires a coroutine that writes to `_dfs` while subscribe may still be running in a ThreadPoolExecutor thread. No lock protects `_dfs`.
+
 ## Deferred from: code review of 15-1-fee-impact-analysis-gate (2026-05-10)
 
 - **D-15-1-1: `commission_info` without `.p` attribute silently defaults `taker_rate=0.0`** (`fee_impact.py`) — `getattr(commission_info, "p", None)` then `getattr(params, "taker_rate", 0.0)` silently treats any unknown CommissionInfo subclass as zero-fee, making the gate always pass. Fix: add a type check or protocol assertion in `fee_impact_gate`.

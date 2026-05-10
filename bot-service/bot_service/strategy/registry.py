@@ -308,6 +308,7 @@ class FileWatcher:
             )
             strategy._exchange_client = self._exchange_client
             strategy._exchange = self._exchange
+            strategy._order_worker = order_worker
             stop_event = threading.Event()
             handle = _create_handle_and_thread(
                 strategy,
