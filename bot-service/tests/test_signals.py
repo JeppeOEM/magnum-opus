@@ -9,6 +9,7 @@ from bot_service.strategy.signals import HOLD_INSUFFICIENT, SignalResult
 from bot_service.strategy.signals.funding_rate_arb import funding_rate_arb_signal
 from bot_service.strategy.signals.ma_cross import ma_cross_signal
 from bot_service.strategy.signals.ofi_signal import ofi_signal
+from bot_service.strategy.signals.rsi import rsi_signal
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -159,6 +160,98 @@ def test_ofi_zero_variance() -> None:
     result = ofi_signal(df, lookback=30)
     assert result.action == "hold"
     assert result.reason == "zero_variance"
+
+
+# ── rsi_signal tests ─────────────────────────────────────────────────────────
+
+def _rsi_df(rsi_values: list[float], period: int = 14) -> pd.DataFrame:
+    """Build a DataFrame with a pre-computed RSI column (bypasses pandas-ta)."""
+    col = f"RSI_{period}"
+    return pd.DataFrame({col: rsi_values})
+
+
+@pytest.mark.l1
+def test_rsi_missing_column() -> None:
+    df = pd.DataFrame({"close": [50.0] * 20})
+    assert rsi_signal(df) == HOLD_INSUFFICIENT
+
+
+@pytest.mark.l1
+def test_rsi_insufficient_rows() -> None:
+    df = _rsi_df([50.0] * 10)
+    assert rsi_signal(df, period=14) == HOLD_INSUFFICIENT
+
+
+@pytest.mark.l1
+def test_rsi_all_nan() -> None:
+    df = _rsi_df([float("nan")] * 20)
+    assert rsi_signal(df) == HOLD_INSUFFICIENT
+
+
+@pytest.mark.l1
+def test_rsi_trailing_nan() -> None:
+    values = [50.0] * 14 + [float("nan")]
+    df = _rsi_df(values)
+    assert rsi_signal(df) == HOLD_INSUFFICIENT
+
+
+@pytest.mark.l1
+def test_rsi_buy_oversold_recovery() -> None:
+    # RSI crosses up from 28 → 32 (crosses through 30)
+    values = [50.0] * 13 + [28.0, 32.0]
+    df = _rsi_df(values)
+    result = rsi_signal(df, period=14, oversold=30.0)
+    assert result.action == "buy"
+    assert result.reason == "rsi_oversold_recovery"
+    assert result.confidence > 0.0
+
+
+@pytest.mark.l1
+def test_rsi_sell_overbought_reversal() -> None:
+    # RSI crosses down from 72 → 68 (crosses through 70)
+    values = [50.0] * 13 + [72.0, 68.0]
+    df = _rsi_df(values)
+    result = rsi_signal(df, period=14, overbought=70.0)
+    assert result.action == "sell"
+    assert result.reason == "rsi_overbought_reversal"
+    assert result.confidence > 0.0
+
+
+@pytest.mark.l1
+def test_rsi_hold_mid_range() -> None:
+    values = [50.0] * 14 + [51.0]
+    df = _rsi_df(values)
+    result = rsi_signal(df)
+    assert result.action == "hold"
+    assert result.reason == "rsi_no_cross"
+
+
+@pytest.mark.l1
+def test_rsi_hold_already_oversold_no_cross() -> None:
+    # RSI stays below oversold — no crossover yet
+    values = [50.0] * 13 + [25.0, 27.0]
+    df = _rsi_df(values)
+    result = rsi_signal(df, oversold=30.0)
+    assert result.action == "hold"
+
+
+@pytest.mark.l1
+def test_rsi_hold_already_overbought_no_cross() -> None:
+    # RSI stays above overbought — no crossover yet
+    values = [50.0] * 13 + [75.0, 78.0]
+    df = _rsi_df(values)
+    result = rsi_signal(df, overbought=70.0)
+    assert result.action == "hold"
+
+
+@pytest.mark.l1
+def test_rsi_confidence_capped_at_one() -> None:
+    # Huge RSI jump — confidence must not exceed 1.0
+    values = [50.0] * 13 + [1.0, 95.0]
+    df = _rsi_df(values)
+    result = rsi_signal(df, oversold=30.0)
+    assert result.action == "buy"
+    assert result.confidence <= 1.0
 
 
 # ── funding_rate_arb_signal test ──────────────────────────────────────────────
