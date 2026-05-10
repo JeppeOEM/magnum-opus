@@ -10,12 +10,13 @@ from structlog.types import EventDict, WrappedLogger
 
 
 class Settings(BaseSettings):
-    # Exchange credentials
-    kucoin_api_key: SecretStr
-    kucoin_api_secret: SecretStr
-    kucoin_api_passphrase: SecretStr
-    bybit_api_key: SecretStr
-    bybit_api_secret: SecretStr
+    # Exchange credentials — optional; empty defaults allow paper-trading without any API keys.
+    # Set real values only when switching a strategy to live trading.
+    kucoin_api_key: SecretStr = SecretStr("")
+    kucoin_api_secret: SecretStr = SecretStr("")
+    kucoin_api_passphrase: SecretStr = SecretStr("")
+    bybit_api_key: SecretStr = SecretStr("")
+    bybit_api_secret: SecretStr = SecretStr("")
 
     # Infrastructure
     redis_url: str = "redis://localhost:6379"

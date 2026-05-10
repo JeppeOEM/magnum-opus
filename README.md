@@ -99,10 +99,10 @@ KuCoin WS / Bybit WS
 ## Quick Start
 
 ```bash
-# 1. Copy credential templates
+# 1. Copy config templates (no API keys needed — paper trading works with blank credentials)
 cp .env.example .env
 cp candle-service/.env.example candle-service/.env
-cp bot-service/.env.example bot-service/.env   # placeholder values work for paper trading
+cp bot-service/.env.example bot-service/.env
 
 # 2. Start everything (aggregator, candle-service, one paper-trading bot)
 make up
@@ -116,7 +116,7 @@ curl -s http://localhost:8090/health | jq .   # bot service
 open http://localhost:3000
 ```
 
-`make up` uses `KUCOIN_PUBLIC=true` by default — no API credentials required for KuCoin public feeds. The bot service starts in paper-trading mode; no real orders are placed even with placeholder exchange credentials.
+No API keys are required to run. KuCoin public feeds need no credentials. The bot starts in paper-trading mode and places no real orders — exchange credentials are only needed when switching a strategy to live trading.
 
 After ~30 seconds you should see ticks flowing and the aggregator status line updating in the terminal.
 
@@ -135,7 +135,7 @@ make watch                # warnings and errors only (no status noise)
 
 `make up` builds images, starts all services (aggregator, candle-service, one paper-trading bot), and pipes output through `scripts/logfmt.py` which gives a clean status line with per-symbol tick rates.
 
-The bot service requires `bot-service/.env` — copy from `bot-service/.env.example`. Placeholder credentials are fine; the service starts with paper trading enabled and places no real orders.
+The bot service requires `bot-service/.env` — copy from `bot-service/.env.example` as-is. No API keys are needed; the service starts in paper-trading mode and places no real orders.
 
 ### Stop
 

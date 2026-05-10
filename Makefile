@@ -12,8 +12,16 @@ export VERSION GIT_SHA BUILD_TIME
 
 ## Spin up all services including one paper-trading bot — filtered logs by default, VERBOSE=1 for raw JSON
 ## Defaults to candle-blue slot; override with SLOT=green
-## Requires bot-service/.env (copy from bot-service/.env.example; placeholder values work for paper trading)
+## No API keys needed for paper trading — copy bot-service/.env.example to bot-service/.env as-is
 up:
+	@printf "\n  %-14s %s\n"  "aggregator"    "http://localhost:8080   /health /metrics"
+	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081   /health /metrics"
+	@printf   "  %-14s %s\n"  "candle (green)" "http://localhost:8082   /health /metrics"
+	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090   /health /metrics"
+	@printf   "  %-14s %s\n"  "questdb"        "http://localhost:9000   (ILP: 9009)"
+	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
+	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
+	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
 	@if [ "$(VERBOSE)" = "1" ]; then \
 		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build; \
 	else \
@@ -35,6 +43,14 @@ monitoring-logs:
 
 ## Warnings and errors only — no status line, no INFO noise
 watch:
+	@printf "\n  %-14s %s\n"  "aggregator"    "http://localhost:8080   /health /metrics"
+	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081   /health /metrics"
+	@printf   "  %-14s %s\n"  "candle (green)" "http://localhost:8082   /health /metrics"
+	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090   /health /metrics"
+	@printf   "  %-14s %s\n"  "questdb"        "http://localhost:9000   (ILP: 9009)"
+	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
+	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
+	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
 	@docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 | python3 scripts/logfmt.py --alerts
 
 ## L1 tests — pure functions, coverage gate
