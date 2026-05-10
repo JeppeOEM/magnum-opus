@@ -72,9 +72,12 @@ class RSIBot(BaseStrategy):
             return
 
         side = "buy" if result.action == "buy" else "sell"
+        if not self._exchange:
+            log.warning("exchange_not_injected_dropping_order", strategy=self._name, side=side)
+            return
         req = OrderRequest(
             strategy=self._name,
-            exchange=self._exchange or "kucoin",
+            exchange=self._exchange,
             symbol=_SYMBOL,
             side=side,
             order_type="market",

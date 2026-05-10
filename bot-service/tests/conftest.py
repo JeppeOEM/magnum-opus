@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import pathlib
+import sys
 from collections.abc import Generator
 
 import pytest
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _add_strategies_path() -> None:
+    """Insert strategies/active into sys.path once per session.
+
+    Allows test functions to import strategy classes (e.g. MACrossBot, OFIBot)
+    without repeating the path hack in each test.
+    """
+    strategies_dir = str(pathlib.Path(__file__).parent.parent / "strategies" / "active")
+    if strategies_dir not in sys.path:
+        sys.path.insert(0, strategies_dir)
 
 
 @pytest.fixture(autouse=True)

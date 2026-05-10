@@ -38,9 +38,6 @@ def _make_settings() -> MagicMock:
 
 @pytest.mark.l1
 def test_ofi_bot_properties() -> None:
-    # Import here so conftest env vars are applied first
-    import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "strategies" / "active"))
     from ofi_bot import OFIBot  # type: ignore[import]
     bot = OFIBot("OFIBot", _make_settings())
     assert bot.min_lookback == 200
@@ -60,8 +57,6 @@ def _make_ofi_df(n: int, last_ofi: float) -> pd.DataFrame:
 
 @pytest.mark.l1
 def test_ofi_bot_posts_order_on_buy_signal() -> None:
-    import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "strategies" / "active"))
     from ofi_bot import OFIBot  # type: ignore[import]
 
     bot = OFIBot("OFIBot", _make_settings())
@@ -86,8 +81,6 @@ def test_ofi_bot_posts_order_on_buy_signal() -> None:
 
 @pytest.mark.l1
 def test_ofi_bot_blocks_on_gap_invalid() -> None:
-    import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "strategies" / "active"))
     from ofi_bot import OFIBot  # type: ignore[import]
 
     bot = OFIBot("OFIBot", _make_settings())
@@ -103,8 +96,6 @@ def test_ofi_bot_blocks_on_gap_invalid() -> None:
 
 @pytest.mark.l1
 def test_ofi_bot_hold_on_low_signal() -> None:
-    import sys
-    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "strategies" / "active"))
     from ofi_bot import OFIBot  # type: ignore[import]
 
     bot = OFIBot("OFIBot", _make_settings())

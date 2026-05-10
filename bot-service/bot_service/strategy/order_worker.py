@@ -65,9 +65,8 @@ class OrderQueueWorker:
     def restore_open_order(self, order_id: str, req: OrderRequest, placed: PlacedOrder) -> None:
         """Restore an open order from reconciliation (Epic 13). Called before run()."""
         self.open_orders[order_id] = (req, placed)
-        notional = req.size * (req.limit_price or 0.0)
         self._position_notional[req.symbol] = (
-            self._position_notional.get(req.symbol, 0.0) + notional
+            self._position_notional.get(req.symbol, 0.0) + self._order_notional(req)
         )
 
     async def handle_fill(self, fill: OrderFilled) -> None:
@@ -151,7 +150,7 @@ class OrderQueueWorker:
 
         if self._exceeds_risk_gate(req):
             current = self._position_notional.get(req.symbol, 0.0)
-            projected = req.size * (req.limit_price or 0.0)
+            projected = self._order_notional(req)
             inc_risk_gate_block(self._strategy_name, req.symbol)
             log.warning(
                 "order_risk_gate_blocked",
@@ -177,16 +176,25 @@ class OrderQueueWorker:
                 return True
         return False
 
+    def _order_notional(self, req: OrderRequest) -> float:
+        """Projected notional USD for risk gate and position tracking.
+
+        Limit orders: size × limit_price.
+        Market orders: size × portfolio_value_usd (size is treated as a portfolio
+        fraction, so the notional is the portfolio fraction × total portfolio value).
+        """
+        if req.limit_price:
+            return float(req.size) * float(req.limit_price)
+        return float(req.size) * self._portfolio_value_usd
+
     def _exceeds_risk_gate(self, req: OrderRequest) -> bool:
         """Return True if the order would push position above max_position_pct * portfolio.
 
         Exit and stop orders reduce position size and are never blocked by the risk gate.
-        Market entry orders with no limit_price pass the gate with 0 notional — a known
-        limitation; callers should use limit orders for entry when risk enforcement matters.
         """
         if req.order_role in {"exit", "stop"}:
             return False
-        projected_notional = req.size * (req.limit_price or 0.0)
+        projected_notional = self._order_notional(req)
         current_notional = self._position_notional.get(req.symbol, 0.0)
         max_allowed = self._max_position_pct * self._portfolio_value_usd
         return (current_notional + projected_notional) > max_allowed
@@ -260,9 +268,8 @@ class OrderQueueWorker:
         )
         inc_order_placed(self._strategy_name, req.exchange, req.symbol, req.side)
         self.open_orders[placed.order_id] = (req, placed)
-        notional = req.size * (req.limit_price or 0.0)
         self._position_notional[req.symbol] = (
-            self._position_notional.get(req.symbol, 0.0) + notional
+            self._position_notional.get(req.symbol, 0.0) + self._order_notional(req)
         )
 
     # ---- QuestDB ILP write ----------------------------------------------

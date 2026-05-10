@@ -32,7 +32,9 @@ def fee_impact_gate(
         raise ValueError("strategy_signals has no valid values")
     params = getattr(commission_info, "p", None)
     taker_rate = float(getattr(params, "taker_rate", 0.0))
-    required_edge = 2.0 * (taker_rate + expected_slippage_bps / 10_000.0)
+    # Clamp to zero: a negative taker_rate (maker rebate) must not make
+    # required_edge negative, which would cause the gate to pass unconditionally.
+    required_edge = max(0.0, 2.0 * (taker_rate + expected_slippage_bps / 10_000.0))
     mean_signal_edge = float(strategy_signals.mean())
     margin = mean_signal_edge - required_edge
     return FeeImpactReport(

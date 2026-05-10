@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import sys
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -28,7 +27,6 @@ def _make_settings() -> MagicMock:
 
 
 def _import_ma_cross_bot() -> type:
-    sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "strategies" / "active"))
     from ma_cross_bot import MACrossBot  # type: ignore[import]
     return MACrossBot
 

@@ -213,17 +213,21 @@ def run_monte_carlo(
     n_shuffles: int = 10_000,
     seed: int | None = None,
 ) -> float:
-    """Shuffle trade P&L sequence n_shuffles times, return 5th-percentile sum P&L."""
-    pnls = list(trade_pnls)
-    if not pnls or n_shuffles == 0:
+    """Bootstrap-resample trade P&L n_shuffles times; return 5th-percentile path P&L.
+
+    Samples N trades with replacement per path (bootstrap), so each simulation
+    represents a plausible alternative sequence of outcomes drawn from the
+    empirical distribution.  Unlike simple shuffling (which is commutative and
+    always sums to the same total), bootstrap resampling produces genuinely
+    different path totals and captures tail risk.
+    """
+    pnls = np.array(list(trade_pnls), dtype=float)
+    if len(pnls) == 0 or n_shuffles == 0:
         return 0.0
     rng = np.random.default_rng(seed)
-    shuffled_totals = []
-    for _ in range(n_shuffles):
-        shuffled = pnls.copy()
-        rng.shuffle(shuffled)
-        shuffled_totals.append(sum(shuffled))
-    return float(np.percentile(shuffled_totals, 5))
+    samples = rng.choice(pnls, size=(n_shuffles, len(pnls)), replace=True)
+    path_totals = samples.sum(axis=1)
+    return float(np.percentile(path_totals, 5))
 
 
 def generate_validation_report(
