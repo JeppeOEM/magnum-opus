@@ -118,6 +118,16 @@ func (c *Coordinator) WithMetrics(reg *metrics.Registry) *Coordinator {
 	return c
 }
 
+// WithOBPublisher sets an OBPublisher on every worker. Call before Run().
+// Workers with a non-nil publisher emit a full L2 book snapshot to Redis pub/sub
+// after every EventTypeUpdate tick.
+func (c *Coordinator) WithOBPublisher(pub OBPublisher) *Coordinator {
+	for i := range c.entries {
+		c.entries[i].worker.WithPub(pub)
+	}
+	return c
+}
+
 // Run starts the snapshot dispatcher, per-exchange fanout/signal-drain goroutines, and
 // per-symbol Worker goroutines. All are tracked in the WaitGroup.
 // Returns when ctx is cancelled. Call Shutdown() after Run returns.

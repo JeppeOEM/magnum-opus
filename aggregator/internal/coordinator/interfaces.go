@@ -8,6 +8,7 @@ import (
 
 	"github.com/mrqdt/magnum-opus/aggregator/internal/exchange"
 	"github.com/mrqdt/magnum-opus/aggregator/internal/gapdetector"
+	"github.com/mrqdt/magnum-opus/aggregator/internal/orderbook"
 	"github.com/mrqdt/magnum-opus/aggregator/internal/symbol"
 )
 
@@ -73,6 +74,17 @@ type StreamWriter interface {
 	// WriteGap publishes an in-band gap marker to ticks:{exchange}:{symbol}
 	// and also appends the marker to gaps:log.
 	WriteGap(ctx context.Context, exch string, sym symbol.Symbol, gap gapdetector.GapEvent) error
+}
+
+// OBPublisher publishes a full L2 orderbook snapshot to Redis pub/sub after each
+// EventTypeUpdate tick. Fire-and-forget: implementations log errors and return them;
+// callers log at Warn and continue regardless of return value.
+//
+// Channel pattern: orderbook:{exchange}:{symbol}
+// Payload: DepthPayload JSON (ts_ns, exchange, symbol, bids, asks, mid_price, spread,
+// interval_bid_volume, interval_ask_volume, interval_total_volume, update_count).
+type OBPublisher interface {
+	Publish(ctx context.Context, exch string, sym symbol.Symbol, snap orderbook.Snapshot, tick exchange.Tick) error
 }
 
 // ILPWriter buffers tick events for batched QuestDB ILP writes.

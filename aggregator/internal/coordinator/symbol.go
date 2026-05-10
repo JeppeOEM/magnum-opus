@@ -41,6 +41,7 @@ type Worker struct {
 	deltas       <-chan exchange.Tick
 	stream       StreamWriter
 	ilp          ILPWriter
+	pub          OBPublisher // nil disables pub/sub publishing (safe for tests)
 	snapRequests chan<- SnapshotRequest
 	resultCh     chan SnapshotResult
 	book         *orderbook.OrderBook
@@ -78,6 +79,13 @@ func NewWorker(
 		clock:        clock,
 		metrics:      met,
 	}
+}
+
+// WithPub sets the OBPublisher for this worker. Call before Run().
+// A nil pub (the zero value) disables pub/sub publishing — safe for existing tests.
+func (w *Worker) WithPub(pub OBPublisher) *Worker {
+	w.pub = pub
+	return w
 }
 
 // Run starts the processing loop with panic recovery at this level only (AC4).
@@ -235,6 +243,12 @@ func (w *Worker) handleTick(ctx context.Context, tick exchange.Tick) {
 	// Write to QuestDB — buffered, non-blocking; error logged, not propagated (AC2, NFR9)
 	if err := w.ilp.Write(ctx, tick); err != nil && ctx.Err() == nil {
 		slog.Error("coordinator: ilp.Write failed", "err", err)
+	}
+	// Publish book snapshot to Redis pub/sub — fire-and-forget, only on book-mutating ticks.
+	if w.pub != nil && tick.Type == exchange.EventTypeUpdate {
+		if err := w.pub.Publish(ctx, w.exch, w.sym, w.book.Snapshot(), tick); err != nil && ctx.Err() == nil {
+			slog.Warn("coordinator: ob pubsub publish failed", "exchange", w.exch, "symbol", string(w.sym), "err", err)
+		}
 	}
 }
 

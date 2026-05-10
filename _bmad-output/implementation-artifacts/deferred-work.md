@@ -229,3 +229,10 @@
 ## Deferred from: quick-dev fix — make watch startup visibility (2026-05-10)
 
 - **D-QD-1: `_ALERT_ERROR_KEYWORDS` broad substrings produce false-positive noise** (`scripts/logfmt.py`) — keywords like `"error"` and `"failed"` are substrings that match Docker pull retry progress lines (e.g. "Retrying failed download...") and build step annotations, producing dim grey noise during image pulls. Fix: tighten to whole-word patterns (`re.search(r'\b(error|fail|fatal)\b', lower)`) or add a known-noisy prefix exclusion list (e.g. skip lines starting with `#`/`---`/`=>`).
+
+## Deferred from: code review of 17-1-aggregator-orderbook-pubsub (2026-05-10)
+
+- **D-17-1-1: Synchronous Redis PUBLISH adds per-tick latency in Worker goroutine** (`aggregator/internal/writer/pubsub/publisher.go`) — `p.client.Publish` is a synchronous round-trip with up to 3s default go-redis write timeout. Under Redis stall this blocks `handleTick` and causes the 256-entry delta channel to fill, triggering spurious seq-gap reconnects. Pre-existing pattern: `stream.Write` and `ilp.Write` are also synchronous. Decouple via a goroutine+channel if pub/sub latency becomes a production concern.
+- **D-17-1-2: `sort.Slice` non-stable for price strings that parse to the same float64** (`aggregator/internal/writer/pubsub/publisher.go:sortedLevels`) — Two textually-different price strings (e.g. "29500.0" and "29500.00") producing the same float64 yield non-deterministic level ordering. Exchange price strings are canonical in practice; use `sort.Stable` if determinism becomes a requirement.
+- **D-17-1-3: `WithOBPublisher` has no post-Run() call guard** (`aggregator/internal/coordinator/coordinator.go`) — Calling `WithOBPublisher` after `coordinator.Run()` is a data race on `w.pub`. Same contract as `WithMetrics` (pre-existing). Add a `started` guard if the API needs to be made safe.
+- **D-17-1-4: `sendAndWait` and absence tests use wall-clock `time.Sleep`** (`aggregator/internal/coordinator/obpublisher_test.go`) — Polling loop and fixed 50ms sleep are fragile under CI load. Replace with channel-based notification from `fakeOBPublisher` for deterministic test timing.

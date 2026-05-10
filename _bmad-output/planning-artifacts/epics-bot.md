@@ -1091,3 +1091,202 @@ mrqdt can monitor all running strategies from Grafana — per-strategy P&L, open
 - Prometheus gauges for per-strategy metrics (`bot_position_size`, `bot_drawdown`, `bot_unrealized_pnl`, etc.) must be reset to sentinel values (0 for sizes, NaN or a reserved value for P&L) when a strategy thread dies — before the watchdog attempts restart. Stale non-zero position_size on a dead strategy will appear in Grafana as an active position and could trigger false alerts. Reset happens synchronously in the watchdog's death-detection path, before the backoff sleep. [Gap N]
 - `/health` response must include per-strategy status: `{"strategies": {"OFIBot": "running", "FundingRateArb": "restarting", ...}}` so that Grafana and the runbook can identify which strategies are live vs recovering at a glance.
 - Docker Compose `mem_limit: 2g` for the bot service (5 strategies x 200 bars x 67 features x 8 bytes ~= 5MB data; Python/pandas process overhead + GC spikes ~= 500MB-1.5GB; 2g provides headroom). `depends_on: questdb: condition: service_healthy` — requires a QuestDB healthcheck defined in the compose file (e.g., `curl -f http://questdb:9000/health` every 10s, 3 retries, 30s start period) so bot service doesn't start until QuestDB is serving queries. [Gap X]
+
+---
+
+## Epic 17 Stories
+
+---
+
+### Story 17.1: Aggregator Tick-Level Orderbook Pub/Sub
+
+**As** mrqdt,
+**I want** the aggregator to publish a full L2 orderbook snapshot to Redis pub/sub after every tick update,
+**so that** the depthview gateway and bot service can consume live tick-level book data without polling.
+
+**Acceptance Criteria:**
+
+- **Given** the aggregator processes a tick update for symbol `S` on exchange `E`,
+  **When** the order book state changes,
+  **Then** it calls `PUBLISH orderbook:{E}:{S}` with a JSON payload matching the `DepthPayload` schema:
+  `{"ts_ns": int64, "exchange": str, "symbol": str, "bids": [[price_str, size_str], ...], "asks": [[price_str, size_str], ...], "mid_price": float, "spread": float, "interval_bid_volume": float, "interval_ask_volume": float, "interval_total_volume": float, "update_count": int}`
+
+- **Given** the Redis pub/sub publish call,
+  **When** Redis is unavailable,
+  **Then** the error is logged at WARN and the tick processing pipeline continues unaffected — pub/sub failure must never block or crash the aggregator
+
+- **Given** the aggregator at startup,
+  **When** it initialises the Redis client,
+  **Then** a single shared Redis client is used for both stream writes (`XADD`) and pub/sub publishes (`PUBLISH`) — no second connection
+
+- **Given** `PUBLISH orderbook:{E}:{S}` is called,
+  **When** inspected in a test,
+  **Then** the `bids` array is sorted descending by price (best bid first) and `asks` ascending (best ask first); both are capped at top-20 levels
+
+**Test coverage (l1/l2):**
+- l1: Unit — publish payload matches DepthPayload schema; bids sorted desc, asks asc; top-20 cap enforced; Redis error does not propagate
+- l2: Integration — start aggregator with real Redis; subscribe to `orderbook:*`; inject a tick update; assert message received within 50ms with correct symbol and non-zero bid/ask arrays
+
+---
+
+### Story 17.2: Candle Service 1s Pub/Sub + Heatmap Writer
+
+**As** mrqdt,
+**I want** the candle service to publish computed 1s features to Redis pub/sub and snapshot the top-20 order book price levels to QuestDB every second,
+**so that** the depthview gateway can serve charts and OFI/spread data to the frontend, and I can replay heatmap history for strategy research.
+
+**Acceptance Criteria:**
+
+- **Given** the candle service completes a 1s processing cycle for symbol `S` on exchange `E`,
+  **When** the cycle flushes,
+  **Then** it calls `PUBLISH candles1s:{E}:{S}` with a JSON payload containing:
+  `{"ts_ns": int64, "exchange": str, "symbol": str, "open": float, "high": float, "low": float, "close": float, "volume": float, "ofi": float, "ofi_l1": float, "spread": float, "bid_depth_l1": float, "ask_depth_l1": float, "bid_depth_top10": float, "ask_depth_top10": float, "realized_vol": float}`
+
+- **Given** the same 1s flush,
+  **When** the cycle completes,
+  **Then** the candle service writes one row per price level (top-20 bid + top-20 ask = up to 40 rows) to the `orderbook_heatmap` QuestDB table via ILP:
+  - Schema: `timestamp TIMESTAMP, exchange SYMBOL, symbol SYMBOL, level SHORT, bid_price DOUBLE, bid_size DOUBLE, ask_price DOUBLE, ask_size DOUBLE`
+  - `level` = 1 (best) through 20; rows where a level doesn't exist (thin book) are skipped
+  - ILP write is fire-and-forget; errors logged at WARN, never block the flush
+
+- **Given** `orderbook_heatmap` in QuestDB,
+  **When** queried,
+  **Then** data is partitioned by DAY and the table uses `timestamp` as the designated timestamp; the table is created by the candle service on startup if it does not exist (ILP auto-create)
+
+- **Given** Redis pub/sub failure,
+  **When** `PUBLISH candles1s:{E}:{S}` errors,
+  **Then** the error is logged at WARN; the 1s cycle continues; QuestDB write for that cycle still proceeds
+
+**Test coverage (l1/l2):**
+- l1: Unit — pub/sub payload contains all required fields with correct types; heatmap rows respect level ordering (1 = best); thin book (< 20 levels) produces fewer rows without error
+- l2: Integration — run candle service with real Redis; subscribe to `candles1s:*`; assert message received within 1.1s of cycle start; query QuestDB `orderbook_heatmap`; assert rows present with correct timestamp and level values
+
+---
+
+### Story 17.3: depthview Gateway Dual-Channel Subscription & Message Routing
+
+**As** mrqdt,
+**I want** the depthview gateway to subscribe to both `orderbook:*` and `candles1s:*` Redis pub/sub channels and multiplex them to the browser over the existing WebSocket connection,
+**so that** the frontend receives both tick-level book updates and 1s computed features through a single connection.
+
+**Note:** This story modifies the `depthview` project at `../code/depthview`, not `magnum-opus`.
+
+**Acceptance Criteria:**
+
+- **Given** the depthview gateway starts,
+  **When** it connects to Redis,
+  **Then** it subscribes to both `PSUBSCRIBE orderbook:*` and `PSUBSCRIBE candles1s:*` using a single Redis connection with pattern subscription
+
+- **Given** a message arrives from either channel,
+  **When** it is forwarded to browser WebSocket clients,
+  **Then** a `"type"` field is prepended to the JSON payload: `"type": "orderbook"` for `orderbook:*` messages and `"type": "candles1s"` for `candles1s:*` messages; the rest of the payload is forwarded as-is
+
+- **Given** a browser WebSocket client connects,
+  **When** the gateway has a cached last-known snapshot for a subscribed symbol,
+  **Then** it immediately sends the most recent `orderbook` snapshot so the client can render without waiting for the next tick
+
+- **Given** a message from `candles1s:*`,
+  **When** forwarded to the browser,
+  **Then** the binary encoding used for `orderbook` snapshots is NOT applied to `candles1s` messages — they are forwarded as UTF-8 JSON text frames; only `orderbook` messages use the existing binary `DepthPayload` encoding
+
+- **Given** the gateway is connected to magnum-opus Redis (not the previous depthview Redis),
+  **When** `REDIS_ADDR` env var is set to the magnum-opus Redis address,
+  **Then** the gateway subscribes to the magnum-opus pub/sub channels without any code change — connection target is config-only
+
+**Test coverage (l1):**
+- l1: Unit — message from `orderbook:kucoin:BTCUSDT` gets `"type": "orderbook"` prepended; message from `candles1s:kucoin:BTCUSDT` gets `"type": "candles1s"` as JSON text frame; snapshot-on-connect sends cached last message
+
+---
+
+### Story 17.4: Bot Service Orderbook Pub/Sub Subscription
+
+**As** mrqdt,
+**I want** bot strategies to declare their orderbook subscription mode in config and have the bus manager provision the corresponding Redis pub/sub subscription,
+**so that** microstructure strategies can react to tick-level book updates without polling, while signal strategies continue using 1s candle data.
+
+**Acceptance Criteria:**
+
+- **Given** a strategy class definition,
+  **When** it declares `orderbook_mode: str` as a property,
+  **Then** valid values are `"none"` (default), `"snapshot_1s"` (subscribe to `candles1s:{ex}:{sym}`), `"full_stream"` (subscribe to `orderbook:{ex}:{sym}`), `"both"`; any other value raises `ValueError` at strategy initialisation
+
+- **Given** `orderbook_mode = "full_stream"` or `"both"`,
+  **When** the bus manager starts the strategy,
+  **Then** it subscribes to `orderbook:{exchange}:{symbol}` on the shared Redis pub/sub client and calls `strategy._on_orderbook(payload: dict)` for each message; the `_on_orderbook` method is a no-op in `BaseStrategy` and overridden by microstructure strategies
+
+- **Given** `orderbook_mode = "snapshot_1s"` or `"both"`,
+  **When** the bus manager starts the strategy,
+  **Then** it subscribes to `candles1s:{exchange}:{symbol}` and calls `strategy._on_candles1s(payload: dict)` for each message
+
+- **Given** `orderbook_mode = "none"` (the default),
+  **When** the strategy runs,
+  **Then** no pub/sub subscription is created; existing Redis stream bar handler behaviour is unchanged
+
+- **Given** a pub/sub message parsing error (malformed JSON),
+  **When** `_on_orderbook` or `_on_candles1s` is called,
+  **Then** the error is logged at ERROR with the raw message; the strategy thread continues; `bot_nan_guard_total` is NOT incremented (this is a data error, not a NaN guard trigger)
+
+- **Given** `OFIBot`, `MACrossBot`, and `RSIBot` existing strategies,
+  **When** inspected,
+  **Then** all declare `orderbook_mode = "none"` (no change to existing behaviour)
+
+**Test coverage (l1):**
+- l1: Unit — bus manager creates pub/sub subscription when mode is `full_stream`; no subscription when mode is `none`; invalid mode raises `ValueError`; JSON parse error logs ERROR and does not crash strategy thread
+
+---
+
+### Story 17.5: Frontend Visualization — Heatmap, Live Ladder & Microstructure Panels
+
+**As** mrqdt,
+**I want** a frontend UI in depthview that shows a live orderbook heatmap, a combined ladder, a microstructure health gauge, and bot activity overlaid on the price chart,
+**so that** I can monitor market microstructure and bot behaviour in real time from a single browser tab.
+
+**Note:** This story modifies the frontend in the `depthview` project at `../code/depthview`.
+
+**Acceptance Criteria:**
+
+- **Given** a WebSocket connection to the depthview gateway,
+  **When** `type: "orderbook"` messages arrive,
+  **Then** the live ladder panel updates immediately showing top-20 bid/ask levels as a depth chart; bid levels left of mid-price in green, ask levels right in red; the spread is shown as a color band (tight = pale green, wide = pale red) between best bid and ask
+
+- **Given** the heatmap panel,
+  **When** `type: "orderbook"` messages arrive,
+  **Then** price levels are accumulated into a rolling 10-minute window client-side; the heatmap renders price on Y-axis, time on X-axis, with color intensity representing bid+ask volume at each level
+
+- **Given** the heatmap time axis toggle,
+  **When** the user switches between **linear** and **non-linear** mode,
+  **Then** linear mode: equal pixel width per second; non-linear mode: pixel width proportional to `ofi` magnitude from the most recent `candles1s` message — quiet seconds are compressed, high-activity seconds are expanded; toggle is a button in the heatmap panel header
+
+- **Given** the ladder and heatmap panels,
+  **When** rendered,
+  **Then** they share the same Y price axis and are vertically aligned — ladder on the right showing current state, heatmap on the left showing history; scrolling the price axis on either panel scrolls both
+
+- **Given** `type: "candles1s"` messages,
+  **When** they arrive,
+  **Then** a **microstructure health gauge** panel updates showing a single value computed as: `clamp((ofi / spread) * bid_ask_imbalance, -1, 1)` where `bid_ask_imbalance = (bid_depth_l1 - ask_depth_l1) / (bid_depth_l1 + ask_depth_l1)`; gauge is green (> 0.3), amber (-0.3 to 0.3), red (< -0.3)
+
+- **Given** the price chart panel (OHLCV candles from `candles1s`),
+  **When** a bot order is received via a separate `type: "bot_order"` WebSocket message (future story — stub the overlay for now with static test data),
+  **Then** buy orders are shown as upward triangles on the candle at the order price; sell orders as downward triangles; each marker shows strategy name on hover
+
+- **Given** the frontend at startup,
+  **When** the WebSocket connects,
+  **Then** the heatmap panel shows "Waiting for data…" until the first `orderbook` message arrives; no blank/broken render state
+
+**Test coverage:** Manual — open browser, verify panels render live data; verify heatmap linear/non-linear toggle changes pixel widths; verify ladder and heatmap Y-axes stay aligned on scroll
+
+---
+
+## Epic 17: Live Frontend & Orderbook Fanout
+
+mrqdt can view a real-time frontend showing a live orderbook ladder, price-time heatmap (linear and non-linear time axis), and microstructure health gauge — all fed from magnum-opus market data. The aggregator publishes tick-level full L2 snapshots to Redis pub/sub; the candle service publishes 1s computed features and writes per-level depth data to a new `orderbook_heatmap` QuestDB table for historical replay. The depthview gateway multiplexes both channels to the browser over a single WebSocket. Bot strategies can optionally subscribe to tick-level or 1s orderbook data based on their declared `orderbook_mode`.
+
+**Services touched:** aggregator (Go), candle-service (Go), bot-service (Python), depthview gateway + frontend (Go + JS, separate repo `../code/depthview`)
+
+**New Redis channels:**
+- `orderbook:{exchange}:{symbol}` — tick-level full L2 snapshot (aggregator → depthview + bot)
+- `candles1s:{exchange}:{symbol}` — 1s OHLCV + OFI/spread/depth features (candle-service → depthview)
+
+**New QuestDB table:** `orderbook_heatmap` — top-20 price levels per second, partitioned by DAY
+
+**Story dependency order:** 17.1 and 17.2 are independent; 17.3 depends on 17.1 + 17.2; 17.4 depends on 17.1; 17.5 depends on 17.3

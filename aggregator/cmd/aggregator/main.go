@@ -27,6 +27,7 @@ import (
 	"github.com/mrqdt/magnum-opus/aggregator/internal/symbol"
 	rediswriter "github.com/mrqdt/magnum-opus/aggregator/internal/writer/redis"
 	questdbwriter "github.com/mrqdt/magnum-opus/aggregator/internal/writer/questdb"
+	pubsubwriter "github.com/mrqdt/magnum-opus/aggregator/internal/writer/pubsub"
 )
 
 // Build-time vars injected via -ldflags.
@@ -91,6 +92,7 @@ func main() {
 	})
 	realRedis := rediswriter.NewRealClient(redisClient)
 	streamWriter := rediswriter.New(realRedis, clk, 10*time.Second)
+	pubsubWriter := pubsubwriter.New(pubsubwriter.NewRealClient(redisClient))
 
 	// ── 6. QuestDB ILP writer ─────────────────────────────────────────────────
 	ilpSender, err := questdbwriter.NewRealSender(ctx, cfg.QuestDB.ILPAddr)
@@ -156,7 +158,7 @@ func main() {
 	coord := coordinator.New(
 		exchConfigs,
 		streamWriter, ilpWriter, fetcher, clk,
-	).WithMetrics(metricsReg)
+	).WithMetrics(metricsReg).WithOBPublisher(pubsubWriter)
 
 	// ── 9. HTTP server + startup gate ─────────────────────────────────────────
 	gapWin := gapwindow.New()
