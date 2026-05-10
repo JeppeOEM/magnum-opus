@@ -7,21 +7,22 @@ REPORTS    := test-results
 export VERSION GIT_SHA BUILD_TIME
 
 .PHONY: up down logs watch monitoring-logs \
-        dev dev-infra dev-infra-down dev-aggregator dev-candle \
+        dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot \
         test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
-## Spin up all services — filtered logs by default, VERBOSE=1 for raw JSON
+## Spin up all services including one paper-trading bot — filtered logs by default, VERBOSE=1 for raw JSON
 ## Defaults to candle-blue slot; override with SLOT=green
+## Requires bot-service/.env (copy from bot-service/.env.example; placeholder values work for paper trading)
 up:
 	@if [ "$(VERBOSE)" = "1" ]; then \
-		docker compose --profile candle-$(or $(SLOT),blue) up --build; \
+		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build; \
 	else \
-		docker compose --profile candle-$(or $(SLOT),blue) up --build 2>&1 | python3 scripts/logfmt.py; \
+		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 | python3 scripts/logfmt.py; \
 	fi
 
 ## Stop and remove all containers (including test infra)
 down:
-	docker compose --profile candle-blue --profile candle-green down
+	docker compose --profile candle-blue --profile candle-green --profile bot down
 	docker compose -f docker-compose.test.yml down 2>/dev/null || true
 
 ## Tail aggregator logs (when running detached)
@@ -34,7 +35,7 @@ monitoring-logs:
 
 ## Warnings and errors only — no status line, no INFO noise
 watch:
-	@docker compose --profile candle-$(or $(SLOT),blue) up --build 2>&1 | python3 scripts/logfmt.py --alerts
+	@docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 | python3 scripts/logfmt.py --alerts
 
 ## L1 tests — pure functions, coverage gate
 test-l1:
@@ -115,11 +116,23 @@ dev-candle:
 	CANDLE_SLOT=$${CANDLE_SLOT:-blue} \
 	go run ./cmd/candle/
 
-## Start infra + both services (interleaved logs, Ctrl+C stops all)
+## Run bot service locally in paper-trading mode (reads bot-service/.env if present)
+## Requires bot-service/.venv — run `pip install -r bot-service/requirements.txt` in the venv first
+dev-bot:
+	@set -a; [ -f bot-service/.env ] && . bot-service/.env; set +a; \
+	cd bot-service && \
+	LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
+	.venv/bin/uvicorn bot_service.main:app --host 0.0.0.0 --port 8090 --reload
+
+## Start infra + all three services (interleaved logs, Ctrl+C stops all)
 dev: dev-infra
-	@echo "==> aggregator + candle-service (Ctrl+C stops both)"
+	@echo "==> aggregator + candle-service + bot (Ctrl+C stops all)"
 	@set -a; [ -f .env ] && . .env; set +a; \
 	set -a; [ -f candle-service/.env ] && . candle-service/.env; set +a; \
+	set -a; [ -f bot-service/.env ] && . bot-service/.env; set +a; \
 	( cd aggregator && \
 	  LOG_LEVEL=$${LOG_LEVEL:-debug} \
 	  REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
@@ -135,5 +148,11 @@ dev: dev-infra
 	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
 	  CANDLE_SLOT=$${CANDLE_SLOT:-blue} \
 	  go run ./cmd/candle/ ) & CANDLE=$$!; \
-	trap "kill $$AGG $$CANDLE 2>/dev/null" INT TERM EXIT; \
-	wait $$AGG $$CANDLE
+	( cd bot-service && \
+	  LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	  REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
+	  .venv/bin/uvicorn bot_service.main:app --host 0.0.0.0 --port 8090 ) & BOT=$$!; \
+	trap "kill $$AGG $$CANDLE $$BOT 2>/dev/null" INT TERM EXIT; \
+	wait $$AGG $$CANDLE $$BOT

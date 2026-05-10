@@ -102,19 +102,21 @@ KuCoin WS / Bybit WS
 # 1. Copy credential templates
 cp .env.example .env
 cp candle-service/.env.example candle-service/.env
+cp bot-service/.env.example bot-service/.env   # placeholder values work for paper trading
 
-# 2. Start everything (builds images, starts candle-blue slot)
+# 2. Start everything (aggregator, candle-service, one paper-trading bot)
 make up
 
-# 3. Verify both services are healthy
+# 3. Verify all services are healthy
 curl -s http://localhost:8080/health | jq .   # aggregator
-curl -s http://localhost:8081/health | jq .   # candle-service
+curl -s http://localhost:8081/health | jq .   # candle-service (blue slot)
+curl -s http://localhost:8090/health | jq .   # bot service
 
 # 4. Open Grafana dashboard
 open http://localhost:3000
 ```
 
-`make up` uses `KUCOIN_PUBLIC=true` by default — no API credentials required for KuCoin public feeds.
+`make up` uses `KUCOIN_PUBLIC=true` by default — no API credentials required for KuCoin public feeds. The bot service starts in paper-trading mode; no real orders are placed even with placeholder exchange credentials.
 
 After ~30 seconds you should see ticks flowing and the aggregator status line updating in the terminal.
 
@@ -125,26 +127,29 @@ After ~30 seconds you should see ticks flowing and the aggregator status line up
 ### Start
 
 ```bash
-make up                   # candle-blue slot, formatted logs
+make up                   # candle-blue slot + bot service, formatted logs
 make up SLOT=green        # green slot instead
 make up VERBOSE=1         # raw JSON logs (no formatting)
 make watch                # warnings and errors only (no status noise)
 ```
 
-`make up` builds images, starts all services, and pipes output through `scripts/logfmt.py` which gives a clean status line with per-symbol tick rates.
+`make up` builds images, starts all services (aggregator, candle-service, one paper-trading bot), and pipes output through `scripts/logfmt.py` which gives a clean status line with per-symbol tick rates.
+
+The bot service requires `bot-service/.env` — copy from `bot-service/.env.example`. Placeholder credentials are fine; the service starts with paper trading enabled and places no real orders.
 
 ### Stop
 
 ```bash
-make down                 # stops and removes all containers
+make down                 # stops and removes all containers (including bot)
 ```
 
 ### Individual service logs (when running detached)
 
 ```bash
-docker compose --profile candle-blue up -d --build   # detached
+docker compose --profile candle-blue --profile bot up -d --build   # detached
 make logs                                              # tail aggregator
 docker compose logs -f candle-blue                    # tail candle
+docker compose logs -f bot                            # tail bot service
 docker compose logs -f prometheus alertmanager grafana loki
 ```
 
@@ -178,25 +183,29 @@ Both files must list the same symbols or the candle service will have consumers 
 
 ## Dev Mode
 
-Runs Redis and QuestDB in Docker; both Go services run locally via `go run` for fast iteration without rebuilding images.
+Runs Redis and QuestDB in Docker; all three services run locally for fast iteration without rebuilding images.
 
 ### Setup
 
 ```bash
 cp .env.example .env
 cp candle-service/.env.example candle-service/.env
+cp bot-service/.env.example bot-service/.env
 # Set REDIS_ADDR=localhost:6379, QUESTDB_ILP_ADDR=localhost:9009, etc. in .env
-# Set REDIS_URL=redis://localhost:6379 in candle-service/.env
+# Set REDIS_URL=redis://localhost:6379 in candle-service/.env and bot-service/.env
+
+# Bot service requires its Python venv (one-time setup):
+cd bot-service && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cd ..
 ```
 
 ### Start
 
 ```bash
 make dev-infra          # Redis + QuestDB detached
-make dev                # aggregator + candle-service, interleaved logs (Ctrl+C stops both)
+make dev                # aggregator + candle-service + bot, interleaved logs (Ctrl+C stops all)
 ```
 
-Or run them in separate terminals:
+Or run each in a separate terminal:
 
 ```bash
 # Terminal 1
@@ -204,6 +213,9 @@ make dev-aggregator
 
 # Terminal 2
 make dev-candle
+
+# Terminal 3
+make dev-bot            # bot service on :8090, hot-reloads strategy files
 ```
 
 Override any variable inline:
@@ -367,7 +379,7 @@ LIMIT 20;
 ### Terminal (live)
 
 ```bash
-# All services (formatted, status line every second)
+# All services including bot (formatted, status line every second)
 make up
 
 # Aggregator only
@@ -377,6 +389,9 @@ docker compose logs -f aggregator
 
 # Candle service
 docker compose logs -f candle-blue
+
+# Bot service
+docker compose logs -f bot
 
 # Monitoring stack
 make monitoring-logs
