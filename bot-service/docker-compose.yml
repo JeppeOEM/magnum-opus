@@ -1,0 +1,36 @@
+version: "3.9"
+
+services:
+  bot-service:
+    build: .
+    ports:
+      - "8090:8090"
+    environment:
+      REDIS_URL: "redis://redis:6379"
+      QUESTDB_HTTP_ADDR: "http://questdb:9000"
+      QUESTDB_ILP_ADDR: "questdb:9009"
+      BOT_SHUTDOWN_TIMEOUT_S: "30"
+      LOG_LEVEL: "info"
+    depends_on:
+      questdb:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  questdb:
+    image: questdb/questdb:7.4.0
+    ports:
+      - "9000:9000"
+      - "9009:9009"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

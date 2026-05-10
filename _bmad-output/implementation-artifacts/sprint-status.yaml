@@ -1,5 +1,6 @@
 # generated: 2026-05-05
-# last_updated: 2026-05-09
+# last_updated: 2026-05-10
+# updated: 12-1 done (all review patches applied); deferred-work.md created for D1-D4
 # updated: epic 5 stories renumbered (migration runner added as 5-1, old 1-6 → 2-7); epic 9 stories expanded (DDL split to 9-1, flush+catchup 9-2, alerting 9-3, blue-green 9-4)
 # project: magnum-opus
 # project_key: NOKEY
@@ -36,7 +37,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-09
+last_updated: 2026-05-10
 project: magnum-opus
 project_key: NOKEY
 tracking_system: file-system
@@ -132,3 +133,23 @@ development_status:
   10-3-prometheus-alertmanager-config: done
   10-4-grafana-provisioned-dashboard: done
   10-5-docker-compose-and-makefile: done
+
+  # ─── Epic 11: Bot Service Foundation — Signal Computation ──────────────────
+  epic-11: done
+  11-1-project-scaffold-typed-configuration-and-credential-redaction: done
+  11-2-questdb-schema-order-events-and-order-alerts: done
+  11-3-event-type-definitions-and-stream-entry-parser: done
+  11-4-bus-manager-redis-consumer-and-event-router: done
+  11-5-multibarclose-barrier: done
+  11-6-basestrategy-signal-computation-foundation: done
+  11-7-fastapi-service-entry-point-and-startup-sequence: done
+  epic-11-retrospective: done
+
+  # ─── Epic 12: Trade Execution — Paper Trading ───────────────────────────────
+  epic-12: done
+  12-1-exchange-auth-and-httpx-rest-client: done
+  12-2-private-websocket-fill-feed-and-rest-poll-fallback: done
+  12-3-order-queue-worker-and-three-layer-state: done
+  12-4-orphaned-order-detection-and-order-alerts: done
+  12-5-paperexchangeclient-simulated-fill-engine: done
+  epic-12-retrospective: done

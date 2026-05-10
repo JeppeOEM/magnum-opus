@@ -8,7 +8,7 @@ This file is the authoritative FR/NFR/ARC reference for all services. Epic files
 
 ---
 
-## Aggregator Requirements
+
 
 ### Functional Requirements
 

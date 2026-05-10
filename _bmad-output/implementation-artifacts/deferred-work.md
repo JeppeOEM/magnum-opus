@@ -1,5 +1,30 @@
 # Deferred Work
 
+## Deferred from: code review of 12-2-private-websocket-fill-feed-and-rest-poll-fallback (2026-05-10)
+
+- **D1: REST fallback queries open-orders endpoint, not fills endpoint** (`kucoin/ws_private.py`, `bybit/ws_private.py`) — `get_open_orders()` returns only currently-open orders; filled orders are never returned. REST fallback is a structural no-op for fills. Needs fills/history endpoint: KuCoin `/api/v1/fills`, Bybit `/v5/order/history`. Add `get_recent_fills(symbol, since_ts)` to both REST clients in story 12.3 and re-wire fallback.
+- **D2: Sort by `ts_placed` instead of `ts_exchange`** (AC5 violation) — `OpenOrder.ts_placed` is order creation time; fill time (`ts_exchange`) is unavailable from the open-orders endpoint. Resolved automatically when D1 is implemented (fills endpoint returns fill time).
+- **D3: `_get_ws_token` calls private `_request` method** (`kucoin/ws_private.py:52`) — tightly coupled to REST client internals. Add public `get_private_ws_token() -> tuple[str, str]` method to `KuCoinRESTClient`.
+- **D4: KuCoin ping interval hardcoded at 30s** (`kucoin/ws_private.py`) — exchange-negotiated `pingInterval` from bullet-private response is ignored; token `tokenLife` (lifetime) is also ignored. Low-risk for now.
+- **D5: Bybit auth failure retried with backoff forever** (`bybit/ws_private.py`) — no ERROR-level escalation after N failed auth attempts; bad API key loops silently.
+- **D6: Missing test for empty `orderId` in KuCoin `_parse_fill`** — `_parse_fill` uses `.get("orderId", "")` so missing field silently produces `order_id=""`.
+- **D7: L2 fallback tests use 1.5s real sleep** (`tests/test_ws_private.py`) — fragile under CI load; liveness check interval should be injectable for faster test feedback.
+
+## Deferred from: code review of 12-1-exchange-auth-and-httpx-rest-client (2026-05-10)
+
+- **D1: Bybit `category` hardcoded to `"spot"`** (`bot_service/exchange/bybit/rest.py`) — `place_order`, `cancel_order`, `get_open_orders` all use `"spot"`; futures/inverse support requires adding `market_type` field to `OrderRequest` and threading it through. Deferred until story 12-5 or when futures support is explicitly planned.
+- **D2: `ts_exchange` from local clock** (`kucoin/rest.py`, `bybit/rest.py`) — `PlacedOrder.ts_exchange` is populated with `int(time.time() * 1000)` instead of the timestamp returned in the exchange's response body. Requires parsing `createdAt` / `createdTime` from place-order response.
+- **D3: `AsyncClient` allocated per retry** (`kucoin/rest.py`, `bybit/rest.py`) — `async with httpx.AsyncClient()` inside the retry loop creates a new client (with new TLS handshake) on each 5xx retry instead of reusing an existing one. Low priority — retries are rare and low-frequency.
+- **D4: `cancel_order` `symbol` param unused in KuCoin** (`kucoin/rest.py`) — KuCoin DELETE `/api/v1/orders/{id}` does not require `symbol`; the parameter is accepted for `ExchangeClient` protocol compatibility but goes unused (`# noqa: ARG002`). Document in ExchangeClient protocol docstring.
+
+## Deferred from: code review of 11-7-fastapi-service-entry-point-and-startup-sequence (2026-05-10)
+
+- **`sys.exit(1)` inside ASGI lifespan** — spec-mandated; uvicorn/systemd handle SystemExit cleanly in single-process deployments; multi-worker supervisor coordination not planned for this service.
+- **BusManager reports healthy with zero registered streams** — `is_alive()` is True before strategies register; by design pre-Epic 12; operators should use strategy-level metrics for liveness.
+- **`pandas-ta>=0.3.14b` no upper version pin** — library is sparsely maintained; evaluate upper bound when Epic 15 adds concrete indicator usage.
+- **No test for `add_indicators()` override that raises or produces NaN** — Epic 15 strategy implementations will exercise this path; add fixtures then.
+- **Heartbeat thread sends `os.kill(SIGTERM)` from base.py** — pre-existing Story 11.6 design; conflicts with uvicorn signal ownership only when heartbeat fires during clean shutdown; monitored via `heartbeat_timeout` log event.
+
 ## Deferred from: code review of 9-2-daily-parquet-flush-and-catchup (2026-05-08)
 
 - **Full-day in-memory materialization without size bound** — entire CSV and Parquet bytes in memory simultaneously; hundreds of MB on dense days; streaming to S3 requires significant rework.

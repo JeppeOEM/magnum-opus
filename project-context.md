@@ -106,6 +106,7 @@ Both services use:
 |---|---|
 | Go Aggregator | [`aggregator/project-context.md`](aggregator/project-context.md) |
 | Go Candle Service | [`candle-service/project-context.md`](candle-service/project-context.md) |
+| Python Bot Service | [`bot-service/project-context.md`](bot-service/project-context.md) |
 
 ---
 
@@ -115,7 +116,10 @@ Both services use:
 |---|---|
 | PRD | `_bmad-output/planning-artifacts/prd.md` |
 | Architecture | `_bmad-output/planning-artifacts/architecture.md` |
-| Epics & Stories | `_bmad-output/planning-artifacts/epics.md` |
+| Requirements Inventory (all services) | `_bmad-output/planning-artifacts/epics-requirements.md` |
+| Aggregator Epics & Stories (Epics 1–4) | `_bmad-output/planning-artifacts/epics.md` |
+| Candle Service Epics & Stories (Epics 5–9) | `_bmad-output/planning-artifacts/epics-candle.md` |
+| Bot Service Epics & Stories (Epics 11–16) | `_bmad-output/planning-artifacts/epics-bot.md` |
 | Sprint Status | `_bmad-output/implementation-artifacts/sprint-status.yaml` |
 | Data Contract | `docs/data-contract.md` |
 | Ops Runbook | `docs/ops.md` |
