@@ -174,3 +174,8 @@
 
 - **D1: exchange="" in restored OrderRequest** — `_build_from_questdb_row` sets `exchange=""` because exchange is not stored in `order_events` DDL; fill events written after crash-recovery will have blank exchange label in QuestDB; downstream analytics/P&L attribution affected. Dev notes acknowledge this is unknown at restore time. Fix: add `exchange` symbol to `order_events` DDL in a future story.
 - **D2: ts_exchange=0 sentinel in restored PlacedOrder** — `PlacedOrder(ts_exchange=0)` is used as "unknown"; latency calculations using `now - ts_exchange` would produce nonsensical values. Dev notes explicitly state 0 as sentinel. Fix: type `ts_exchange` as `int | None` and gate latency calculations on non-None.
+
+## Deferred from: code review of 14-3-custom-commissioninfo-exchange-fee-models (2026-05-10)
+
+- **D-14-3-1: tz-naive/tz-aware mismatch in `get_funding_cost` silently returns 0.0** (`commission.py`) — passing a tz-naive datetime when `_funding_rates` has a tz-aware index causes `asof()` to raise `TypeError`, which is swallowed by the `except (KeyError, TypeError)` clause. Cost returns 0.0 with a "funding_rate_not_found" log that doesn't indicate the root cause. Fix: validate tz consistency at `get_funding_cost` entry, or coerce `pd.Timestamp(timestamp, tz='UTC')` before lookup.
+- **D-14-3-2: Duplicate timestamps in `funding_rates` not validated** (`commission.py`) — `pd.Series.asof()` silently picks the last duplicate. Add a validation step in `__init__` or `get_funding_cost` to log a warning if the index has duplicates.
