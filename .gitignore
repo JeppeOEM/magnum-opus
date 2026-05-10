@@ -1,12 +1,14 @@
 # Credentials — never commit
 .env
 
-# Python virtual environment
-.venv
-
 # OS
 .DS_Store
 Thumbs.db
 
 # Generated test reports
 test-results/
+
+bot-service/.venv/
+
+bot-service/.pytest_cache/
+bot-service/.mypy_cache/
