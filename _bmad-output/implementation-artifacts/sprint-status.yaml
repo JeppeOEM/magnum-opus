@@ -168,5 +168,5 @@ development_status:
   14-2-questdbfeed-67-feature-backtrader-data-feed: done
   14-3-custom-commissioninfo-exchange-fee-models: done
   14-4-walk-forward-stress-test-and-monte-carlo-harnesses: done
-  14-5-backtest-results-persistence: ready-for-dev
+  14-5-backtest-results-persistence: done
   epic-14-retrospective: optional

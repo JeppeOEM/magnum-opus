@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 14-5-backtest-results-persistence (2026-05-10)
+
+- **D-14-5-1: TCP connection opened per fill row** (`writer.py`) — `_sync_ilp_write` calls `Sender.from_conf(...)` inside the write method, creating a new TCP connection for every completed order. For a large backtest with thousands of fills, this results in thousands of separate connects and TLS/auth handshakes. Fix: open one `Sender` connection at `BacktestResultWriter` construction time (or per `run_backtest_and_persist` call) and reuse across all `write_fill` calls.
+- **D-14-5-2: `realized_pnl` always written as 0.0** (`writer.py`) — Backtrader does not natively expose realized P&L per fill in `notify_order`; it must be computed from broker position changes or tracked across buy/sell pairs. Left as 0.0 for now. Fix: compute `realized_pnl` using average entry price × (fill_size) for close legs; requires tracking open position cost basis across fills.
+
 ## Deferred from: code review of 14-4-walk-forward-stress-test-and-monte-carlo-harnesses (2026-05-10)
 
 - **D-14-4-1: Stress test results not gating `passes`** (`validation.py`) — `StressTestReport` is recorded as run but per-window Sharpe/drawdown values do not contribute to `ValidationReport.passes`. The stress test is currently informational only. Fix: add configurable max-drawdown threshold for stress windows; if any window exceeds it, `passes=False`.

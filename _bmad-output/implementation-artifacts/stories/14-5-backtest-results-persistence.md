@@ -1,6 +1,6 @@
 # Story 14.5: Backtest Results Persistence
 
-## Status: ready-for-dev
+## Status: done
 
 ## Story
 
@@ -20,22 +20,22 @@
 
 ## Tasks / Subtasks
 
-- [ ] T1: Implement `BacktestResultWriter` in `bot_service/backtest/writer.py`
-  - [ ] T1.1: Implement `BacktestResultWriter.__init__(questdb_ilp_addr, strategy_name, exchange, symbol, fee_currency)`
-  - [ ] T1.2: Implement `write_fill(order, position_size_after)` — extract all fields from Backtrader `Order` object; call `_sync_ilp_write`
-  - [ ] T1.3: Implement `_sync_ilp_write(fields)` — mirrors `OrderQueueWorker._sync_ilp_write`; fire-and-forget; logs CRITICAL on failure
+- [x] T1: Implement `BacktestResultWriter` in `bot_service/backtest/writer.py`
+  - [x] T1.1: Implement `BacktestResultWriter.__init__(questdb_ilp_addr, strategy_name, exchange, symbol, fee_currency)`
+  - [x] T1.2: Implement `write_fill(order, position_size_after)` — extract all fields from Backtrader `Order` object; call `_sync_ilp_write`
+  - [x] T1.3: Implement `_sync_ilp_write(fields)` — mirrors `OrderQueueWorker._sync_ilp_write`; fire-and-forget; logs CRITICAL on failure
 
-- [ ] T2: Implement `run_backtest_and_persist` in `bot_service/backtest/writer.py`
-  - [ ] T2.1: Implement `_make_persisting_strategy(base_cls, writer)` — dynamic subclass with `notify_order` override
-  - [ ] T2.2: Implement `run_backtest_and_persist(strategy_cls, feed, commission_info, writer, starting_cash)` — cerebro wrapper that uses persisting strategy
+- [x] T2: Implement `run_backtest_and_persist` in `bot_service/backtest/writer.py`
+  - [x] T2.1: Implement `_make_persisting_strategy(base_cls, writer)` — dynamic subclass with `notify_order` override
+  - [x] T2.2: Implement `run_backtest_and_persist(strategy_cls, feed, commission_info, writer, starting_cash)` — cerebro wrapper that uses persisting strategy
 
-- [ ] T3: L2 integration test in `tests/test_backtest_persistence.py`
-  - [ ] T3.1: `questdb_container` fixture — DockerContainer with ports 9000 (HTTP) and 9009 (ILP) exposed; polls until ready; applies schema
-  - [ ] T3.2: `test_backtest_events_written_with_backtest_flag` — run synthetic backtest, assert rows in `order_events` with `backtest=true`
-  - [ ] T3.3: `test_backtest_rows_isolated_from_live_rows` — assert `WHERE backtest=false` returns 0 rows after backtest run
-  - [ ] T3.4: `test_exception_in_strategy_leaves_partial_rows` — raise in `next()` on bar 3, assert bars 1-2 rows remain in QuestDB
+- [x] T3: L2 integration test in `tests/test_backtest_persistence.py`
+  - [x] T3.1: `questdb_container` fixture — DockerContainer with ports 9000 (HTTP) and 9009 (ILP) exposed; polls until ready; applies schema
+  - [x] T3.2: `test_backtest_events_written_with_backtest_flag` — run synthetic backtest, assert rows in `order_events` with `backtest=true`
+  - [x] T3.3: `test_backtest_rows_isolated_from_live_rows` — assert `WHERE backtest=false` returns 0 rows after backtest run
+  - [x] T3.4: `test_exception_in_strategy_leaves_partial_rows` — raise in `next()` on bar 3, assert bars 1-2 rows remain in QuestDB
 
-- [ ] T4: Run full test suite — L1 regressions zero; mypy --strict clean
+- [x] T4: Run full test suite — L1 regressions zero; mypy --strict clean
 
 ## Dev Notes
 
@@ -344,15 +344,36 @@ All tests `@pytest.mark.l2`. Target: 4 tests in `tests/test_backtest_persistence
 
 ## Senior Developer Review (AI)
 
-*(To be filled after implementation)*
+**Date:** 2026-05-10
+**Outcome:** Changes Requested — 4 patches applied
+
+### Action Items
+
+- [x] [HIGH] AC3 violated — no CRITICAL log on `cerebro.run()` exception; `last_bar_ts` never tracked; re-raised exception unidentifiable in logs. Fixed: `last_bar_ts: list[str] = [""]` closure in `next()` override; `try/except` around `cerebro.run()` with `log.critical("backtest_run_failed", strategy=..., last_bar_ts=..., error=...)`.
+- [x] [MED] Designated timestamp `at=` used wall-clock time; Grafana time-range queries on backtest data would return rows only in "now" bucket, not the simulated period. Fixed: `ts_at = TimestampNanos(ts_exchange_us * 1000)` when `ts_exchange_us > 0`.
+- [x] [MED] `stop_price` and `limit_price` incorrectly assigned for Stop/StopLimit orders — `order.created.price` is the stop trigger for Stop orders, not a limit. Fixed: if/elif/else by `order_type` with `pricelimit` for stop-limit price.
+- [x] [LOW] `_EXECTYPE_MAP` missing `StopTrail` and `StopTrailLimit` — unknown exec types silently fell through to "market". Fixed: added entries mapping to "stop_trail" and "stop_trail_limit".
+
+All 4 patches applied; mypy --strict clean; 4 L2 tests pass.
 
 ## Dev Agent Record
 
 ### Agent Model Used
 
-*(To be filled)*
+claude-sonnet-4-6
+
+### Completion Notes
+
+- `BacktestResultWriter._sync_ilp_write`: mirrors `OrderQueueWorker._sync_ilp_write`; `symbols` dict + `columns` dict; `Sender.from_conf` TCP; logs CRITICAL on failure
+- `write_fill`: uses `calendar.timegm()` (not `datetime.timestamp()`) for UTC timestamp — `bt.num2date()` returns naive UTC datetimes
+- `order.created.size`/`order.executed.comm` are negative for sells — always `abs()`
+- `_make_persisting_strategy`: class factory with `notify_order` override; `# type: ignore[misc]` on subclass of `Any`
+- `testcontainers` added to mypy overrides in pyproject.toml (`ignore_missing_imports = true`)
+- L2 tests poll QuestDB HTTP with 0.5s sleep loop; ILP writes are async-committed (not immediately visible)
+- 4 L2 tests; 164 L1 green; mypy --strict clean
 
 ### File List
 
 - `bot_service/backtest/writer.py` (CREATE)
 - `bot_service/tests/test_backtest_persistence.py` (CREATE)
+- `pyproject.toml` (UPDATE — added testcontainers mypy override)
