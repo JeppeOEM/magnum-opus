@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of 15-1-fee-impact-analysis-gate (2026-05-10)
+
+- **D-15-1-1: `commission_info` without `.p` attribute silently defaults `taker_rate=0.0`** (`fee_impact.py`) — `getattr(commission_info, "p", None)` then `getattr(params, "taker_rate", 0.0)` silently treats any unknown CommissionInfo subclass as zero-fee, making the gate always pass. Fix: add a type check or protocol assertion in `fee_impact_gate`.
+- **D-15-1-2: Bybit `maker_rate=-0.0001` causes `required_edge < 0` → gate vacuously passes** (`fee_impact.py`) — `fee_impact_gate` reads `taker_rate` but when `taker_rate` is negative (maker rebate), `required_edge` goes negative and any positive-mean strategy passes. Fix: add `required_edge = max(required_edge, 0.0)` or guard against negative taker rates.
+- **D-15-1-3: Mixed-NaN series (not all-NaN) passes guard with potentially single-sample mean** (`fee_impact.py`) — `isna().all()` allows `[NaN, NaN, 0.05]` through; `mean()` returns `0.05` based on 1 sample. Consider adding a minimum non-NaN sample count guard (e.g., `strategy_signals.dropna().size < 10` → raise ValueError).
+
+
+
 ## Deferred from: code review of 14-5-backtest-results-persistence (2026-05-10)
 
 - **D-14-5-1: TCP connection opened per fill row** (`writer.py`) — `_sync_ilp_write` calls `Sender.from_conf(...)` inside the write method, creating a new TCP connection for every completed order. For a large backtest with thousands of fills, this results in thousands of separate connects and TLS/auth handshakes. Fix: open one `Sender` connection at `BacktestResultWriter` construction time (or per `run_backtest_and_persist` call) and reuse across all `write_fill` calls.

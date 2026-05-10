@@ -170,3 +170,18 @@ development_status:
   14-4-walk-forward-stress-test-and-monte-carlo-harnesses: done
   14-5-backtest-results-persistence: done
   epic-14-retrospective: done
+
+  # ─── Epic 15: First Strategy Implementations ─────────────────────────────────
+  epic-15: in-progress
+  15-1-fee-impact-analysis-gate: done
+  15-2-ofi-microstructure-bot: backlog
+  15-3-ma-cross-baseline: backlog
+  15-4-funding-rate-arb-blocked: backlog
+  epic-15-retrospective: optional
+
+  # ─── Epic 16: Production Observability & Operations ───────────────────────────
+  epic-16: backlog
+  16-1-prometheus-metrics-endpoint: backlog
+  16-2-hardened-health-and-docker-compose: backlog
+  16-3-operations-runbook-entry: backlog
+  epic-16-retrospective: optional

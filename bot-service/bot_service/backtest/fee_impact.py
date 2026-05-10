@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import dataclasses
+import json
+import pathlib
 from dataclasses import dataclass
 
 import pandas as pd
@@ -38,3 +41,22 @@ def fee_impact_gate(
         mean_signal_edge=mean_signal_edge,
         margin=margin,
     )
+
+
+def run_fee_impact_check(
+    strategy_name: str,
+    signals: pd.Series,
+    commission_info: object,
+    expected_slippage_bps: float,
+    output_dir: str | pathlib.Path = "_results",
+) -> FeeImpactReport:
+    """Run fee impact gate and persist result to JSON.
+
+    Writes {output_dir}/{strategy_name}/fee_impact.json.
+    Returns the FeeImpactReport (pass or fail).
+    """
+    report = fee_impact_gate(signals, commission_info, expected_slippage_bps)
+    out = pathlib.Path(output_dir) / strategy_name / "fee_impact.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(dataclasses.asdict(report), indent=2), encoding="utf-8")
+    return report
