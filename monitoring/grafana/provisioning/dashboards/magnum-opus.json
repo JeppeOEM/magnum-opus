@@ -102,12 +102,12 @@
                 "0": {
                   "color": "red",
                   "index": 0,
-                  "text": "FAILING"
+                  "text": "DOWN"
                 },
                 "1": {
                   "color": "green",
                   "index": 1,
-                  "text": "OK"
+                  "text": "UP"
                 }
               },
               "type": "value"
@@ -159,7 +159,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "min(aggregator_health)",
+          "expr": "up{job=\"aggregator\"}",
           "legendFormat": "aggregator",
           "refId": "A"
         }
@@ -1039,7 +1039,7 @@
       ]
     }
   ],
-  "refresh": "30s",
+  "refresh": "5s",
   "schemaVersion": 39,
   "tags": [
     "magnum-opus",
