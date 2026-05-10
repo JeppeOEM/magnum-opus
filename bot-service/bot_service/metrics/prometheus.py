@@ -16,6 +16,10 @@ _fill_dedup: Counter | None = None
 _order_queue_dedup: Counter | None = None
 _risk_gate_block: Counter | None = None
 _orphaned_order: Counter | None = None
+_strategy_restart: Counter | None = None
+_strategy_backoff_seconds: Gauge | None = None
+_strategy_load_failure: Counter | None = None
+_heartbeat_timeout: Counter | None = None
 
 
 def get_registry() -> CollectorRegistry:
@@ -191,3 +195,76 @@ def inc_orphaned_order(exchange: str) -> None:
             )
         counter = _orphaned_order
     counter.labels(exchange=exchange).inc()
+
+
+def inc_strategy_restart(strategy: str) -> None:
+    """Increment bot_strategy_restart_total{strategy} on watchdog-triggered restart."""
+    global _strategy_restart
+    registry = get_registry()
+    with _lock:
+        if _strategy_restart is None:
+            _strategy_restart = Counter(
+                "bot_strategy_restart_total",
+                "Strategy thread restarts by watchdog",
+                ["strategy"],
+                registry=registry,
+            )
+        counter = _strategy_restart
+    counter.labels(strategy=strategy).inc()
+
+
+def set_strategy_backoff_seconds(strategy: str, seconds: float) -> None:
+    """Set bot_strategy_backoff_seconds{strategy} gauge to current backoff duration."""
+    global _strategy_backoff_seconds
+    registry = get_registry()
+    with _lock:
+        if _strategy_backoff_seconds is None:
+            _strategy_backoff_seconds = Gauge(
+                "bot_strategy_backoff_seconds",
+                "Current watchdog backoff duration before next restart attempt",
+                ["strategy"],
+                registry=registry,
+            )
+        gauge = _strategy_backoff_seconds
+    gauge.labels(strategy=strategy).set(seconds)
+
+
+def reset_strategy_gauges(strategy: str) -> None:
+    """Reset per-strategy position/P&L gauges to 0 on watchdog crash detection.
+
+    Called synchronously before the backoff sleep (AC1). Actual gauge resets
+    implemented in Story 16.1 when bot_position_size, bot_unrealized_pnl,
+    bot_drawdown, and bot_consumer_lag are added.
+    """
+
+
+def inc_heartbeat_timeout(strategy: str) -> None:
+    """Increment bot_heartbeat_timeout_total{strategy} on bus silence timeout."""
+    global _heartbeat_timeout
+    registry = get_registry()
+    with _lock:
+        if _heartbeat_timeout is None:
+            _heartbeat_timeout = Counter(
+                "bot_heartbeat_timeout_total",
+                "Bus silence timeouts detected by per-strategy heartbeat thread",
+                ["strategy"],
+                registry=registry,
+            )
+        counter = _heartbeat_timeout
+    counter.labels(strategy=strategy).inc()
+
+
+def inc_strategy_load_failure(filename: str, reason: str) -> None:
+    """Increment bot_strategy_load_failure_total{filename, reason} on strategy file load failure."""
+    global _strategy_load_failure
+    registry = get_registry()
+    with _lock:
+        if _strategy_load_failure is None:
+            _strategy_load_failure = Counter(
+                "bot_strategy_load_failure_total",
+                "Strategy file load failures (import errors, duplicate class names)",
+                ["filename", "reason"],
+                registry=registry,
+            )
+        counter = _strategy_load_failure
+    counter.labels(filename=filename, reason=reason).inc()

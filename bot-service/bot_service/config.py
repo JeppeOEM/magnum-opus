@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     bot_reconciliation_timeout_s: int = 120
     bot_shutdown_timeout_s: int = 30
     bot_filewatcher_interval_s: int = 60
+    bot_strategies_dir: str = "strategies/active"
+    bot_exchange: str = "bybit"
 
     # WebSocket fallback
     bot_ws_fallback_timeout_live: int = 10

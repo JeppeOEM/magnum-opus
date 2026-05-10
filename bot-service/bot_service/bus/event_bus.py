@@ -68,6 +68,7 @@ class BusManager:
     def __init__(self, queue_max_depth: int | None = None) -> None:
         self._queue_max_depth_override = queue_max_depth
         self._handles = {}
+        self._handles_lock = threading.RLock()
         self._stream_keys = []
         self._started = False
         self._stop_event = threading.Event()
@@ -100,6 +101,23 @@ class BusManager:
             )
         self._handles[handle.name] = handle
 
+    def dynamic_register(self, handle: StrategyHandle) -> None:
+        """Register a strategy handle after :meth:`start` (hot-reload path).
+
+        Thread-safe: acquires :attr:`_handles_lock` before mutating.
+        """
+        with self._handles_lock:
+            self._handles[handle.name] = handle
+
+    def dynamic_deregister(self, name: str) -> None:
+        """Remove a strategy handle after :meth:`start` (hot-reload path).
+
+        Thread-safe: acquires :attr:`_handles_lock` before mutating. No-op if
+        ``name`` is not currently registered.
+        """
+        with self._handles_lock:
+            self._handles.pop(name, None)
+
     def start(self) -> None:
         """Spawn the daemon consumer thread and begin routing events."""
         self._started = True
@@ -128,7 +146,9 @@ class BusManager:
             timeout = settings.bot_subscribe_timeout_s
 
             # Wait for every strategy's ready_event before consuming.
-            for name, handle in self._handles.items():
+            with self._handles_lock:
+                initial_handles = list(self._handles.items())
+            for name, handle in initial_handles:
                 if not handle.ready_event.wait(timeout=float(timeout)):
                     log.warning(
                         "strategy_not_ready_skipped",
@@ -219,7 +239,9 @@ class BusManager:
         event = parse_stream_entry(stream_key, entry)
         if event is None:
             return
-        for handle in self._handles.values():
+        with self._handles_lock:
+            handles = list(self._handles.values())
+        for handle in handles:
             self._deliver(handle, event)
 
     def _deliver(self, handle: StrategyHandle, event: BusEvent) -> None:

@@ -153,3 +153,11 @@ development_status:
   12-4-orphaned-order-detection-and-order-alerts: done
   12-5-paperexchangeclient-simulated-fill-engine: done
   epic-12-retrospective: done
+
+  # ─── Epic 13: Strategy Lifecycle & Crash Safety ─────────────────────────────
+  epic-13: done
+  13-1-startup-reconciliation-exchange-rest-vs-questdb: done
+  13-2-file-watcher-and-strategy-auto-load: done
+  13-3-watchdog-and-exponential-backoff-restart: done
+  13-4-heartbeat-emergency-close: done
+  epic-13-retrospective: done

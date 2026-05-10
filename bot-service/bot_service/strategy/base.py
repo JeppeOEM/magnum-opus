@@ -17,7 +17,12 @@ import structlog
 
 from bot_service.bus.event_types import BarClose, GapMarker
 from bot_service.config import Settings
-from bot_service.metrics.prometheus import inc_nan_guard, set_coldstart_gap_fraction
+from bot_service.exchange import ExchangeClient, OrderRequest
+from bot_service.metrics.prometheus import (
+    inc_heartbeat_timeout,
+    inc_nan_guard,
+    set_coldstart_gap_fraction,
+)
 
 log = structlog.get_logger()
 
@@ -59,6 +64,14 @@ class BaseStrategy(ABC):
     @abstractmethod
     def paper_trading(self) -> bool: ...
 
+    @property
+    @abstractmethod
+    def bus_timeout_seconds(self) -> int: ...
+
+    @property
+    @abstractmethod
+    def close_on_bus_timeout(self) -> bool: ...
+
     @abstractmethod
     def subscribe(self) -> None:
         """Register event handlers. Routing table is fixed after this returns."""
@@ -76,10 +89,22 @@ class BaseStrategy(ABC):
         # Gap tracking
         self._signal_invalid: dict[str, bool] = {}
         self._clean_bar_count: dict[str, int] = {}
-        # Heartbeat
+        # Managed positions: symbols with open positions discovered at startup
+        # reconciliation, routed to this strategy regardless of subscribe() selections.
+        self._managed_positions: set[str] = set()
+        # Heartbeat — freeze detection
         self._heartbeat_ack = threading.Event()
         # Set by the strategy runner before starting the event loop
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Bus timeout — silence detection
+        self._last_event_ts: float = time.time()
+        self._open_positions: dict[str, float] = {}
+        # Injected by registry before start_heartbeat() is called
+        self._exchange_client: ExchangeClient | None = None
+        self._exchange: str = ""
+        # Prevents concurrent emergency-close threads for the same symbol (thread explosion guard)
+        self._emergency_close_lock = threading.Lock()
+        self._emergency_close_in_flight: set[str] = set()
 
     # ---- Indicator computation hook ----
 
@@ -132,6 +157,7 @@ class BaseStrategy(ABC):
 
     def on_bar(self, bar: BarClose) -> None:
         """Append bar to rolling DF, advance clean-bar counter, dispatch handler."""
+        self._last_event_ts = time.time()
         key = (bar.symbol, bar.tf)
         if key not in self._dfs:
             self._dfs[key] = pd.DataFrame(columns=_HISTORY_COLUMNS)
@@ -299,13 +325,19 @@ class BaseStrategy(ABC):
     # ---- Heartbeat ----
 
     def start_heartbeat(self) -> None:
-        """Spawn the heartbeat daemon thread."""
+        """Spawn the freeze-detection heartbeat thread and the bus-timeout thread."""
         t = threading.Thread(
             target=self._heartbeat_loop,
             daemon=True,
             name=f"heartbeat-{self._name}",
         )
         t.start()
+        t2 = threading.Thread(
+            target=self._bus_timeout_loop,
+            daemon=True,
+            name=f"bus-timeout-{self._name}",
+        )
+        t2.start()
 
     def ack_heartbeat(self) -> None:
         """Called by the strategy event loop to signal liveness."""
@@ -319,3 +351,84 @@ class BaseStrategy(ABC):
                 log.critical("heartbeat_timeout", strategy=self._name)
                 os.kill(os.getpid(), signal.SIGTERM)
                 return
+
+    def _bus_timeout_loop(self) -> None:
+        """OS thread: poll every 1s for bus silence; fire emergency close when elapsed."""
+        while True:
+            time.sleep(1.0)
+            elapsed = time.time() - self._last_event_ts
+            if elapsed >= self.bus_timeout_seconds:
+                self._on_bus_timeout(elapsed)
+
+    def _on_bus_timeout(self, elapsed: float) -> None:
+        """Log, increment counter, and optionally spawn emergency-close threads."""
+        pos = dict(self._open_positions)
+        log.warning(
+            "bus_timeout",
+            strategy=self._name,
+            open_positions=pos,
+            elapsed_seconds=round(elapsed, 1),
+        )
+        inc_heartbeat_timeout(self._name)
+        if not self.close_on_bus_timeout or self._exchange_client is None:
+            return
+        for symbol, qty in pos.items():
+            if qty <= 0.0:
+                continue
+            with self._emergency_close_lock:
+                if symbol in self._emergency_close_in_flight:
+                    continue
+                self._emergency_close_in_flight.add(symbol)
+            t = threading.Thread(
+                target=self._emergency_close_symbol,
+                args=(symbol, qty),
+                daemon=True,
+                name=f"emergency-close-{self._name}-{symbol}",
+            )
+            t.start()
+
+    def _emergency_close_symbol(self, symbol: str, qty: float) -> None:
+        """Retry market-sell until success or process exit. Called from daemon thread.
+
+        Skipped for paper trading — PaperExchangeClient.place_order schedules an async
+        fill task via asyncio.create_task, which asyncio.run would immediately cancel.
+        """
+        try:
+            if self.paper_trading:
+                log.warning(
+                    "emergency_close_skipped_paper_trading",
+                    strategy=self._name,
+                    symbol=symbol,
+                )
+                return
+            client = self._exchange_client
+            if client is None:
+                return
+            while True:
+                try:
+                    req = OrderRequest(
+                        strategy=self._name,
+                        exchange=self._exchange,
+                        symbol=symbol,
+                        side="sell",
+                        order_type="market",
+                        order_role="exit",
+                        size=qty,
+                        paper_trading=self.paper_trading,
+                    )
+                    asyncio.run(client.place_order(req))
+                    self._open_positions.pop(symbol, None)
+                    return
+                except Exception as exc:
+                    log.critical(
+                        "emergency_close_failed",
+                        strategy=self._name,
+                        symbol=symbol,
+                        side="sell",
+                        qty=qty,
+                        error=str(exc),
+                    )
+                    time.sleep(5.0)
+        finally:
+            with self._emergency_close_lock:
+                self._emergency_close_in_flight.discard(symbol)

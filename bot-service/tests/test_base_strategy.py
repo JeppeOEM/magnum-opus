@@ -26,6 +26,14 @@ class _StubStrategy(BaseStrategy):
     def paper_trading(self) -> bool:
         return True
 
+    @property
+    def bus_timeout_seconds(self) -> int:
+        return 300
+
+    @property
+    def close_on_bus_timeout(self) -> bool:
+        return False
+
     def subscribe(self) -> None:
         pass
 

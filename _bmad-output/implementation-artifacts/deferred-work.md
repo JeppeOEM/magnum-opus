@@ -168,3 +168,9 @@
 
 - `OFI` and `OFIL1` are identical in the accumulator — both assigned from `ofiSum` with no separate L1-only delta path; `ofi_l1` provides no L1-isolated signal downstream (`accumulator.go:529–530`)
 - `best_bid`/`best_ask` in `ob_features` reflect the last trade-tick close quote, not the current OB top — `hasCloseQuote` is not set by `SeedFromLastKnown`, so empty seconds show `""` even when OB state is fully known (`accumulator.go:568–571`)
+
+
+## Deferred from: code review of 13-1-startup-reconciliation-exchange-rest-vs-questdb (2026-05-10)
+
+- **D1: exchange="" in restored OrderRequest** — `_build_from_questdb_row` sets `exchange=""` because exchange is not stored in `order_events` DDL; fill events written after crash-recovery will have blank exchange label in QuestDB; downstream analytics/P&L attribution affected. Dev notes acknowledge this is unknown at restore time. Fix: add `exchange` symbol to `order_events` DDL in a future story.
+- **D2: ts_exchange=0 sentinel in restored PlacedOrder** — `PlacedOrder(ts_exchange=0)` is used as "unknown"; latency calculations using `now - ts_exchange` would produce nonsensical values. Dev notes explicitly state 0 as sentinel. Fix: type `ts_exchange` as `int | None` and gate latency calculations on non-None.
