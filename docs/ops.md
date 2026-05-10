@@ -148,6 +148,7 @@ Confirm the SHA matches the previous version. Feeds should reconnect within 90 s
 | aggregator | 600 MB | 2.0  |
 | redis      | 2 GB   | —    |
 | questdb    | 8 GB   | —    |
+| bot        | 2 GB   | —    |
 
 Adjust in `docker-compose.yml` under `deploy.resources.limits` if the VM has more or less RAM.
 
@@ -171,3 +172,167 @@ docker compose down -v
 # Check resource usage
 docker stats
 ```
+
+---
+
+## Bot Service
+
+The bot service (`bot/`) runs strategy threads that consume Redis candle streams, compute signals, and execute orders via exchange REST APIs in paper mode. Strategies live in `bot-service/strategies/active/` and hot-reload without restart.
+
+### Deploy
+
+**Pre-deploy checklist** (run from `bot-service/` on the VM):
+
+1. Verify all active strategies are in paper mode: `grep -r "paper_trading" strategies/active/` — all must return `True`.
+2. Verify result files exist and pass for each strategy in `strategies/active/`:
+   ```bash
+   for s in OFIBot MACrossBot; do
+     python3 -c "import json; d=json.load(open('_results/$s/fee_impact.json')); assert d['passes'], f'$s fee_impact FAILED'"
+     python3 -c "import json; d=json.load(open('_results/$s/validation_report.json')); assert d['passes'], f'$s validation FAILED'"
+     echo "$s: OK"
+   done
+   ```
+3. Check current `/health` before touching anything:
+   ```bash
+   curl -s http://localhost:8090/health | jq .
+   ```
+
+**Deploy command:**
+```bash
+docker compose pull bot
+docker compose up -d bot
+```
+
+Confirm `/health` returns `"status": "ok"` within 60 seconds:
+```bash
+curl -s http://localhost:8090/health | jq .status
+```
+
+Watch logs for 2–5 minutes:
+```bash
+docker compose logs -f bot
+```
+
+### Rollback
+
+Tag-based rollback:
+
+```bash
+# 1. Stop the broken bot service
+docker compose down bot
+
+# 2. In docker-compose.yml, add or change the bot service `image:` field to pin
+#    the previous known-good tag (e.g. image: ghcr.io/mrqdt/magnum-opus/bot:v1.2.3),
+#    then pull and restart:
+docker compose pull bot
+docker compose up -d bot
+
+# 3. Confirm /health returns ok within 60 seconds
+curl -s http://localhost:8090/health | jq .
+```
+
+If Docker image isn't available, roll back via git:
+```bash
+git checkout <previous-commit> -- bot-service/
+docker compose up -d --build bot
+```
+
+### Credential Rotation
+
+The bot service uses up to 5 exchange credentials (KuCoin: API key, secret, passphrase; Bybit: API key, secret). All credentials live exclusively in `bot-service/.env` — never in the compose `environment:` block.
+
+**Rotation steps (no-downtime):**
+
+1. Generate new API key/secret on the exchange UI (KuCoin or Bybit).
+2. Update `bot-service/.env` with the new credential values.
+3. Restart the bot service:
+   ```bash
+   docker compose restart bot
+   ```
+4. Confirm `/health` returns `"status": "ok"` within 60 seconds:
+   ```bash
+   curl -s http://localhost:8090/health | jq .
+   ```
+5. Revoke the **old** credential on the exchange UI — only after the new one is confirmed working.
+6. Verify logs show no auth errors:
+   ```bash
+   docker compose logs --tail=50 bot | grep -i "auth\|credential\|401\|403"
+   ```
+
+**Credential file format** (`bot-service/.env`):
+```
+KUCOIN_API_KEY=...
+KUCOIN_API_SECRET=...
+KUCOIN_API_PASSPHRASE=...
+BYBIT_API_KEY=...
+BYBIT_API_SECRET=...
+```
+
+Do NOT commit `.env` to git. The file is in `.gitignore`.
+
+### Alert Playbooks
+
+#### `bot_heartbeat_timeout_total` spiking
+
+**Meaning:** A strategy's event loop received no BarClose/Tick events for `bus_timeout_seconds` (300s for MACrossBot, 30s for OFIBot). The strategy may have been silently starved of events.
+
+**Steps:**
+1. Check strategy logs for the timeout:
+   ```bash
+   docker compose logs bot | grep "bus_timeout\|heartbeat_timeout"
+   ```
+2. Check Redis consumer lag for that strategy:
+   ```bash
+   curl -s http://localhost:8090/metrics | grep bot_consumer_lag
+   ```
+3. If `close_on_bus_timeout=True` (OFIBot), verify open positions were closed:
+   ```bash
+   curl -s http://localhost:8090/health | jq .strategies
+   ```
+4. If positions were NOT closed and the strategy shows "restarting" — escalate to **manual close**: query `order_events` in QuestDB for open orders and cancel manually on the exchange UI.
+5. If the timeout is intermittent (Redis slow), investigate Redis CPU and stream backlog.
+
+#### `bot_strategy_restart_total` spiking
+
+**Meaning:** The watchdog detected a crashed strategy thread and restarted it with exponential backoff (5s → 10s → 30s → 60s cap).
+
+**Steps:**
+1. Identify the failing strategy:
+   ```bash
+   curl -s http://localhost:8090/metrics | grep bot_strategy_restart_total
+   ```
+2. Check logs for the crash cause:
+   ```bash
+   docker compose logs bot | grep "strategy_thread_crashed\|strategy_load_error"
+   ```
+3. If the strategy crashes consistently (unrecoverable bug), move it to inactive to stop the restart loop:
+   ```bash
+   mv bot-service/strategies/active/ofi_bot.py bot-service/strategies/inactive/
+   # FileWatcher detects the removal and stops the thread within bot_filewatcher_interval_s
+   ```
+4. Fix the underlying bug, move back to active, and verify it stays "running":
+   ```bash
+   curl -s http://localhost:8090/health | jq .strategies
+   ```
+
+#### `bot_orphaned_order_total` > 0
+
+**Meaning:** The startup reconciliation found an order on the exchange that has no matching record in QuestDB `order_events`. This means either the ILP write failed after the order was placed, or the order was placed by a previous process and not recovered.
+
+**Critical rule: Do NOT auto-cancel orphaned orders.**
+
+**Steps:**
+1. Identify the orphaned order exchange:
+   ```bash
+   curl -s http://localhost:8090/metrics | grep bot_orphaned_order_total
+   ```
+2. Query the `order_alerts` table in QuestDB to see the alert:
+   ```sql
+   SELECT * FROM order_alerts WHERE alert_type = 'orphaned_order' ORDER BY timestamp DESC LIMIT 10;
+   ```
+3. Log into the exchange UI and verify the orphaned order's current state (open, filled, or cancelled).
+4. Check if there is a hedging position (a bot holding a long should not have an orphaned short cancelled without closing the long first).
+5. Only cancel the orphaned order after confirming:
+   - There is no open hedge that depends on it.
+   - The order size is consistent with expected strategy position sizes.
+6. If in doubt, close the entire position set manually and restart the strategy from scratch.

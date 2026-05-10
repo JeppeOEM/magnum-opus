@@ -9,7 +9,8 @@ from typing import AsyncIterator
 
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from prometheus_client.exposition import generate_latest
 from pydantic import ValidationError
 
 from bot_service.bus.event_bus import BusManager
@@ -17,6 +18,7 @@ from bot_service.config import get_settings, redact_credentials
 from bot_service.exchange import ExchangeClient
 from bot_service.exchange.bybit.rest import BybitRESTClient
 from bot_service.exchange.kucoin.rest import KuCoinRESTClient
+from bot_service.metrics.prometheus import get_registry
 from bot_service.persistence.schema import SchemaApplyError, apply_schema
 from bot_service.strategy.registry import FileWatcher
 
@@ -148,12 +150,26 @@ app = FastAPI(title="bot-service", lifespan=lifespan)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    alive = _bus_manager is not None and _bus_manager.is_alive()
+def health() -> dict[str, object]:
+    bus_alive = _bus_manager is not None and _bus_manager.is_alive()
+    strategies: dict[str, str] = (
+        _file_watcher.get_strategy_statuses() if _file_watcher is not None else {}
+    )
+    all_running = not strategies or all(v == "running" for v in strategies.values())
+    ok = bus_alive and all_running
     return {
-        "status": "ok" if alive else "degraded",
-        "bus_manager": "running" if alive else "dead",
+        "status": "ok" if ok else "degraded",
+        "bus_manager": "running" if bus_alive else "dead",
+        "strategies": strategies,
     }
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    return Response(
+        generate_latest(get_registry()),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get("/version")

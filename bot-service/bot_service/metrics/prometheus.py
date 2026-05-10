@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import threading
 
-from prometheus_client import CollectorRegistry, Counter, Gauge
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 _lock = threading.Lock()
 _registry: CollectorRegistry | None = None
+# Track label combos used by reset-able gauges (avoids gauge._metrics private API)
+_pos_pnl_symbols: dict[str, set[str]] = {}  # strategy → set[symbol]
+_gauge_strategies: set[str] = set()          # strategies seen by drawdown / consumer_lag
 _queue_drop: Counter | None = None
 _barrier_timeout: Counter | None = None
 _barrier_late: Counter | None = None
@@ -20,6 +23,18 @@ _strategy_restart: Counter | None = None
 _strategy_backoff_seconds: Gauge | None = None
 _strategy_load_failure: Counter | None = None
 _heartbeat_timeout: Counter | None = None
+# Per-strategy position / P&L gauges (Story 16.1)
+_position_size: Gauge | None = None
+_unrealized_pnl: Gauge | None = None
+_drawdown: Gauge | None = None
+_consumer_lag: Gauge | None = None
+# Order lifecycle counters (Story 16.1)
+_order_placed: Counter | None = None
+_order_filled: Counter | None = None
+_order_rejected: Counter | None = None
+# Execution latency histogram (Story 16.1)
+_order_execution_latency_ms: Histogram | None = None
+_LATENCY_BUCKETS = [10.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0]
 
 
 def get_registry() -> CollectorRegistry:
@@ -232,10 +247,26 @@ def set_strategy_backoff_seconds(strategy: str, seconds: float) -> None:
 def reset_strategy_gauges(strategy: str) -> None:
     """Reset per-strategy position/P&L gauges to 0 on watchdog crash detection.
 
-    Called synchronously before the backoff sleep (AC1). Actual gauge resets
-    implemented in Story 16.1 when bot_position_size, bot_unrealized_pnl,
-    bot_drawdown, and bot_consumer_lag are added.
+    Called synchronously before the backoff sleep. Resets all label combinations
+    for this strategy to 0.0 so dead strategies show no stale non-zero values.
     """
+    with _lock:
+        pos_g = _position_size
+        pnl_g = _unrealized_pnl
+        dd_g = _drawdown
+        lag_g = _consumer_lag
+        symbols = frozenset(_pos_pnl_symbols.get(strategy, ()))
+        has_strat = strategy in _gauge_strategies
+    for gauge in (pos_g, pnl_g):
+        if gauge is None:
+            continue
+        for symbol in symbols:
+            gauge.labels(strategy=strategy, symbol=symbol).set(0.0)
+    if has_strat:
+        for gauge in (dd_g, lag_g):
+            if gauge is None:
+                continue
+            gauge.labels(strategy=strategy).set(0.0)
 
 
 def inc_heartbeat_timeout(strategy: str) -> None:
@@ -268,3 +299,142 @@ def inc_strategy_load_failure(filename: str, reason: str) -> None:
             )
         counter = _strategy_load_failure
     counter.labels(filename=filename, reason=reason).inc()
+
+
+# ── Story 16.1: per-strategy position / P&L gauges ───────────────────────────
+
+def set_position_size(strategy: str, symbol: str, value: float) -> None:
+    """Set bot_position_size{strategy, symbol} (signed; negative = short)."""
+    global _position_size
+    registry = get_registry()
+    with _lock:
+        if _position_size is None:
+            _position_size = Gauge(
+                "bot_position_size",
+                "Open position size (signed; negative = short)",
+                ["strategy", "symbol"],
+                registry=registry,
+            )
+        gauge = _position_size
+        _pos_pnl_symbols.setdefault(strategy, set()).add(symbol)
+    gauge.labels(strategy=strategy, symbol=symbol).set(value)
+
+
+def set_unrealized_pnl(strategy: str, symbol: str, value: float) -> None:
+    """Set bot_unrealized_pnl{strategy, symbol} in USD."""
+    global _unrealized_pnl
+    registry = get_registry()
+    with _lock:
+        if _unrealized_pnl is None:
+            _unrealized_pnl = Gauge(
+                "bot_unrealized_pnl",
+                "Unrealized P&L for open position (USD)",
+                ["strategy", "symbol"],
+                registry=registry,
+            )
+        gauge = _unrealized_pnl
+        _pos_pnl_symbols.setdefault(strategy, set()).add(symbol)
+    gauge.labels(strategy=strategy, symbol=symbol).set(value)
+
+
+def set_drawdown(strategy: str, value: float) -> None:
+    """Set bot_drawdown{strategy} (fraction 0.0–1.0)."""
+    global _drawdown
+    registry = get_registry()
+    with _lock:
+        if _drawdown is None:
+            _drawdown = Gauge(
+                "bot_drawdown",
+                "Strategy drawdown from peak equity (fraction 0.0–1.0)",
+                ["strategy"],
+                registry=registry,
+            )
+        gauge = _drawdown
+        _gauge_strategies.add(strategy)
+    gauge.labels(strategy=strategy).set(value)
+
+
+def set_consumer_lag(strategy: str, value: float) -> None:
+    """Set bot_consumer_lag{strategy} (unprocessed Redis stream entries)."""
+    global _consumer_lag
+    registry = get_registry()
+    with _lock:
+        if _consumer_lag is None:
+            _consumer_lag = Gauge(
+                "bot_consumer_lag",
+                "Unprocessed Redis stream entries queued for this strategy",
+                ["strategy"],
+                registry=registry,
+            )
+        gauge = _consumer_lag
+        _gauge_strategies.add(strategy)
+    gauge.labels(strategy=strategy).set(value)
+
+
+# ── Story 16.1: order lifecycle counters ─────────────────────────────────────
+
+def inc_order_placed(strategy: str, exchange: str, symbol: str, side: str) -> None:
+    """Increment bot_order_placed_total{strategy, exchange, symbol, side}."""
+    global _order_placed
+    registry = get_registry()
+    with _lock:
+        if _order_placed is None:
+            _order_placed = Counter(
+                "bot_order_placed_total",
+                "Orders successfully placed on exchange",
+                ["strategy", "exchange", "symbol", "side"],
+                registry=registry,
+            )
+        counter = _order_placed
+    counter.labels(strategy=strategy, exchange=exchange, symbol=symbol, side=side).inc()
+
+
+def inc_order_filled(strategy: str, exchange: str, symbol: str, side: str) -> None:
+    """Increment bot_order_filled_total{strategy, exchange, symbol, side}."""
+    global _order_filled
+    registry = get_registry()
+    with _lock:
+        if _order_filled is None:
+            _order_filled = Counter(
+                "bot_order_filled_total",
+                "Orders confirmed filled",
+                ["strategy", "exchange", "symbol", "side"],
+                registry=registry,
+            )
+        counter = _order_filled
+    counter.labels(strategy=strategy, exchange=exchange, symbol=symbol, side=side).inc()
+
+
+def inc_order_rejected(strategy: str, exchange: str, symbol: str) -> None:
+    """Increment bot_order_rejected_total{strategy, exchange, symbol}."""
+    global _order_rejected
+    registry = get_registry()
+    with _lock:
+        if _order_rejected is None:
+            _order_rejected = Counter(
+                "bot_order_rejected_total",
+                "Orders rejected by exchange",
+                ["strategy", "exchange", "symbol"],
+                registry=registry,
+            )
+        counter = _order_rejected
+    counter.labels(strategy=strategy, exchange=exchange, symbol=symbol).inc()
+
+
+# ── Story 16.1: execution latency histogram ──────────────────────────────────
+
+def observe_order_execution_latency_ms(strategy: str, exchange: str, latency_ms: float) -> None:
+    """Observe bot_order_execution_latency_ms{strategy, exchange} in milliseconds."""
+    global _order_execution_latency_ms
+    registry = get_registry()
+    with _lock:
+        if _order_execution_latency_ms is None:
+            _order_execution_latency_ms = Histogram(
+                "bot_order_execution_latency_ms",
+                "Time from OrderRequest posted to exchange REST response (ms)",
+                ["strategy", "exchange"],
+                buckets=_LATENCY_BUCKETS,
+                registry=registry,
+            )
+        hist = _order_execution_latency_ms
+    hist.labels(strategy=strategy, exchange=exchange).observe(latency_ms)

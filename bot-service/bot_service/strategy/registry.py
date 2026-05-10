@@ -432,6 +432,21 @@ class FileWatcher:
             # Always clean up _pending_restart — covers CancelledError and exceptions.
             self._pending_restart.discard(class_name)
 
+    def get_strategy_statuses(self) -> dict[str, str]:
+        """Return in-memory strategy health: "running", "restarting", or "stopped"."""
+        result: dict[str, str] = {}
+        for name, (_, handle, stop_event, _) in self._loaded.items():
+            if name in self._pending_restart:
+                result[name] = "restarting"
+            elif handle.thread.is_alive() and not stop_event.is_set():
+                result[name] = "running"
+            else:
+                result[name] = "stopped"
+        for name in self._pending_restart:
+            if name not in result:
+                result[name] = "restarting"
+        return result
+
     def stop_all(self) -> None:
         """Stop all loaded strategy threads. Called during service teardown."""
         for class_name in list(self._loaded.keys()):

@@ -11,28 +11,40 @@ from bot_service.main import app
 
 
 @pytest.fixture(autouse=True)
-def reset_bus_manager() -> None:
-    """Isolate _bus_manager between tests."""
+def reset_singletons() -> None:
+    """Isolate module-level singletons between tests."""
     yield
     main_module._bus_manager = None
+    main_module._file_watcher = None
 
 
-def _client(alive: bool) -> TestClient:
+def _client(alive: bool, strategy_statuses: dict[str, str] | None = None) -> TestClient:
     mock_bm = MagicMock()
     mock_bm.is_alive.return_value = alive
     main_module._bus_manager = mock_bm
+    if strategy_statuses is not None:
+        mock_fw = MagicMock()
+        mock_fw.get_strategy_statuses.return_value = strategy_statuses
+        main_module._file_watcher = mock_fw
+    else:
+        main_module._file_watcher = None
     # No context manager — Starlette 1.0 only runs lifespan inside __enter__;
-    # without it, requests go through the routing layer directly, so _bus_manager
-    # is whatever we set above.
+    # without it, requests go through the routing layer directly, so singletons
+    # are whatever we set above.
     return TestClient(app, raise_server_exceptions=False)
 
 
+# ── /health — bus manager state ───────────────────────────────────────────────
+
 @pytest.mark.l1
-def test_health_running() -> None:
+def test_health_ok_when_bus_alive_no_strategies() -> None:
     client = _client(alive=True)
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "bus_manager": "running"}
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["bus_manager"] == "running"
+    assert data["strategies"] == {}
 
 
 @pytest.mark.l1
@@ -40,17 +52,63 @@ def test_health_degraded_when_bus_dead() -> None:
     client = _client(alive=False)
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "degraded", "bus_manager": "dead"}
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert data["bus_manager"] == "dead"
 
 
 @pytest.mark.l1
 def test_health_degraded_when_bus_manager_none() -> None:
     main_module._bus_manager = None
+    main_module._file_watcher = None
     client = TestClient(app, raise_server_exceptions=False)
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "degraded", "bus_manager": "dead"}
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert data["bus_manager"] == "dead"
 
+
+# ── /health — per-strategy status ─────────────────────────────────────────────
+
+@pytest.mark.l1
+def test_health_ok_when_all_strategies_running() -> None:
+    client = _client(alive=True, strategy_statuses={"OFIBot": "running", "MACrossBot": "running"})
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["strategies"] == {"OFIBot": "running", "MACrossBot": "running"}
+
+
+@pytest.mark.l1
+def test_health_degraded_when_strategy_restarting() -> None:
+    client = _client(alive=True, strategy_statuses={"OFIBot": "running", "MACrossBot": "restarting"})
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "degraded"
+    assert data["strategies"]["MACrossBot"] == "restarting"
+
+
+@pytest.mark.l1
+def test_health_degraded_when_strategy_stopped() -> None:
+    client = _client(alive=True, strategy_statuses={"OFIBot": "stopped"})
+    resp = client.get("/health")
+    data = resp.json()
+    assert data["status"] == "degraded"
+
+
+@pytest.mark.l1
+def test_health_includes_strategy_status_in_response() -> None:
+    client = _client(alive=True, strategy_statuses={"OFIBot": "running"})
+    resp = client.get("/health")
+    data = resp.json()
+    assert "strategies" in data
+    assert data["strategies"]["OFIBot"] == "running"
+
+
+# ── /version ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.l1
 def test_version_returns_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,14 @@ from questdb.ingress import Sender, TimestampNanos
 
 from bot_service.bus.event_types import OrderFilled
 from bot_service.exchange import ExchangeClient, ExchangeRESTError, OrderRequest, PlacedOrder
-from bot_service.metrics.prometheus import inc_order_queue_dedup, inc_risk_gate_block
+from bot_service.metrics.prometheus import (
+    inc_order_filled,
+    inc_order_placed,
+    inc_order_queue_dedup,
+    inc_order_rejected,
+    inc_risk_gate_block,
+    observe_order_execution_latency_ms,
+)
 
 log = structlog.get_logger()
 
@@ -91,6 +98,7 @@ class OrderQueueWorker:
             self._position_notional.get(req.symbol, 0.0) - notional,
         )
         del self.open_orders[fill.order_id]
+        inc_order_filled(self._strategy_name, fill.exchange, fill.symbol, fill.side)
 
         await self._write_order_event(
             order_id=fill.order_id,
@@ -208,6 +216,7 @@ class OrderQueueWorker:
             ts_placed=ts_now_us,
         )
 
+        t0 = time.monotonic()
         try:
             placed = await self._client.place_order(req)
         except ExchangeRESTError as exc:
@@ -226,6 +235,10 @@ class OrderQueueWorker:
             )
             return
 
+        observe_order_execution_latency_ms(
+            self._strategy_name, req.exchange, (time.monotonic() - t0) * 1000
+        )
+
         if placed.status == "rejected":
             await self._write_order_event(
                 **base,
@@ -234,6 +247,7 @@ class OrderQueueWorker:
                 status="rejected",
                 ts_exchange=placed.ts_exchange * 1000,  # ms → µs
             )
+            inc_order_rejected(self._strategy_name, req.exchange, req.symbol)
             return
 
         # Write BEFORE updating open_orders — crash-safety invariant (AC5)
@@ -244,6 +258,7 @@ class OrderQueueWorker:
             status="placed",
             ts_exchange=placed.ts_exchange * 1000,  # ms → µs
         )
+        inc_order_placed(self._strategy_name, req.exchange, req.symbol, req.side)
         self.open_orders[placed.order_id] = (req, placed)
         notional = req.size * (req.limit_price or 0.0)
         self._position_notional[req.symbol] = (

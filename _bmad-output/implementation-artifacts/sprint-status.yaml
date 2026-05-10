@@ -38,6 +38,7 @@
 
 generated: 2026-05-05
 last_updated: 2026-05-10
+# updated: epic-16 done; retrospective done; review patches applied to 16-1, 16-2, 16-3
 project: magnum-opus
 project_key: NOKEY
 tracking_system: file-system
@@ -180,8 +181,8 @@ development_status:
   epic-15-retrospective: done
 
   # ─── Epic 16: Production Observability & Operations ───────────────────────────
-  epic-16: backlog
-  16-1-prometheus-metrics-endpoint: backlog
-  16-2-hardened-health-and-docker-compose: backlog
-  16-3-operations-runbook-entry: backlog
-  epic-16-retrospective: optional
+  epic-16: done
+  16-1-prometheus-metrics-endpoint: done
+  16-2-hardened-health-and-docker-compose: done
+  16-3-operations-runbook-entry: done
+  epic-16-retrospective: done
