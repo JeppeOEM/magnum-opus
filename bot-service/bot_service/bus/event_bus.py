@@ -13,7 +13,7 @@ import structlog
 
 from bot_service.bus.event_types import BusEvent, GapMarker, parse_stream_entry
 from bot_service.config import get_settings
-from bot_service.metrics.prometheus import inc_queue_drop
+from bot_service.metrics.prometheus import inc_queue_drop, set_consumer_lag
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger()
 
@@ -205,6 +205,14 @@ class BusManager:
                         }
                         self._route(stream_key, str_entry)
                         r.xack(stream_key_bytes, group, msg_id)  # type: ignore[no-untyped-call]  # redis-py stubs missing xack return type
+
+                # Emit queue depth as consumer lag for every registered strategy.
+                # Runs on every successful poll (including empty) so Prometheus always
+                # has a live time series for each active strategy.
+                with self._handles_lock:
+                    lag_snapshot = [(h.name, h.queue.qsize()) for h in self._handles.values()]
+                for _name, _size in lag_snapshot:
+                    set_consumer_lag(_name, _size)
 
             except Exception as exc:
                 log.warning(
