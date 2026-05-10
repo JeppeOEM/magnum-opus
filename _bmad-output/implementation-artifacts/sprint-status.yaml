@@ -176,8 +176,8 @@ development_status:
   15-1-fee-impact-analysis-gate: done
   15-2-ofi-microstructure-bot: done
   15-3-ma-cross-baseline: done
-  15-4-funding-rate-arb-blocked: backlog
-  epic-15-retrospective: optional
+  15-4-funding-rate-arb-blocked: blocked
+  epic-15-retrospective: done
 
   # ─── Epic 16: Production Observability & Operations ───────────────────────────
   epic-16: backlog
