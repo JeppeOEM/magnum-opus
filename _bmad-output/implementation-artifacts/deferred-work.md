@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 14-4-walk-forward-stress-test-and-monte-carlo-harnesses (2026-05-10)
+
+- **D-14-4-1: Stress test results not gating `passes`** (`validation.py`) — `StressTestReport` is recorded as run but per-window Sharpe/drawdown values do not contribute to `ValidationReport.passes`. The stress test is currently informational only. Fix: add configurable max-drawdown threshold for stress windows; if any window exceeds it, `passes=False`.
+- **D-14-4-2: Monte Carlo sum is commutative — shuffle is a no-op for total P&L** (`validation.py`) — `sum(shuffled)` equals `sum(trade_pnls)` for any permutation (addition is commutative), so all `n_shuffles` simulations produce the same value and the 5th percentile equals the total P&L. This is the spec-defined behavior. Future fix: replace with bootstrap resampling with replacement (samples N trades with replacement, computing path-dependent cumulative P&L), which would capture genuine sequence-order risk.
+
 ## Deferred from: code review of 12-2-private-websocket-fill-feed-and-rest-poll-fallback (2026-05-10)
 
 - **D1: REST fallback queries open-orders endpoint, not fills endpoint** (`kucoin/ws_private.py`, `bybit/ws_private.py`) — `get_open_orders()` returns only currently-open orders; filled orders are never returned. REST fallback is a structural no-op for fills. Needs fills/history endpoint: KuCoin `/api/v1/fills`, Bybit `/v5/order/history`. Add `get_recent_fills(symbol, since_ts)` to both REST clients in story 12.3 and re-wire fallback.

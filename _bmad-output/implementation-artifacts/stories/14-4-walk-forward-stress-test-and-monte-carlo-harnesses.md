@@ -1,6 +1,6 @@
 # Story 14.4: Walk-Forward, Stress Test & Monte Carlo Harnesses
 
-## Status: ready-for-dev
+## Status: done
 
 ## Story
 
@@ -22,33 +22,33 @@
 
 ## Tasks / Subtasks
 
-- [ ] T1: Implement `_partition_dataframe` and `WalkForwardReport` dataclass
-  - [ ] T1.1: Write failing L1 tests for fold partitioning (expanding window)
-  - [ ] T1.2: Implement `_partition_dataframe(df, n_splits)` → `list[tuple[pd.DataFrame, pd.DataFrame]]`
-  - [ ] T1.3: Implement `WalkForwardReport` and `FoldResult` frozen dataclasses
-  - [ ] T1.4: Tests pass
+- [x] T1: Implement `_partition_dataframe` and `WalkForwardReport` dataclass
+  - [x] T1.1: Write failing L1 tests for fold partitioning (expanding window)
+  - [x] T1.2: Implement `_partition_dataframe(df, n_splits)` → `list[tuple[pd.DataFrame, pd.DataFrame]]`
+  - [x] T1.3: Implement `WalkForwardReport` and `FoldResult` frozen dataclasses
+  - [x] T1.4: Tests pass
 
-- [ ] T2: Implement `run_walk_forward` using backtrader cerebro
-  - [ ] T2.1: Implement `run_walk_forward(strategy_cls, feed, n_splits, commission_info)` using `_partition_dataframe` + cerebro per fold
-  - [ ] T2.2: Extract Sharpe, DrawDown, net P&L from analyzers; handle None Sharpe (no trades → 0.0)
-  - [ ] T2.3: Compute pnl_degradation = oos_pnl / is_pnl if is_pnl != 0 else 0.0
+- [x] T2: Implement `run_walk_forward` using backtrader cerebro
+  - [x] T2.1: Implement `run_walk_forward(strategy_cls, feed, n_splits, commission_info)` using `_partition_dataframe` + cerebro per fold
+  - [x] T2.2: Extract Sharpe, DrawDown, net P&L from analyzers; handle None Sharpe (no trades → 0.0)
+  - [x] T2.3: Compute pnl_degradation = oos_pnl / is_pnl if is_pnl != 0 else 0.0
 
-- [ ] T3: Implement `StressTestReport` and `run_stress_test`
-  - [ ] T3.1: Implement `StressWindowResult` and `StressTestReport` frozen dataclasses
-  - [ ] T3.2: Implement `run_stress_test(strategy_cls, feed, flash_crash_start, flash_crash_end)` with 3 named windows
+- [x] T3: Implement `StressTestReport` and `run_stress_test`
+  - [x] T3.1: Implement `StressWindowResult` and `StressTestReport` frozen dataclasses
+  - [x] T3.2: Implement `run_stress_test(strategy_cls, feed, flash_crash_start, flash_crash_end)` with 3 named windows
 
-- [ ] T4: Implement `run_monte_carlo` (pure function — L1 testable)
-  - [ ] T4.1: Write failing L1 tests for 5th-percentile computation on known distribution
-  - [ ] T4.2: Implement `run_monte_carlo(trade_pnls, n_shuffles=10_000)` using `np.random.default_rng`
-  - [ ] T4.3: Tests pass
+- [x] T4: Implement `run_monte_carlo` (pure function — L1 testable)
+  - [x] T4.1: Write failing L1 tests for 5th-percentile computation on known distribution
+  - [x] T4.2: Implement `run_monte_carlo(trade_pnls, n_shuffles=10_000)` using `np.random.default_rng`
+  - [x] T4.3: Tests pass
 
-- [ ] T5: Implement `ValidationReport` and `generate_validation_report`
-  - [ ] T5.1: Write failing L1 tests — passes=False when any threshold fails; JSON round-trip
-  - [ ] T5.2: Implement `ValidationReport` dataclass with `to_json()` method
-  - [ ] T5.3: Implement `generate_validation_report` with threshold parameters and gate tracking
-  - [ ] T5.4: Tests pass
+- [x] T5: Implement `ValidationReport` and `generate_validation_report`
+  - [x] T5.1: Write failing L1 tests — passes=False when any threshold fails; JSON round-trip
+  - [x] T5.2: Implement `ValidationReport` dataclass with `to_json()` method
+  - [x] T5.3: Implement `generate_validation_report` with threshold parameters and gate tracking
+  - [x] T5.4: Tests pass
 
-- [ ] T6: Run full test suite — 0 regressions, mypy --strict clean
+- [x] T6: Run full test suite — 0 regressions, mypy --strict clean
 
 ## Dev Notes
 
@@ -331,13 +331,35 @@ All tests `@pytest.mark.l1`. Target: 8 tests in `tests/test_validation.py`.
 
 ## Senior Developer Review (AI)
 
-*(To be filled after implementation)*
+**Date:** 2026-05-10 | **Outcome:** Changes Requested → All patches applied
+
+### Action Items
+
+- [x] [High] Degradation gate semantics inverted — `oos_pnl/is_pnl <= 0.30` passed when OOS earned only 30% of IS; fixed to `1.0 - oos_pnl/is_pnl` (fraction of IS P&L lost); gate `<= 0.30` now correctly passes when OOS retains >= 70% of IS
+- [x] [High] `dd_analysis["max"]["drawdown"]` KeyError when no trades occur — fixed to `.get("max", {}).get("drawdown", 0.0)`
+- [x] [High] `n_shuffles=0` crashes via empty list to `np.percentile` — fixed with early return
+- [x] [Med] `fold_size=0` when df has fewer rows than `n_splits+1` — added `ValueError` guard
+- [x] [Med] Stress window naive string vs tz-aware DatetimeIndex comparison — fixed to `pd.Timestamp(start, tz="UTC")`
+- [x] [User] Removed hardcoded LUNA/FTX stress windows; `run_stress_test` now takes caller-provided `windows: list[tuple[str, str, str]] | None` — user will define windows once data is collected
+- [x] [Defer] Stress test results not gating `passes` (by design — informational only) → D-14-4-1
+- [x] [Defer] `sum(shuffled)` is commutative — shuffle is spec-defined behavior, known limitation → D-14-4-2
 
 ## Dev Agent Record
 
 ### Agent Model Used
 
-*(To be filled)*
+claude-sonnet-4-6
+
+### Completion Notes
+
+- `_partition_dataframe`: expanding window, fold_size = n // (n_splits+1); index preserved (iloc slicing)
+- `run_walk_forward`: separate IS and OOS cerebro runs; DrawDown /100 for ratio; Sharpe guarded with `or 0.0`
+- `run_stress_test`: string date filtering via boolean mask on df.index; empty window → 0.0 metrics
+- `run_monte_carlo`: numpy 1.26 `default_rng`; seeded for reproducible tests; list.copy() + sum()
+- `generate_validation_report`: fee_gate short-circuit when failed; `fee_gate.passes if fee_gate is not None else None` for mypy
+- `ValidationReport`: NOT frozen (mutable construction); `to_json()` uses `dataclasses.asdict()` + `json.dumps(default=str)`
+- mypy note: backtrader import needs no `# type: ignore` (ignore_errors=true covers it); index comparison needs no ignore
+- 8 L1 tests; 164 total green; mypy --strict clean (6 files in backtest/)
 
 ### File List
 
