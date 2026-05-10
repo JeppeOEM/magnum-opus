@@ -22,10 +22,17 @@ up:
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
 	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
 	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
-	@if [ "$(VERBOSE)" = "1" ]; then \
+	@set -o pipefail; \
+	if [ "$(VERBOSE)" = "1" ]; then \
 		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build; \
 	else \
 		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 | python3 scripts/logfmt.py; \
+	fi; \
+	EXIT=$${PIPESTATUS[0]}; \
+	if [ $$EXIT -ne 0 ] && [ $$EXIT -ne 130 ]; then \
+		printf "\n\033[31m  ✗ compose exited (code %d)\033[0m\n" $$EXIT; \
+		printf "  Hint: docker compose --profile candle-blue --profile bot ps\n"; \
+		printf "        docker compose --profile candle-blue --profile bot logs --tail=40\n\n"; \
 	fi
 
 ## Stop and remove all containers (including test infra)
@@ -51,7 +58,15 @@ watch:
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
 	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
 	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
-	@docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 | python3 scripts/logfmt.py --alerts
+	@set -o pipefail; \
+	docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 \
+	| python3 scripts/logfmt.py --alerts; \
+	EXIT=$${PIPESTATUS[0]}; \
+	if [ $$EXIT -ne 0 ] && [ $$EXIT -ne 130 ]; then \
+		printf "\n\033[31m  ✗ compose exited (code %d)\033[0m\n" $$EXIT; \
+		printf "  Hint: docker compose --profile candle-blue --profile bot ps\n"; \
+		printf "        docker compose --profile candle-blue --profile bot logs --tail=40\n\n"; \
+	fi
 
 ## L1 tests — pure functions, coverage gate
 test-l1:

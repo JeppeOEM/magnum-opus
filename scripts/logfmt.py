@@ -198,17 +198,31 @@ def _run_verbose():
     except KeyboardInterrupt:
         pass
 
+_ALERT_ERROR_KEYWORDS = ("error", "failed", "fatal", "exception", "traceback", "exit code", "exited with")
+
 def _run_alerts():
-    """Print only WARN and ERROR lines immediately — no status line, no INFO."""
+    """Print WARN/ERROR JSON logs plus all non-JSON service output (startup messages, crash traces, build errors)."""
     try:
         for line in sys.stdin:
             line = line.rstrip("\n")
             m = _PREFIX.match(line)
-            content = line[m.end():] if m else line
+
+            if not m:
+                # No service prefix — raw docker output (build steps, engine events).
+                # Show only lines that look like failures; suppress normal progress noise.
+                lower = line.lower()
+                if any(kw in lower for kw in _ALERT_ERROR_KEYWORDS):
+                    print(f"\033[2m{line}\033[0m", flush=True)
+                continue
+
+            content = line[m.end():]
             try:
                 log = json.loads(content)
             except Exception:
+                # Non-JSON service log (uvicorn startup, Python traceback, etc.) — always show.
+                print(line, flush=True)
                 continue
+
             level = log.get("level", "").upper()
             if level not in ("ERROR", "WARN"):
                 continue
