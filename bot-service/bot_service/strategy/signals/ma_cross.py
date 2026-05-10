@@ -49,3 +49,7 @@ def ma_cross_signal(
     if crossed_down:
         return SignalResult(action="sell", confidence=confidence, reason="ma_cross_down")
     return SignalResult(action="hold", confidence=confidence, reason="no_cross")
+
+
+# Public alias used by MACrossBot — do NOT copy logic
+compute_ma_cross_signal = ma_cross_signal

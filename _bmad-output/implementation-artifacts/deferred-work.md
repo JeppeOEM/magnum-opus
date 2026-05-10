@@ -1,5 +1,15 @@
 # Deferred Work
 
+## Deferred from: code review of 15-3-ma-cross-baseline (2026-05-10)
+
+- **D-15-3-1: No position-flip logic — sell entry posted without closing existing long** (`ma_cross_bot.py`) — `order_role="entry"` for both buy and sell; no exit order before reversing. On a paper baseline this is acceptable but creates incorrect P&L accounting. Fix: track open side and post exit before new entry.
+- **D-15-3-2: Fallback exchange hardcoded as `"kucoin"` while configured default is `"bybit"`** (`ma_cross_bot.py:57`, also `ofi_bot.py`) — If `_exchange` injection fails, orders silently route to kucoin instead of configured exchange. Fix: remove hardcoded fallback or use settings default.
+- **D-15-3-3: `BaseStrategy.get_history` hardcodes `snapshot_1s` table for all TFs** (`base.py`) — `MACrossBot` requests `tf="1m"` history but the query always uses `snapshot_1s WHERE tf='1m'`. If 1m aggregates are not in that table, history returns empty silently and the bot starts cold. Fix: either store 1m bars in `snapshot_1s` with correct `tf` tag, or add a tf→table mapping in BaseStrategy.
+- **D-15-3-4: `has_gap=True` rows included in EMA computation** (`ma_cross.py`) — Gap-marked rows contain price at gap time; if price was anomalous, the contaminated EMA persists through ewm decay. Pre-existing in ma_cross_signal; do not modify without test coverage.
+- **D-15-3-5: `isna().all()` check allows single mid-series NaN to silently corrupt EMA** (`ma_cross.py`) — `pandas.ewm` forward-fills through mid-series NaN by default; the all-NaN guard misses partial NaN series. Pre-existing; do not modify.
+- **D-15-3-6: `_signal_invalid` guard adds 50-bar dead zone on top of signal's own guard** (`ma_cross_bot.py`) — After a gap, `_on_bar` is suppressed for 50 bars by `_signal_invalid`, then `compute_ma_cross_signal` suppresses for another bar until `slow+1` accumulated. Doubles the dead zone. Design decision.
+- **D-15-3-7: Gap-recovery counter shared across all timeframes for same symbol** (`base.py`) — `_on_clean_bar` counts ALL `on_bar` calls for a symbol regardless of tf. A future multi-TF strategy on BTCUSDT would advance the recovery counter faster than intended.
+
 ## Deferred from: code review of 15-2-ofi-microstructure-bot (2026-05-10)
 
 - **D-15-2-1: `_order_worker` typed as `object|None` lacks Protocol contract** (`base.py:106`) — Using `object` type forces `# type: ignore[attr-defined]` at every call site. A `Protocol` with `post(req: OrderRequest) -> None` would catch mismatches statically. Intentional for now to avoid import complexity.
