@@ -19,7 +19,6 @@ scrape_configs:
     static_configs:
       - targets: ['candle-blue:8081']
 
-  # Future services: add one stanza here
-  # - job_name: 'trading-bot'
-  #   static_configs:
-  #     - targets: ['trading-bot:8082']
+  - job_name: 'bot-service'
+    static_configs:
+      - targets: ['bot:8090']
