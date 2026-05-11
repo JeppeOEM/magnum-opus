@@ -56,7 +56,7 @@ func Load() Config {
 		ServicePort:         getEnv("CANDLE_SERVICE_PORT", "8081"),
 		ShutdownTimeout:     getDurationSeconds("SHUTDOWN_TIMEOUT_S", 10),
 		LogLevel:            getEnv("LOG_LEVEL", "info"),
-		QuestDBHTTPAddr:     getEnv("QUESTDB_HTTP_ADDR", "localhost:9000"),
+		QuestDBHTTPAddr:     stripHTTPScheme(getEnv("QUESTDB_HTTP_ADDR", "localhost:9000")),
 		RedisURL:            getEnv("REDIS_URL", "redis://localhost:6379"),
 		ConsumerGroup:       getEnv("CANDLE_CONSUMER_GROUP", "candle-service"),
 		SymbolsKuCoin:       parseSymbolList(os.Getenv("SYMBOLS_KUCOIN")),
@@ -105,6 +105,14 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// stripHTTPScheme removes a leading "http://" or "https://" from addr so the
+// caller can prepend its own scheme without doubling it.
+func stripHTTPScheme(addr string) string {
+	addr = strings.TrimPrefix(addr, "https://")
+	addr = strings.TrimPrefix(addr, "http://")
+	return addr
 }
 
 // parseSymbolList splits a comma-separated symbol string, trimming spaces and

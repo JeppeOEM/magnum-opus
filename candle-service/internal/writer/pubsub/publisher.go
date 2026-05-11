@@ -67,6 +67,19 @@ func (p *Publisher) Publish1sBar(ctx context.Context, bar accumulator.Bar) error
 		"ask_depth_top10": derefF(bar.AskDepthTop10Close),
 		"realized_vol":    derefF(bar.RealizedVol),
 	}
+	if bar.BuyVolume != nil {
+		payload["buy_volume"] = *bar.BuyVolume
+		payload["sell_volume"] = derefF(bar.SellVolume)
+	}
+	if bar.FootprintJSON != nil {
+		payload["footprint_json"] = *bar.FootprintJSON
+	}
+	if bar.POCPrice != nil && bar.ValueAreaHigh != nil && bar.ValueAreaLow != nil && bar.POCVolume != nil {
+		payload["poc_price"] = *bar.POCPrice
+		payload["value_area_high"] = *bar.ValueAreaHigh
+		payload["value_area_low"] = *bar.ValueAreaLow
+		payload["poc_volume"] = *bar.POCVolume
+	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		if ctx.Err() == nil {

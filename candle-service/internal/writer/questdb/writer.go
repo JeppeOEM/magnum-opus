@@ -278,8 +278,20 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 	if bar.BuyVolume != nil {
 		row = row.Float64Column("buy_volume", *bar.BuyVolume)
 	}
+	if bar.SellVolume != nil {
+		row = row.Float64Column("sell_volume", *bar.SellVolume)
+	}
 	if bar.BuyCount != nil {
 		row = row.Int64Column("buy_count", int64(*bar.BuyCount))
+	}
+	if bar.FootprintJSON != nil {
+		row = row.StringColumn("footprint_json", *bar.FootprintJSON)
+	}
+	if bar.POCPrice != nil && bar.ValueAreaHigh != nil && bar.ValueAreaLow != nil && bar.POCVolume != nil {
+		row = row.Float64Column("poc_price", *bar.POCPrice)
+		row = row.Float64Column("value_area_high", *bar.ValueAreaHigh)
+		row = row.Float64Column("value_area_low", *bar.ValueAreaLow)
+		row = row.Float64Column("poc_volume", *bar.POCVolume)
 	}
 
 	// Block trades

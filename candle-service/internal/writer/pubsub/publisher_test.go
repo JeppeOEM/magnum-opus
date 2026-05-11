@@ -139,6 +139,62 @@ func TestPublisher_TsNs(t *testing.T) {
 	}
 }
 
+func TestPublisher_ValueAreaFields_Present(t *testing.T) {
+	fake := &fakePubSubClient{}
+	p := New(fake, "kucoin", "BTCUSDT")
+	bar := accumulator.Bar{
+		Exchange:      "kucoin",
+		Symbol:        "BTCUSDT",
+		BuyVolume:     ptr(3.0),
+		SellVolume:    ptr(7.0),
+		POCPrice:      ptr(67000.5),
+		ValueAreaHigh: ptr(67100.0),
+		ValueAreaLow:  ptr(66900.0),
+		POCVolume:     ptr(5.0),
+	}
+	if err := p.Publish1sBar(context.Background(), bar); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(fake.calls[0].Payload, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	checks := map[string]float64{
+		"poc_price":      67000.5,
+		"value_area_high": 67100.0,
+		"value_area_low":  66900.0,
+		"poc_volume":      5.0,
+	}
+	for field, want := range checks {
+		v, ok := got[field].(float64)
+		if !ok {
+			t.Errorf("field %s missing or wrong type (got %v)", field, got[field])
+			continue
+		}
+		if v != want {
+			t.Errorf("field %s = %v, want %v", field, v, want)
+		}
+	}
+}
+
+func TestPublisher_ValueAreaFields_AbsentWhenNoPOC(t *testing.T) {
+	fake := &fakePubSubClient{}
+	p := New(fake, "kucoin", "BTCUSDT")
+	bar := accumulator.Bar{Exchange: "kucoin", Symbol: "BTCUSDT"} // POCPrice == nil
+	if err := p.Publish1sBar(context.Background(), bar); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(fake.calls[0].Payload, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, field := range []string{"poc_price", "value_area_high", "value_area_low", "poc_volume"} {
+		if _, exists := got[field]; exists {
+			t.Errorf("field %s must be absent from zero-trade bar payload", field)
+		}
+	}
+}
+
 func TestPublisher_ClientError(t *testing.T) {
 	wantErr := errors.New("redis down")
 	fake := &fakePubSubClient{err: wantErr}

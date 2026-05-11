@@ -25,13 +25,15 @@ export class LadderRenderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.resize();
-    window.addEventListener("resize", () => this.resize());
+    const ro = new ResizeObserver(() => this.resize());
+    ro.observe(this.canvas.parentElement!);
   }
 
   resize() {
     const parent = this.canvas.parentElement!;
-    const w = parent.clientWidth;
-    const h = parent.clientHeight;
+    const w = parent.clientWidth || parent.offsetWidth;
+    const h = parent.clientHeight || parent.offsetHeight;
+    if (w === 0 || h === 0) return;
     this.canvas.width = w * this.dpr;
     this.canvas.height = h * this.dpr;
     this.canvas.style.width = w + "px";

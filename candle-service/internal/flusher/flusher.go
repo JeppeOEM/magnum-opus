@@ -676,6 +676,12 @@ func parseCSVRow(rec []string, idx map[string]int) (Snapshot1sRow, error) {
 	row.OFI = parseFloat(get("ofi"))
 	row.OFIL1 = parseFloat(get("ofi_l1"))
 	row.BuyVolume = parseFloat(get("buy_volume"))
+	row.SellVolume = parseFloat(get("sell_volume"))
+	row.FootprintJSON = getString(get("footprint_json"))
+	row.POCPrice = parseFloat(get("poc_price"))
+	row.ValueAreaHigh = parseFloat(get("value_area_high"))
+	row.ValueAreaLow = parseFloat(get("value_area_low"))
+	row.POCVolume = parseFloat(get("poc_volume"))
 	row.BlockBuyVolume = parseFloat(get("block_buy_volume"))
 	row.BlockSellVolume = parseFloat(get("block_sell_volume"))
 	row.MaxTradeSize = parseFloat(get("max_trade_size"))
@@ -721,6 +727,13 @@ func parseCSVRow(rec []string, idx map[string]int) (Snapshot1sRow, error) {
 	}
 
 	return row, nil
+}
+
+func getString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func parseFloat(s string) *float64 {

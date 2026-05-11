@@ -8,7 +8,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/ws":      { target: WS_URL.replace(/^ws/, "http"), ws: true, changeOrigin: true },
-      "/heatmap": { target: API_URL, changeOrigin: true },
+      "^/heatmap$": { target: API_URL, changeOrigin: true },
       "/candles": { target: API_URL, changeOrigin: true },
     },
   },

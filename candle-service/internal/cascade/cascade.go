@@ -47,6 +47,8 @@ type Bar struct {
 	BarCount   int
 	GapCount   int
 	IsComplete bool
+	BuyVolume  float64
+	SellVolume float64
 }
 
 // cascadeAcc holds the rolling accumulation state for one timeframe.
@@ -61,6 +63,7 @@ type cascadeAcc struct {
 	tradeCount int
 	barCount   int
 	gapCount   int
+	buyVolume  float64
 }
 
 func (a *cascadeAcc) fold(bar accumulator.Bar) {
@@ -96,6 +99,9 @@ func (a *cascadeAcc) fold(bar accumulator.Bar) {
 	a.tradeCount += bar.TradeCount
 	a.barCount++
 	a.gapCount += bar.GapCount
+	if bar.BuyVolume != nil {
+		a.buyVolume += *bar.BuyVolume
+	}
 }
 
 func (a *cascadeAcc) reset(openTs int64) {
@@ -114,6 +120,8 @@ func (a *cascadeAcc) toBar(exchange, symbol string, tf TF, isComplete bool) Bar 
 		BarCount:   a.barCount,
 		GapCount:   a.gapCount,
 		IsComplete: isComplete,
+		BuyVolume:  a.buyVolume,
+		SellVolume: max(0, a.volume-a.buyVolume),
 	}
 	if a.open != nil {
 		v := *a.open
@@ -224,13 +232,16 @@ func (e *Engine) RestoreFromHash(tf TF, fields map[string]string) {
 	if v, ok := fields["gap_count"]; ok {
 		a.gapCount, _ = strconv.Atoi(v)
 	}
+	if v, ok := fields["buy_volume"]; ok {
+		a.buyVolume, _ = strconv.ParseFloat(v, 64)
+	}
 }
 
 // ToHash serialises the current TF accumulator to a Redis HASH field map.
-// All 10 fields are always written (missing fields on read = zero/default).
+// All 11 fields are always written (missing fields on read = zero/default).
 func (e *Engine) ToHash(tf TF) map[string]string {
 	a := e.accs[tf]
-	m := make(map[string]string, 10)
+	m := make(map[string]string, 11)
 	m["open_ts"] = strconv.FormatInt(a.openTs, 10)
 	m["open"] = floatOrEmpty(a.open)
 	m["high"] = floatOrEmpty(a.high)
@@ -241,6 +252,7 @@ func (e *Engine) ToHash(tf TF) map[string]string {
 	m["trade_count"] = strconv.Itoa(a.tradeCount)
 	m["bar_count"] = strconv.Itoa(a.barCount)
 	m["gap_count"] = strconv.Itoa(a.gapCount)
+	m["buy_volume"] = strconv.FormatFloat(a.buyVolume, 'f', -1, 64)
 	return m
 }
 

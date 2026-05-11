@@ -197,3 +197,12 @@ development_status:
   17-4-bot-service-orderbook-subscription: done
   17-5-frontend-heatmap-ladder-and-microstructure-panels: done
   epic-17-retrospective: done
+
+  # ─── Epic 19: Candle Service Footprint + Signals ──────────────────────────────
+  epic-19: in-progress
+  19-1-footprint-accumulator-redis-stream-enrichment: done
+  19-2-value-area-signal-group-c: done
+  19-3-imbalance-signals-group-a: backlog
+  19-4-unfinished-auction-absorption-group-b: backlog
+  19-5-divergence-cvd-iceberg-group-d: backlog
+  epic-19-retrospective: optional

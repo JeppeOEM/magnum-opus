@@ -108,7 +108,7 @@ func barFields(bar cascade.Bar, isComplete bool) map[string]any {
 	if isComplete {
 		isCompleteStr = "true"
 	}
-	return map[string]any{
+	m := map[string]any{
 		"ts":          strconv.FormatInt(bar.OpenTs, 10),
 		"exchange":    bar.Exchange,
 		"symbol":      bar.Symbol,
@@ -124,6 +124,11 @@ func barFields(bar cascade.Bar, isComplete bool) map[string]any {
 		"gap_count":   strconv.Itoa(bar.GapCount),
 		"is_complete": isCompleteStr,
 	}
+	if bar.TradeCount > 0 {
+		m["buy_volume"] = strconv.FormatFloat(bar.BuyVolume, 'f', -1, 64)
+		m["sell_volume"] = strconv.FormatFloat(bar.SellVolume, 'f', -1, 64)
+	}
+	return m
 }
 
 func floatOrEmpty(f *float64) string {

@@ -26,7 +26,17 @@ const gaugeDescEl = document.getElementById("gauge-desc")!;
 const book = new OrderBook();
 const heatmapBuf = new HeatmapBuffer(HEATMAP_COLS, HEATMAP_BINS);
 const ladder = new LadderRenderer(ladderCanvas);
-const heatmap = new HeatmapRenderer(heatmapCanvas, heatmapBuf);
+let heatmap: HeatmapRenderer | null = null;
+try {
+  heatmap = new HeatmapRenderer(heatmapCanvas, heatmapBuf);
+} catch (e) {
+  console.warn("HeatmapRenderer init failed (WebGL2 unavailable?):", e);
+  heatmapCanvas.style.display = "none";
+  const msg = document.createElement("div");
+  msg.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#f44;font-size:13px;";
+  msg.textContent = "WebGL2 unavailable — heatmap disabled";
+  heatmapCanvas.parentElement?.appendChild(msg);
+}
 
 const ws = new WebSocketClient(WS_URL);
 
@@ -78,9 +88,9 @@ ws.onSnapshot(({ tsNs, bids, asks }) => {
           priceMap.set(bin, (priceMap.get(bin) ?? 0) + level.size);
         }
       }
-      const prevCol = (heatmapBuf.writePosition - 1 + HEATMAP_COLS) % HEATMAP_COLS;
+      const col = heatmapBuf.writePosition;
       heatmapBuf.writeColumn(priceMap);
-      heatmap.updateColumn(prevCol);
+      heatmap?.updateColumn(col);
       drawAxes(range.min, range.max);
     }
   }
@@ -102,9 +112,9 @@ function flushNonLinear(ofi: number, priceMin: number, priceMax: number) {
     ? Math.max(1, Math.round(Math.min(4, Math.abs(ofi) / meanOfi)))
     : 1;
   for (let i = 0; i < n; i++) {
-    const prevCol = (heatmapBuf.writePosition - 1 + HEATMAP_COLS) % HEATMAP_COLS;
+    const col = heatmapBuf.writePosition;
     heatmapBuf.writeColumn(currentSecPriceMap);
-    heatmap.updateColumn(prevCol);
+    heatmap?.updateColumn(col);
   }
   currentSecPriceMap = new Map();
   drawAxes(priceMin, priceMax);
@@ -139,7 +149,7 @@ symbolSelect.addEventListener("change", () => {
   book.asks = [];
   heatmapBuf.data.fill(0);
   heatmapBuf.writePosition = 0;
-  heatmap.uploadAll();
+  heatmap?.uploadAll();
   currentSecPriceMap.clear();
   ofiHistory.length = 0;
   hasData = false;
@@ -164,7 +174,7 @@ async function loadHistorical() {
     if (!res.ok) return;
     const buf = await res.arrayBuffer();
     heatmapBuf.loadHistorical(buf, 0, 1_000_000);
-    heatmap.uploadAll();
+    heatmap?.uploadAll();
   } catch {
     // Historical data unavailable
   }

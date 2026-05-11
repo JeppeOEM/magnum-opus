@@ -71,8 +71,16 @@ type Snapshot1sRow struct {
 	OFIL1 *float64 `parquet:"ofi_l1"`
 
 	// Trade flow
-	BuyVolume *float64 `parquet:"buy_volume"`
-	BuyCount  *int32   `parquet:"buy_count"`
+	BuyVolume     *float64 `parquet:"buy_volume"`
+	SellVolume    *float64 `parquet:"sell_volume"`
+	BuyCount      *int32   `parquet:"buy_count"`
+	FootprintJSON *string  `parquet:"footprint_json"`
+
+	// Value Area (Signal Group C)
+	POCPrice      *float64 `parquet:"poc_price"`
+	ValueAreaHigh *float64 `parquet:"value_area_high"`
+	ValueAreaLow  *float64 `parquet:"value_area_low"`
+	POCVolume     *float64 `parquet:"poc_volume"`
 
 	// Block trades
 	BlockBuyVolume  *float64 `parquet:"block_buy_volume"`

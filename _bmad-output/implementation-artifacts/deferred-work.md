@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 19-2-value-area-signal-group-c (2026-05-11)
+
+- **D-19-2-1: `FootprintJSON` non-nil while `POCPrice` nil for zero-size trades** — If a zero-size trade arrives, footprintMap gets an entry with vol=0; `ComputeValueArea` returns `ok=false` leaving `POCPrice` nil, but `FootprintJSON` is still encoded. Fix: add `if s <= 0 { return }` guard in `Apply()` after size parse. Pre-existing 19-1 design issue.
+- **D-19-2-2: `derefF(bar.SellVolume)` vs `*bar.BuyVolume` asymmetry in pubsub publisher** — Within `if bar.BuyVolume != nil`, `sell_volume` uses `derefF` (silent 0 on nil) while `buy_volume` uses direct deref (panic on nil). Symmetric `*bar.SellVolume` would be safer. Pre-existing 19-1 change.
+- **D-19-2-3: `Reset()` redundant `make` after `BarReset()`'s `clear` for footprintMap** — `Reset()` calls `BarReset()` (which clears the map), then does `make()` on footprintMap again, discarding the just-cleared allocation. Minor performance waste. Pre-existing 19-1 pattern.
+- **D-19-2-4: No test for malformed price-string keys in `ComputeValueArea`** — `strconv.ParseFloat` errors silently `continue`; no test exercises this. Low risk given exchange prices are well-formatted, but a test covering skip-on-bad-key would improve robustness. Pre-existing 19-1 data-contract assumption.
+
 ## Deferred from: code review of 17-4-bot-service-orderbook-subscription (2026-05-11)
 
 - **D-17-4-1: No reconnect in `_run_pubsub`** (`event_bus.py`) — Single Redis error or network blip exits the pub/sub thread permanently; only one `pubsub_thread_error` log line as signal. Explicit "future hardening item" per story spec. Add a retry loop matching `_consume_loop`'s exponential backoff.

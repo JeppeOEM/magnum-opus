@@ -4,6 +4,7 @@
 package accumulator
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"strconv"
@@ -81,8 +82,16 @@ type Bar struct {
 	DepthTo1PctAsk *float64
 
 	// Trade flow — nil when TradeCount==0
-	BuyVolume *float64
-	BuyCount  *int
+	BuyVolume     *float64
+	BuyCount      *int
+	SellVolume    *float64
+	FootprintJSON *string
+
+	// Value Area (Signal Group C) — nil when TradeCount==0
+	POCPrice      *float64
+	ValueAreaHigh *float64
+	ValueAreaLow  *float64
+	POCVolume     *float64
 
 	// Block trades — nil when no block trades occurred or threshold unavailable
 	BlockBuyVolume  *float64
@@ -158,8 +167,9 @@ type Accumulator struct {
 	hasTicks bool // set true on first Apply() call this bar
 
 	// trade flow
-	buyVolume float64
-	buyCount  int
+	buyVolume   float64
+	buyCount    int
+	footprintMap map[string]features.FootprintCell
 
 	// lastKnown OB state — survives BarReset, cleared by Reset
 	lastKnownBid   float64
@@ -251,6 +261,7 @@ func New(exchange, symbol string, clk Clock) *Accumulator {
 		symbol:           symbol,
 		clk:              clk,
 		tradePriceLevels: make(map[string]struct{}),
+		footprintMap:     make(map[string]features.FootprintCell),
 	}
 }
 
@@ -430,6 +441,15 @@ func (a *Accumulator) Apply(price, size string, isTrade bool, side string, tsMs 
 		a.buyCount++
 	}
 
+	// Footprint accumulation: per-price buy/sell volume within this bar.
+	cell := a.footprintMap[price]
+	if side == "buy" {
+		cell.BuyVol += s
+	} else {
+		cell.SellVol += s
+	}
+	a.footprintMap[price] = cell
+
 	// VWMP and effective spread — only when mid is available at trade time.
 	if hasMid {
 		a.vwmpNumer += mid * s
@@ -552,6 +572,27 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		}
 		bar.BuyVolume = ptr(a.buyVolume)
 		bar.BuyCount = ptrInt(a.buyCount)
+		bar.SellVolume = ptr(max(0, a.volumeSum-a.buyVolume))
+		if len(a.footprintMap) > 0 {
+			type jsonCell struct {
+				B float64 `json:"b"`
+				S float64 `json:"s"`
+			}
+			enc := make(map[string]jsonCell, len(a.footprintMap))
+			for k, v := range a.footprintMap {
+				enc[k] = jsonCell{B: v.BuyVol, S: v.SellVol}
+			}
+			if b, err := json.Marshal(enc); err == nil {
+				s := string(b)
+				bar.FootprintJSON = &s
+			}
+			if poc, vah, val, pocVol, ok := features.ComputeValueArea(a.footprintMap); ok {
+				bar.POCPrice = ptr(poc)
+				bar.ValueAreaHigh = ptr(vah)
+				bar.ValueAreaLow = ptr(val)
+				bar.POCVolume = ptr(pocVol)
+			}
+		}
 	}
 
 	if a.hasBlockData {
@@ -779,6 +820,7 @@ func (a *Accumulator) BarReset() {
 	a.firstSign = 0
 	a.lastSign = 0
 	clear(a.tradePriceLevels)
+	clear(a.footprintMap)
 	// lastKnownBid/lastKnownAsk/hasLastKnownOB intentionally NOT cleared
 	// lastMidPrice/hasLastMid intentionally NOT cleared (carry-forward)
 	a.barCount++
@@ -795,6 +837,7 @@ func (a *Accumulator) Reset() {
 	a.lastMidPrice = 0
 	a.hasLastMid = false
 	a.tradePriceLevels = make(map[string]struct{})
+	a.footprintMap = make(map[string]features.FootprintCell)
 }
 
 func ptr(f float64) *float64 { return &f }

@@ -108,19 +108,22 @@ export class HeatmapRenderer {
     this.uMaxValue = gl.getUniformLocation(prog, "uMaxValue")!;
 
     this.resize(canvas);
-    window.addEventListener("resize", () => this.resize(canvas));
+    const ro = new ResizeObserver(() => this.resize(canvas));
+    ro.observe(canvas.parentElement!);
   }
 
   resize(canvas: HTMLCanvasElement) {
     const dpr = window.devicePixelRatio || 1;
     const parent = canvas.parentElement!;
-    const w = parent.clientWidth;
-    const h = parent.clientHeight;
+    const w = parent.clientWidth || parent.offsetWidth;
+    const h = parent.clientHeight || parent.offsetHeight;
+    if (w === 0 || h === 0) return;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     this.gl.viewport(0, 0, canvas.width, canvas.height);
+    this.draw();
   }
 
   /** Upload one column that was just written and redraw. */

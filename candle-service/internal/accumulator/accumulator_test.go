@@ -1,6 +1,7 @@
 package accumulator_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -1197,4 +1198,153 @@ func TestAccumulator_EmptyBar_CloseQuoteNil(t *testing.T) {
 	assert.Nil(t, bar.BestBid, "empty bar: close quote must be nil")
 	assert.Nil(t, bar.OFI, "empty bar: OFI must be nil")
 	assert.Nil(t, bar.BestBidChanges, "empty bar: no hasQuoteActivity → BestBidChanges nil")
+}
+
+// ── Footprint tests (Story 19.1) ─────────────────────────────────────────────
+
+func TestAccumulator_Footprint_BuyTickAccumulates(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.5", "0.1", true, "buy", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.FootprintJSON)
+	var m map[string]map[string]float64
+	require.NoError(t, json.Unmarshal([]byte(*bar.FootprintJSON), &m))
+	cell, ok := m["67000.5"]
+	require.True(t, ok, "price key must be present")
+	assert.InDelta(t, 0.1, cell["b"], 1e-9, "buy volume")
+	assert.InDelta(t, 0.0, cell["s"], 1e-9, "sell volume must be zero")
+}
+
+func TestAccumulator_Footprint_SellTickAccumulates(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.5", "0.2", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.FootprintJSON)
+	var m map[string]map[string]float64
+	require.NoError(t, json.Unmarshal([]byte(*bar.FootprintJSON), &m))
+	cell, ok := m["67000.5"]
+	require.True(t, ok)
+	assert.InDelta(t, 0.0, cell["b"], 1e-9, "buy volume must be zero")
+	assert.InDelta(t, 0.2, cell["s"], 1e-9, "sell volume")
+}
+
+func TestAccumulator_Footprint_BothSidesAtSamePrice(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.5", "0.3", true, "buy", 0, noQ, q)
+	acc.Apply("67000.5", "0.7", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.FootprintJSON)
+	var m map[string]map[string]float64
+	require.NoError(t, json.Unmarshal([]byte(*bar.FootprintJSON), &m))
+	cell := m["67000.5"]
+	assert.InDelta(t, 0.3, cell["b"], 1e-9, "buy volume accumulates")
+	assert.InDelta(t, 0.7, cell["s"], 1e-9, "sell volume accumulates")
+}
+
+func TestAccumulator_Footprint_MultiplePriceLevels(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.5", "1.0", true, "buy", 0, noQ, q)
+	acc.Apply("67001.0", "2.0", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.FootprintJSON)
+	var m map[string]map[string]float64
+	require.NoError(t, json.Unmarshal([]byte(*bar.FootprintJSON), &m))
+	assert.Len(t, m, 2, "two distinct price levels")
+	assert.InDelta(t, 1.0, m["67000.5"]["b"], 1e-9)
+	assert.InDelta(t, 2.0, m["67001.0"]["s"], 1e-9)
+}
+
+func TestAccumulator_Footprint_BarResetClearsMap(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	// Bar 1: buy 1.0 at 67000.5
+	acc.Apply("67000.5", "1.0", true, "buy", 0, noQ, q)
+	acc.BarReset()
+
+	// Bar 2: buy 0.3 at a different price — must see only bar-2 data in FootprintJSON
+	acc.Apply("68000.0", "0.3", true, "buy", 0, noQ, q)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.FootprintJSON, "bar after reset: FootprintJSON must not be nil when trades present")
+	var m map[string]map[string]float64
+	require.NoError(t, json.Unmarshal([]byte(*bar.FootprintJSON), &m))
+	assert.Len(t, m, 1, "only the post-reset trade must appear — pre-reset data must be gone")
+	assert.Contains(t, m, "68000.0", "only bar-2 price must be present")
+	assert.NotContains(t, m, "67000.5", "bar-1 price must be absent after reset")
+}
+
+func TestAccumulator_Footprint_ZeroTradeBar_NilFields(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.FootprintJSON, "zero-trade bar: FootprintJSON must be nil")
+	assert.Nil(t, bar.SellVolume, "zero-trade bar: SellVolume must be nil")
+	assert.Nil(t, bar.BuyVolume, "zero-trade bar: BuyVolume must be nil")
+}
+
+func TestAccumulator_Footprint_SellVolumeEqualsVolumeMinusBuyVolume(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.5", "3.0", true, "buy", 0, noQ, q)
+	acc.Apply("67000.5", "7.0", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.Volume)
+	require.NotNil(t, bar.BuyVolume)
+	require.NotNil(t, bar.SellVolume)
+	assert.InDelta(t, 10.0, *bar.Volume, 1e-9, "total volume")
+	assert.InDelta(t, 3.0, *bar.BuyVolume, 1e-9, "buy volume")
+	assert.InDelta(t, 7.0, *bar.SellVolume, 1e-9, "sell volume = volume - buy_volume")
+}
+
+// ── Value Area integration tests (Story 19.2) ────────────────────────────────
+
+func TestAccumulator_ValueArea_FieldsSetOnBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	// Two price levels so value area is well-defined.
+	acc.Apply("67000.0", "3.0", true, "buy", 0, noQ, q)
+	acc.Apply("67001.0", "7.0", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.POCPrice, "POCPrice must be non-nil when trades present")
+	require.NotNil(t, bar.ValueAreaHigh, "ValueAreaHigh must be non-nil when trades present")
+	require.NotNil(t, bar.ValueAreaLow, "ValueAreaLow must be non-nil when trades present")
+	require.NotNil(t, bar.POCVolume, "POCVolume must be non-nil when trades present")
+	// POC should be 67001.0 (vol=7, higher than 67000.0 vol=3)
+	assert.InDelta(t, 67001.0, *bar.POCPrice, 1e-9, "poc at highest-volume price")
+	assert.InDelta(t, 7.0, *bar.POCVolume, 1e-9, "poc volume")
+}
+
+func TestAccumulator_ValueArea_NilOnZeroTradeBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.POCPrice, "zero-trade bar: POCPrice must be nil")
+	assert.Nil(t, bar.ValueAreaHigh, "zero-trade bar: ValueAreaHigh must be nil")
+	assert.Nil(t, bar.ValueAreaLow, "zero-trade bar: ValueAreaLow must be nil")
+	assert.Nil(t, bar.POCVolume, "zero-trade bar: POCVolume must be nil")
+}
+
+func TestAccumulator_ValueArea_ClearedByBarReset(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.0", "5.0", true, "buy", 0, noQ, q)
+
+	bar1 := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar1.POCPrice, "bar1 must have POCPrice")
+
+	acc.BarReset()
+
+	// After reset with no new trades, value area fields must be nil.
+	bar2 := acc.CurrentBar(epoch.UnixMilli()+1000, false)
+	assert.Nil(t, bar2.POCPrice, "POCPrice must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.ValueAreaHigh, "ValueAreaHigh must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.ValueAreaLow, "ValueAreaLow must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.POCVolume, "POCVolume must be nil after BarReset with no trades")
 }

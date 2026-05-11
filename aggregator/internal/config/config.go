@@ -162,7 +162,7 @@ func Load() (*Config, error) {
 		},
 		QuestDB: QuestDBConfig{
 			ILPAddr:  reqStr("QUESTDB_ILP_ADDR"),
-			HTTPAddr: reqStr("QUESTDB_HTTP_ADDR"),
+			HTTPAddr: strings.TrimPrefix(strings.TrimPrefix(reqStr("QUESTDB_HTTP_ADDR"), "https://"), "http://"),
 		},
 		Symbols: SymbolConfig{
 			KuCoin: fc.Exchanges["kucoin"].Symbols,
