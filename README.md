@@ -13,6 +13,7 @@ Real-time crypto market data pipeline. Two Go services connect live exchange Web
 - [Quick Start](#quick-start)
 - [Running with Docker Compose](#running-with-docker-compose)
 - [Dev Mode](#dev-mode)
+- [Frontend](#frontend)
 - [Monitoring & Observability](#monitoring--observability)
 - [Viewing Logs](#viewing-logs)
 - [Health Endpoints](#health-endpoints)
@@ -90,7 +91,8 @@ KuCoin WS / Bybit WS
 ## Prerequisites
 
 - **Docker** and **Docker Compose v2** — `docker compose version` must return v2.x
-- **Go 1.22+** — only needed for `make dev` and `make test`
+- **Go 1.22+** — only needed for `make dev`, `make test`, and running the gateway
+- **Node.js 18+** — only needed for the frontend (`npm run dev`)
 - **jq** and **curl** — only needed for the blue-green deploy script
 - **Python 3** — used by `scripts/logfmt.py` (bundled, no install needed)
 
@@ -229,6 +231,63 @@ LOG_LEVEL=debug REDIS_ADDR=myredis:6379 make dev-aggregator
 ```bash
 make dev-infra-down     # stops and removes Redis + QuestDB
 ```
+
+---
+
+## Frontend
+
+The frontend is a Vite + TypeScript app under `frontend/`. It requires the **gateway** service (also in this repo under `gateway/`) which multiplexes live orderbook and 1s candle pub/sub from Redis to the browser over a single WebSocket.
+
+### Pages
+
+| URL | Description |
+|-----|-------------|
+| `http://localhost:5173/` | Candle chart with volume profile and bot order overlay stub |
+| `http://localhost:5173/heatmap.html` | Live orderbook heatmap, depth ladder, microstructure health gauge |
+
+### Start (dev mode)
+
+Requires the full data pipeline already running (`make dev-infra` + aggregator + candle-service, or `make up`).
+
+```bash
+# Terminal A — gateway (WebSocket bridge between Redis pub/sub and browser)
+cd gateway
+REDIS_ADDR=localhost:6379 go run ./cmd/gateway
+# Listens on :8083. Use GATEWAY_ADDR=:9000 to change port.
+
+# Terminal B — frontend dev server
+cd frontend
+npm install          # first time only
+VITE_WS_URL=ws://localhost:8083 npm run dev
+# Opens at http://localhost:5173
+```
+
+The Vite dev server proxies `/ws` to the gateway and `/heatmap`, `/candles` to `VITE_API_URL` (defaults to `http://localhost:3000` — unused if you only need live data).
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GATEWAY_ADDR` | `:8083` | Gateway listen address |
+| `REDIS_ADDR` | `localhost:6379` | Redis address for the gateway |
+| `VITE_WS_URL` | `ws://localhost:3000` | WebSocket URL the frontend connects to — set to `ws://localhost:8083` |
+| `VITE_API_URL` | `http://localhost:3000` | REST API base URL for historical heatmap and candle data |
+
+### Production build
+
+```bash
+cd frontend
+npm run build        # output in frontend/dist/
+```
+
+Serves `dist/index.html` and `dist/heatmap.html` from any static file server.
+
+### Heatmap features
+
+- **Linear mode** (default): one column per orderbook tick.
+- **Non-linear mode** (toggle button): column width proportional to OFI magnitude — `N = max(1, round(clamp(|ofi| / rollingMean, 0.25, 4)))` columns per 1s candle. Quiet seconds are compressed; high-activity seconds are expanded.
+- **Microstructure health gauge**: `clamp((ofi / spread) × bid_ask_imbalance, −1, 1)` — green > 0.3, amber −0.3 to 0.3, red < −0.3.
+- **Waiting overlay**: shown until the first live orderbook message arrives.
 
 ---
 
