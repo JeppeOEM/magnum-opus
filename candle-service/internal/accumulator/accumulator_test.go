@@ -1348,3 +1348,49 @@ func TestAccumulator_ValueArea_ClearedByBarReset(t *testing.T) {
 	assert.Nil(t, bar2.ValueAreaLow, "ValueAreaLow must be nil after BarReset with no trades")
 	assert.Nil(t, bar2.POCVolume, "POCVolume must be nil after BarReset with no trades")
 }
+
+func TestAccumulator_Imbalance_FieldsSetOnBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	// buy-imbalanced cell: 10 buy vs 1 sell at 67000 (10 > 3×1, sellVol > 0)
+	acc.Apply("67000.0", "10.0", true, "buy", 0, noQ, q)
+	acc.Apply("67000.0", "1.0", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.ImbalanceBuyCount, "ImbalanceBuyCount must be non-nil when trades present")
+	require.NotNil(t, bar.ImbalanceSellCount, "ImbalanceSellCount must be non-nil")
+	require.NotNil(t, bar.ImbalanceStackBuy, "ImbalanceStackBuy must be non-nil")
+	require.NotNil(t, bar.ImbalanceStackSell, "ImbalanceStackSell must be non-nil")
+	require.NotNil(t, bar.ImbalanceRatio, "ImbalanceRatio must be non-nil")
+	assert.Equal(t, 1, *bar.ImbalanceBuyCount, "one buy-imbalanced level")
+	assert.Equal(t, 0, *bar.ImbalanceSellCount)
+	assert.Equal(t, 1, *bar.ImbalanceStackBuy)
+	assert.InDelta(t, 1.0, *bar.ImbalanceRatio, 1e-9, "ratio = 1/1 = 1.0")
+}
+
+func TestAccumulator_Imbalance_NilOnZeroTradeBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.ImbalanceBuyCount, "zero-trade bar: ImbalanceBuyCount must be nil")
+	assert.Nil(t, bar.ImbalanceSellCount, "zero-trade bar: ImbalanceSellCount must be nil")
+	assert.Nil(t, bar.ImbalanceStackBuy, "zero-trade bar: ImbalanceStackBuy must be nil")
+	assert.Nil(t, bar.ImbalanceStackSell, "zero-trade bar: ImbalanceStackSell must be nil")
+	assert.Nil(t, bar.ImbalanceRatio, "zero-trade bar: ImbalanceRatio must be nil")
+}
+
+func TestAccumulator_Imbalance_ClearedByBarReset(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.0", "10.0", true, "buy", 0, noQ, q)
+	acc.Apply("67000.0", "1.0", true, "sell", 0, noQ, q)
+
+	bar1 := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar1.ImbalanceBuyCount, "bar1 must have ImbalanceBuyCount")
+
+	acc.BarReset()
+
+	bar2 := acc.CurrentBar(epoch.UnixMilli()+1000, false)
+	assert.Nil(t, bar2.ImbalanceBuyCount, "ImbalanceBuyCount must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.ImbalanceSellCount, "ImbalanceSellCount must be nil after BarReset")
+	assert.Nil(t, bar2.ImbalanceRatio, "ImbalanceRatio must be nil after BarReset")
+}

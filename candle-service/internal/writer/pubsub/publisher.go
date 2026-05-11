@@ -80,6 +80,13 @@ func (p *Publisher) Publish1sBar(ctx context.Context, bar accumulator.Bar) error
 		payload["value_area_low"] = *bar.ValueAreaLow
 		payload["poc_volume"] = *bar.POCVolume
 	}
+	if bar.ImbalanceBuyCount != nil && bar.ImbalanceSellCount != nil && bar.ImbalanceStackBuy != nil && bar.ImbalanceStackSell != nil && bar.ImbalanceRatio != nil {
+		payload["imbalance_buy_count"] = *bar.ImbalanceBuyCount
+		payload["imbalance_sell_count"] = *bar.ImbalanceSellCount
+		payload["imbalance_stack_buy"] = *bar.ImbalanceStackBuy
+		payload["imbalance_stack_sell"] = *bar.ImbalanceStackSell
+		payload["imbalance_ratio"] = *bar.ImbalanceRatio
+	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		if ctx.Err() == nil {

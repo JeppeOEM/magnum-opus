@@ -202,7 +202,7 @@ development_status:
   epic-19: in-progress
   19-1-footprint-accumulator-redis-stream-enrichment: done
   19-2-value-area-signal-group-c: done
-  19-3-imbalance-signals-group-a: backlog
+  19-3-imbalance-signals-group-a: done
   19-4-unfinished-auction-absorption-group-b: backlog
   19-5-divergence-cvd-iceberg-group-d: backlog
   epic-19-retrospective: optional

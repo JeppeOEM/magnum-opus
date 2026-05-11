@@ -93,6 +93,13 @@ type Bar struct {
 	ValueAreaLow  *float64
 	POCVolume     *float64
 
+	// Imbalance Signals (Signal Group A) — nil when TradeCount==0
+	ImbalanceBuyCount  *int
+	ImbalanceSellCount *int
+	ImbalanceStackBuy  *int
+	ImbalanceStackSell *int
+	ImbalanceRatio     *float64
+
 	// Block trades — nil when no block trades occurred or threshold unavailable
 	BlockBuyVolume  *float64
 	BlockSellVolume *float64
@@ -592,6 +599,12 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 				bar.ValueAreaLow = ptr(val)
 				bar.POCVolume = ptr(pocVol)
 			}
+			sigs := features.ComputeImbalance(a.footprintMap)
+			bar.ImbalanceBuyCount = ptrInt(sigs.BuyCount)
+			bar.ImbalanceSellCount = ptrInt(sigs.SellCount)
+			bar.ImbalanceStackBuy = ptrInt(sigs.StackBuy)
+			bar.ImbalanceStackSell = ptrInt(sigs.StackSell)
+			bar.ImbalanceRatio = ptr(sigs.Ratio)
 		}
 	}
 

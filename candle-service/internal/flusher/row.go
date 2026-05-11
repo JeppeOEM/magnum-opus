@@ -82,6 +82,13 @@ type Snapshot1sRow struct {
 	ValueAreaLow  *float64 `parquet:"value_area_low"`
 	POCVolume     *float64 `parquet:"poc_volume"`
 
+	// Imbalance Signals (Signal Group A)
+	ImbalanceBuyCount  *int32   `parquet:"imbalance_buy_count"`
+	ImbalanceSellCount *int32   `parquet:"imbalance_sell_count"`
+	ImbalanceStackBuy  *int32   `parquet:"imbalance_stack_buy"`
+	ImbalanceStackSell *int32   `parquet:"imbalance_stack_sell"`
+	ImbalanceRatio     *float64 `parquet:"imbalance_ratio"`
+
 	// Block trades
 	BlockBuyVolume  *float64 `parquet:"block_buy_volume"`
 	BlockSellVolume *float64 `parquet:"block_sell_volume"`

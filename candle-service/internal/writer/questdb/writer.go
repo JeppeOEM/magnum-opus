@@ -293,6 +293,13 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 		row = row.Float64Column("value_area_low", *bar.ValueAreaLow)
 		row = row.Float64Column("poc_volume", *bar.POCVolume)
 	}
+	if bar.ImbalanceBuyCount != nil && bar.ImbalanceSellCount != nil && bar.ImbalanceStackBuy != nil && bar.ImbalanceStackSell != nil && bar.ImbalanceRatio != nil {
+		row = row.Int64Column("imbalance_buy_count", int64(*bar.ImbalanceBuyCount))
+		row = row.Int64Column("imbalance_sell_count", int64(*bar.ImbalanceSellCount))
+		row = row.Int64Column("imbalance_stack_buy", int64(*bar.ImbalanceStackBuy))
+		row = row.Int64Column("imbalance_stack_sell", int64(*bar.ImbalanceStackSell))
+		row = row.Float64Column("imbalance_ratio", *bar.ImbalanceRatio)
+	}
 
 	// Block trades
 	if bar.BlockBuyVolume != nil {
