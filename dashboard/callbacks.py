@@ -1,7 +1,10 @@
 import os
 
+import pandas as pd
 from dash import Input, Output, State, callback, no_update
+import plotly.graph_objects as go
 
+import charts
 import data
 
 _QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
@@ -65,3 +68,23 @@ def live_update(n, candle_rows, last_ts, selected, ob_rows, ob_cursor, ob_cursor
         out_cursor = new_cursor
 
     return out_candles, out_ts, out_ob, out_cursor
+
+
+@callback(
+    Output("candlestick-graph", "figure"),
+    Input("candle-store", "data"),
+)
+def update_candlestick(candle_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    fig = charts.build_candlestick(df)
+    if not df.empty:
+        fig = charts.add_volume_levels(fig, df)
+        fig = charts.add_volume_bubbles(fig, df)
+    return fig
+
+
+def absorption_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
+    # Stub: renders no markers until absorption_detected field is available (Epic 20).
+    # Activation: when 'absorption_detected' column is in df, add go.Scatter
+    # (mode='markers', marker_symbol='diamond') at flagged candles, row=1, col=1.
+    return fig

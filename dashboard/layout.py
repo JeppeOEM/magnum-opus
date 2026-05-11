@@ -26,7 +26,7 @@ layout = dbc.Container(
             [
                 dbc.Col(
                     dcc.Loading(
-                        dbc.Card("Candlestick", body=True, style={**_PLACEHOLDER_STYLE, "height": "420px"}),
+                        dcc.Graph(id="candlestick-graph", figure={}, style={"height": "420px"}),
                         id="loading-candlestick",
                     ),
                     width=5,
