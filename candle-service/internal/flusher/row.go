@@ -96,6 +96,14 @@ type Snapshot1sRow struct {
 	UnfinishedBottom      *bool   `parquet:"unfinished_bottom"`
 	AbsorptionDetected    *bool   `parquet:"absorption_detected"`
 
+	// Divergence + CVD + Iceberg (Signal Group D)
+	FootprintDeltaDivergence *int32   `parquet:"footprint_delta_divergence"`
+	CumDelta                 *float64 `parquet:"cum_delta"`
+	CVDDivergence            *int32   `parquet:"cvd_divergence"`
+	IcebergBidDetected       *bool    `parquet:"iceberg_bid_detected"`
+	IcebergAskDetected       *bool    `parquet:"iceberg_ask_detected"`
+	IcebergPrice             *float64 `parquet:"iceberg_price"`
+
 	// Block trades
 	BlockBuyVolume  *float64 `parquet:"block_buy_volume"`
 	BlockSellVolume *float64 `parquet:"block_sell_volume"`

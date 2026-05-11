@@ -107,6 +107,15 @@ type Bar struct {
 	UnfinishedBottom      *bool
 	AbsorptionDetected    *bool
 
+	// Divergence + CVD + Iceberg (Signal Group D) — nil when TradeCount==0
+	// CumDelta and CVDDivergence are set by accWriter after CurrentBar() returns.
+	FootprintDeltaDivergence *int
+	CumDelta                 *float64
+	CVDDivergence            *int
+	IcebergBidDetected       *bool
+	IcebergAskDetected       *bool
+	IcebergPrice             *float64
+
 	// Block trades — nil when no block trades occurred or threshold unavailable
 	BlockBuyVolume  *float64
 	BlockSellVolume *float64
@@ -587,6 +596,7 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		bar.BuyVolume = ptr(a.buyVolume)
 		bar.BuyCount = ptrInt(a.buyCount)
 		bar.SellVolume = ptr(max(0, a.volumeSum-a.buyVolume))
+		bar.FootprintDeltaDivergence = ptrInt(features.FootprintDeltaDivergence(bar.Open, bar.Close, bar.BuyVolume, bar.SellVolume))
 		if len(a.footprintMap) > 0 {
 			type jsonCell struct {
 				B float64 `json:"b"`
@@ -765,6 +775,20 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		if varX > 0 && varY > 0 {
 			bar.TradeSignAutocorr = ptr(cov / math.Sqrt(varX*varY))
 		}
+	}
+
+	// Iceberg detection — computed last so all depth/OB/trade fields are available.
+	if a.tradeCount > 0 {
+		iceBid, iceAsk, icePrice := features.ComputeIceberg(
+			bar.BidDepthL1Close, bar.BidDepthL1Open,
+			bar.AskDepthL1Close, bar.AskDepthL1Open,
+			bar.BuyVolume, bar.SellVolume,
+			bar.BidOrderArrivals, bar.AskOrderArrivals,
+			bar.BestBid, bar.BestAsk,
+		)
+		bar.IcebergBidDetected = ptrBool(iceBid)
+		bar.IcebergAskDetected = ptrBool(iceAsk)
+		bar.IcebergPrice = icePrice
 	}
 
 	return bar

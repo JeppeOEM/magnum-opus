@@ -67,8 +67,13 @@ type accWriter struct {
 	engine                *cascade.Engine
 	cascadeFailureCounter func() // increments CascadeStateWriteFailureTotal{exchange,symbol}
 	publisher             *rediswriter.Publisher
-	candles1sPub          *pubsubwriter.Publisher  // nil = disabled
-	heatmapWriter         *heatmapwriter.Writer    // nil = disabled
+	candles1sPub          *pubsubwriter.Publisher // nil = disabled
+	heatmapWriter         *heatmapwriter.Writer   // nil = disabled
+
+	// CVD state — maintained across bar boundaries
+	cumDelta     float64
+	prevCumDelta float64
+	prevClose    *float64
 }
 
 func (aw *accWriter) Apply(price, size string, isTrade bool, side string, tsMs int64,
@@ -100,6 +105,26 @@ func (aw *accWriter) Flush(isPartial bool) error {
 	aw.acc.SeedFromLastKnown() // carry-forward for empty-second null rows
 	tsSecMs := time.Now().Truncate(time.Second).UnixMilli()
 	bar := aw.acc.CurrentBar(tsSecMs, isPartial)
+
+	// CumDelta and CVDDivergence: only on full bar close with trade data.
+	if !isPartial && bar.BuyVolume != nil && bar.SellVolume != nil {
+		aw.cumDelta += *bar.BuyVolume - *bar.SellVolume
+		cd := aw.cumDelta
+		bar.CumDelta = &cd
+		if bar.Close != nil && aw.prevClose != nil {
+			cvdDiv := 0
+			if *bar.Close > *aw.prevClose && aw.cumDelta < aw.prevCumDelta {
+				cvdDiv = 1
+			} else if *bar.Close < *aw.prevClose && aw.cumDelta > aw.prevCumDelta {
+				cvdDiv = -1
+			}
+			bar.CVDDivergence = &cvdDiv
+		}
+		aw.prevCumDelta = aw.cumDelta
+		aw.prevClose = bar.Close
+		aw.persistCumDelta()
+	}
+
 	if err := aw.w.WriteBar(aw.ctx, bar); err != nil {
 		return err
 	}
@@ -141,6 +166,17 @@ func (aw *accWriter) persistBlockWindow() {
 	}
 	if _, err := pipe.Exec(aw.ctx); err != nil {
 		slog.WarnContext(aw.ctx, "block trade window persist failed",
+			"exchange", aw.exchange, "symbol", aw.symbol, "error", err)
+	}
+}
+
+// persistCumDelta writes the current cumDelta to Redis as a simple STRING key.
+// Best-effort: errors are logged and swallowed (same pattern as persistBlockWindow).
+func (aw *accWriter) persistCumDelta() {
+	key := "candle:acc:" + aw.exchange + ":" + aw.symbol + ":cum_delta"
+	val := strconv.FormatFloat(aw.cumDelta, 'f', -1, 64)
+	if err := aw.rdb.Set(aw.ctx, key, val, 0).Err(); err != nil {
+		slog.WarnContext(aw.ctx, "cum_delta persist failed",
 			"exchange", aw.exchange, "symbol", aw.symbol, "error", err)
 	}
 }
@@ -209,6 +245,9 @@ func (aw *accWriter) IncrementGap() {
 func (aw *accWriter) Reset() {
 	aw.acc.Reset()
 	aw.openDepthSet = false
+	aw.cumDelta = 0
+	aw.prevCumDelta = 0
+	aw.prevClose = nil
 }
 
 // symbolEntry bundles per-symbol state needed for the main loop and shutdown.
@@ -456,6 +495,18 @@ func main() {
 				logger.Warn("cascade reconstruction incomplete",
 					"exchange", e.exchange, "symbol", e.symbol, "tf", tf,
 					"expected", expected, "actual", count)
+			}
+		}
+	}
+
+	// Phase 2c: restore cumDelta from Redis (best-effort — log and continue on error).
+	for _, e := range entries {
+		key := "candle:acc:" + e.exchange + ":" + e.symbol + ":cum_delta"
+		if val, err := rdb.Get(ctx, key).Result(); err == nil {
+			if v, err := strconv.ParseFloat(val, 64); err == nil {
+				e.aw.cumDelta = v
+				e.aw.prevCumDelta = v
+				logger.Info("cum_delta restored", "exchange", e.exchange, "symbol", e.symbol, "value", v)
 			}
 		}
 	}

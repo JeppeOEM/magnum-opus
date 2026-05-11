@@ -1445,3 +1445,60 @@ func TestAccumulator_Auction_ClearedByBarReset(t *testing.T) {
 	assert.Nil(t, bar2.UnfinishedBottom, "UnfinishedBottom must be nil after BarReset")
 	assert.Nil(t, bar2.AbsorptionDetected, "AbsorptionDetected must be nil after BarReset")
 }
+
+// ── Signal Group D: Divergence + CVD + Iceberg (19-5) ────────────────────────
+
+func TestAccumulator_Divergence_FieldsSetOnBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	// Up candle (open 67000, close 67001) with more sell vol → bearish divergence
+	acc.Apply("67000.0", "20.0", true, "buy", 0, noQ, q)
+	acc.Apply("67001.0", "50.0", true, "sell", 0, noQ, q)
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.FootprintDeltaDivergence, "FootprintDeltaDivergence must be non-nil when trades present")
+	assert.Equal(t, 1, *bar.FootprintDeltaDivergence, "up candle with net sell → bearish divergence (1)")
+}
+
+func TestAccumulator_Divergence_NilOnZeroTradeBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.FootprintDeltaDivergence, "zero-trade bar: FootprintDeltaDivergence must be nil")
+	assert.Nil(t, bar.IcebergBidDetected, "zero-trade bar: IcebergBidDetected must be nil")
+	assert.Nil(t, bar.IcebergAskDetected, "zero-trade bar: IcebergAskDetected must be nil")
+	assert.Nil(t, bar.IcebergPrice, "zero-trade bar: IcebergPrice must be nil")
+}
+
+func TestAccumulator_Divergence_ClearedByBarReset(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.0", "50.0", true, "buy", 0, noQ, q)
+	acc.Apply("67001.0", "20.0", true, "sell", 0, noQ, q)
+
+	bar1 := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar1.FootprintDeltaDivergence, "bar1 must have FootprintDeltaDivergence")
+
+	acc.BarReset()
+
+	bar2 := acc.CurrentBar(epoch.UnixMilli()+1000, false)
+	assert.Nil(t, bar2.FootprintDeltaDivergence, "FootprintDeltaDivergence must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.IcebergBidDetected, "IcebergBidDetected must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.IcebergAskDetected, "IcebergAskDetected must be nil after BarReset with no trades")
+}
+
+func TestAccumulator_Iceberg_FieldsSetOnBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	d := features.DepthSnapshot{BidL1: 100, AskL1: 100, HasBidVolume: true, HasAskVolume: true}
+	acc.SetOpenDepth(d)
+	acc.SetCloseDepth(d) // close == open → 100 >= 100*0.8 → triggers iceberg bid
+
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.0", "10.0", true, "buy", 0, noQ, q) // buyVol > 0
+	acc.IncrementOBAdd("buy", 10.0)                      // bidArrivals > 0
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.IcebergBidDetected, "IcebergBidDetected must be non-nil when trades present")
+	require.NotNil(t, bar.IcebergAskDetected, "IcebergAskDetected must be non-nil when trades present")
+	assert.True(t, *bar.IcebergBidDetected, "bid depth unchanged and buy activity → iceberg bid")
+	assert.NotNil(t, bar.IcebergPrice, "IcebergPrice must be set when iceBid=true")
+}

@@ -100,6 +100,24 @@ func (p *Publisher) Publish1sBar(ctx context.Context, bar accumulator.Bar) error
 	if bar.AbsorptionDetected != nil && *bar.AbsorptionDetected {
 		payload["absorption_detected"] = "true"
 	}
+	if bar.FootprintDeltaDivergence != nil {
+		payload["footprint_delta_divergence"] = *bar.FootprintDeltaDivergence
+	}
+	if bar.CumDelta != nil {
+		payload["cum_delta"] = *bar.CumDelta
+	}
+	if bar.CVDDivergence != nil {
+		payload["cvd_divergence"] = *bar.CVDDivergence
+	}
+	if bar.IcebergBidDetected != nil && *bar.IcebergBidDetected {
+		payload["iceberg_bid_detected"] = "true"
+	}
+	if bar.IcebergAskDetected != nil && *bar.IcebergAskDetected {
+		payload["iceberg_ask_detected"] = "true"
+	}
+	if bar.IcebergPrice != nil {
+		payload["iceberg_price"] = *bar.IcebergPrice
+	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		if ctx.Err() == nil {
