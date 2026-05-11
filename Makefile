@@ -7,7 +7,7 @@ REPORTS    := test-results
 export VERSION GIT_SHA BUILD_TIME
 
 .PHONY: up down logs watch monitoring-logs \
-        dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot \
+        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-frontend \
         test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
 ## Spin up all services including one paper-trading bot — filtered logs by default, VERBOSE=1 for raw JSON
@@ -157,6 +157,58 @@ dev-bot:
 	QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
 	QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
 	.venv/bin/uvicorn bot_service.main:app --host 0.0.0.0 --port 8090 --reload
+
+## Run the depthview gateway (WebSocket bridge: Redis pub/sub → browser)
+dev-gateway:
+	cd gateway && \
+	REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
+	GATEWAY_ADDR=$${GATEWAY_ADDR:-:8083} \
+	go run ./cmd/gateway/
+
+## Run the frontend Vite dev server (http://localhost:5173)
+## Connects to the gateway at ws://localhost:8083 by default
+dev-frontend:
+	cd frontend && npm run dev
+
+## Start everything: infra + aggregator + candle + bot + gateway + frontend (Ctrl+C stops all)
+run: dev-infra
+	@printf "\n  %-14s %s\n"  "aggregator"    "http://localhost:8080"
+	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081"
+	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090"
+	@printf   "  %-14s %s\n"  "gateway"        "ws://localhost:8083"
+	@printf   "  %-14s %s\n"  "frontend"       "http://localhost:5173   heatmap: /heatmap.html"
+	@printf   "  %-14s %s\n\n" "questdb"       "http://localhost:9000"
+	@set -a; [ -f .env ] && . .env; set +a; \
+	set -a; [ -f candle-service/.env ] && . candle-service/.env; set +a; \
+	set -a; [ -f bot-service/.env ] && . bot-service/.env; set +a; \
+	( cd aggregator && \
+	  LOG_LEVEL=$${LOG_LEVEL:-info} \
+	  REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
+	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
+	  KUCOIN_PUBLIC=$${KUCOIN_PUBLIC:-true} \
+	  CONFIG_FILE=../config.yaml \
+	  go run ./cmd/aggregator/ ) & AGG=$$!; \
+	( cd candle-service && \
+	  LOG_LEVEL=$${LOG_LEVEL:-info} \
+	  REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-localhost:9000} \
+	  CANDLE_SLOT=$${CANDLE_SLOT:-blue} \
+	  go run ./cmd/candle/ ) & CANDLE=$$!; \
+	( cd bot-service && \
+	  LOG_LEVEL=$${LOG_LEVEL:-info} \
+	  REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
+	  .venv/bin/uvicorn bot_service.main:app --host 0.0.0.0 --port 8090 ) & BOT=$$!; \
+	( cd gateway && \
+	  REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
+	  GATEWAY_ADDR=$${GATEWAY_ADDR:-:8083} \
+	  go run ./cmd/gateway/ ) & GATEWAY=$$!; \
+	( cd frontend && npm run dev ) & FRONTEND=$$!; \
+	trap "kill $$AGG $$CANDLE $$BOT $$GATEWAY $$FRONTEND 2>/dev/null" INT TERM EXIT; \
+	wait $$AGG $$CANDLE $$BOT $$GATEWAY $$FRONTEND
 
 ## Start infra + all three services (interleaved logs, Ctrl+C stops all)
 dev: dev-infra

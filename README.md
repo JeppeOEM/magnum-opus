@@ -247,22 +247,30 @@ The frontend is a Vite + TypeScript app under `frontend/`. It requires the **gat
 
 ### Start (dev mode)
 
-Requires the full data pipeline already running (`make dev-infra` + aggregator + candle-service, or `make up`).
+One command starts infra (Redis + QuestDB), all backend services, the gateway, and the frontend together:
 
 ```bash
-# Terminal A — gateway (WebSocket bridge between Redis pub/sub and browser)
-cd gateway
-REDIS_ADDR=localhost:6379 go run ./cmd/gateway
-# Listens on :8083. Use GATEWAY_ADDR=:9000 to change port.
-
-# Terminal B — frontend dev server
-cd frontend
-npm install          # first time only
-VITE_WS_URL=ws://localhost:8083 npm run dev
-# Opens at http://localhost:5173
+cd frontend && npm install   # one-time setup
+make run                     # starts everything — Ctrl+C stops all
 ```
 
-The Vite dev server proxies `/ws` to the gateway and `/heatmap`, `/candles` to `VITE_API_URL` (defaults to `http://localhost:3000` — unused if you only need live data).
+Or run individual pieces in separate terminals:
+
+```bash
+make dev-infra       # Redis + QuestDB (Docker, detached)
+make dev-aggregator  # Terminal 1
+make dev-candle      # Terminal 2
+make dev-bot         # Terminal 3
+make dev-gateway     # Terminal 4 — listens on :8083
+make dev-frontend    # Terminal 5 — listens on :5173
+```
+
+The frontend connects to the gateway at `ws://localhost:8083` by default (no env vars needed). To override:
+
+```bash
+GATEWAY_ADDR=:9000 make dev-gateway
+VITE_WS_URL=ws://localhost:9000 make dev-frontend
+```
 
 ### Environment variables
 
@@ -270,7 +278,7 @@ The Vite dev server proxies `/ws` to the gateway and `/heatmap`, `/candles` to `
 |----------|---------|-------------|
 | `GATEWAY_ADDR` | `:8083` | Gateway listen address |
 | `REDIS_ADDR` | `localhost:6379` | Redis address for the gateway |
-| `VITE_WS_URL` | `ws://localhost:3000` | WebSocket URL the frontend connects to — set to `ws://localhost:8083` |
+| `VITE_WS_URL` | `ws://localhost:8083` | WebSocket URL the frontend connects to |
 | `VITE_API_URL` | `http://localhost:3000` | REST API base URL for historical heatmap and candle data |
 
 ### Production build

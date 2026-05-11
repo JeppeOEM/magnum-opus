@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 const API_URL = process.env.VITE_API_URL ?? "http://localhost:3000";
-const WS_URL = process.env.VITE_WS_URL ?? "ws://localhost:3000";
+const WS_URL = process.env.VITE_WS_URL ?? "ws://localhost:8083";
 
 export default defineConfig({
   server: {
