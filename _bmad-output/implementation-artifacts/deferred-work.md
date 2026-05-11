@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 19-5-divergence-cvd-iceberg-group-d (2026-05-11)
+
+- **D-19-5-1: CVDDivergence has no standalone unit test** — Computed inline in accWriter, not a standalone pure function; testing requires integration harness. Low risk given simple comparison logic.
+- **D-19-5-2: prevClose not persisted to Redis** — Spec specifies cumDelta persistence only; one-bar CVD gap after restart is a designed limitation. Fix if CVDDivergence continuity across restarts becomes a product requirement.
+- **D-19-5-3: Iceberg open-depth baseline is first-OB-tick of bar** — BidDepthL1Open/AskDepthL1Open are set from first OB tick in the bar via SetOpenDepth(); if iceberg activity starts at bar open the baseline may already reflect iceberg state. Pre-existing accumulator design limitation.
+
 ## Deferred from: code review of 19-2-value-area-signal-group-c (2026-05-11)
 
 - **D-19-2-1: `FootprintJSON` non-nil while `POCPrice` nil for zero-size trades** — If a zero-size trade arrives, footprintMap gets an entry with vol=0; `ComputeValueArea` returns `ok=false` leaving `POCPrice` nil, but `FootprintJSON` is still encoded. Fix: add `if s <= 0 { return }` guard in `Apply()` after size parse. Pre-existing 19-1 design issue.

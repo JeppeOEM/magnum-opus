@@ -307,10 +307,14 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 		row = row.BoolColumn("unfinished_bottom", *bar.UnfinishedBottom)
 		row = row.BoolColumn("absorption_detected", *bar.AbsorptionDetected)
 	}
-	if bar.FootprintDeltaDivergence != nil && bar.CumDelta != nil && bar.CVDDivergence != nil && bar.IcebergBidDetected != nil && bar.IcebergAskDetected != nil {
+	if bar.FootprintDeltaDivergence != nil {
 		row = row.Int64Column("footprint_delta_divergence", int64(*bar.FootprintDeltaDivergence))
+	}
+	if bar.CumDelta != nil && bar.CVDDivergence != nil {
 		row = row.Float64Column("cum_delta", *bar.CumDelta)
 		row = row.Int64Column("cvd_divergence", int64(*bar.CVDDivergence))
+	}
+	if bar.IcebergBidDetected != nil && bar.IcebergAskDetected != nil {
 		row = row.BoolColumn("iceberg_bid_detected", *bar.IcebergBidDetected)
 		row = row.BoolColumn("iceberg_ask_detected", *bar.IcebergAskDetected)
 		if bar.IcebergPrice != nil {

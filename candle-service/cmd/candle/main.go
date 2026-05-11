@@ -171,11 +171,14 @@ func (aw *accWriter) persistBlockWindow() {
 }
 
 // persistCumDelta writes the current cumDelta to Redis as a simple STRING key.
-// Best-effort: errors are logged and swallowed (same pattern as persistBlockWindow).
+// Uses a fresh background context so a cancelled aw.ctx (e.g. graceful shutdown)
+// does not silently drop the final bar's cumDelta.
 func (aw *accWriter) persistCumDelta() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	key := "candle:acc:" + aw.exchange + ":" + aw.symbol + ":cum_delta"
 	val := strconv.FormatFloat(aw.cumDelta, 'f', -1, 64)
-	if err := aw.rdb.Set(aw.ctx, key, val, 0).Err(); err != nil {
+	if err := aw.rdb.Set(ctx, key, val, 0).Err(); err != nil {
 		slog.WarnContext(aw.ctx, "cum_delta persist failed",
 			"exchange", aw.exchange, "symbol", aw.symbol, "error", err)
 	}
@@ -240,6 +243,10 @@ func (aw *accWriter) ApplyOBEvent(kind consumer.OBEventKind, side string, parsed
 
 func (aw *accWriter) IncrementGap() {
 	aw.acc.IncrementGap()
+	// Reset CVD running state on any data gap — discontinuity breaks the delta series.
+	aw.cumDelta = 0
+	aw.prevCumDelta = 0
+	aw.prevClose = nil
 }
 
 func (aw *accWriter) Reset() {
@@ -248,6 +255,7 @@ func (aw *accWriter) Reset() {
 	aw.cumDelta = 0
 	aw.prevCumDelta = 0
 	aw.prevClose = nil
+	aw.persistCumDelta() // persist 0 so restart doesn't restore stale value
 }
 
 // symbolEntry bundles per-symbol state needed for the main loop and shutdown.

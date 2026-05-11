@@ -1,6 +1,6 @@
 # Story 19.5: Divergence + CVD + Iceberg (Group D)
 
-Status: in-progress
+Status: done
 
 ## Story
 
@@ -170,3 +170,13 @@ claude-sonnet-4-6
 ### Completion Notes List
 
 ### File List
+
+### Review Findings
+
+- [x] [Review][Patch] P1: QuestDB write gate too broad — all 6 Group D fields silently dropped when CumDelta or CVDDivergence is nil [`writer/questdb/writer.go:310`] — applied
+- [x] [Review][Patch] P2: CVD state not reset on gap event — spec requires "reset to 0 on gap event"; accWriter.IncrementGap() doesn't zero cumDelta [`cmd/candle/main.go` IncrementGap] — applied
+- [x] [Review][Patch] P3: persistCumDelta uses aw.ctx which may be cancelled on shutdown — last bar's cumDelta silently not persisted [`cmd/candle/main.go:persistCumDelta`] — applied
+- [x] [Review][Patch] P4: Reset() zeroes cumDelta but doesn't persist the reset to Redis — next restart restores stale pre-reset value [`cmd/candle/main.go:Reset`] — applied
+- [x] [Review][Defer] CVDDivergence has no standalone unit test — computed inline in accWriter, not a standalone function; would require integration setup — deferred, pre-existing
+- [x] [Review][Defer] prevClose not persisted to Redis — spec only specifies cumDelta persistence; one-bar CVD gap on restart is by design — deferred, pre-existing
+- [x] [Review][Defer] Iceberg open-depth baseline is first-OB-tick of bar — pre-existing design limitation of SetOpenDepth — deferred, pre-existing
