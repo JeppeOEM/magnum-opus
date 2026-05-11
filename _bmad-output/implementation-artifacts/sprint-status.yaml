@@ -211,7 +211,7 @@ development_status:
   epic-18: in-progress
   18-1-scaffold-dockerfile-compose-theme-skeleton: done
   18-2a-questdb-history-loader-dcc-store-symbol-switcher: done
-  18-2b-live-poll-questdb-redis-ob-features-merge: backlog
+  18-2b-live-poll-questdb-redis-ob-features-merge: done
   18-3-candlestick-overlays-volume-bars-absorption: backlog
   18-4-heatmaps-vol-profile-delta-ob-depth: backlog
   18-5-cvd-bid-ask-secondary-y-axis: backlog

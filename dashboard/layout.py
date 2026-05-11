@@ -69,6 +69,10 @@ layout = dbc.Container(
         # dcc.Store components — data layer, invisible
         dcc.Store(id="candle-store", data=[]),
         dcc.Store(id="last-ts", data=None),
+        dcc.Store(id="ob-store", data=[]),
+        dcc.Store(id="ob-cursor", data="0"),
+        dcc.Store(id="ob-cursor-symbol", data=""),
+        dcc.Interval(id="live-interval", interval=1000, n_intervals=0),
     ],
     fluid=True,
     style={"padding": "12px"},
