@@ -35,6 +35,8 @@ import (
 	"github.com/mrqdt/magnum-opus/candle-service/internal/orderbook"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/flusher"
 	questdbwriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/questdb"
+	heatmapwriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/heatmap"
+	pubsubwriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/pubsub"
 	rediswriter "github.com/mrqdt/magnum-opus/candle-service/internal/writer/redis"
 )
 
@@ -65,6 +67,8 @@ type accWriter struct {
 	engine                *cascade.Engine
 	cascadeFailureCounter func() // increments CascadeStateWriteFailureTotal{exchange,symbol}
 	publisher             *rediswriter.Publisher
+	candles1sPub          *pubsubwriter.Publisher  // nil = disabled
+	heatmapWriter         *heatmapwriter.Writer    // nil = disabled
 }
 
 func (aw *accWriter) Apply(price, size string, isTrade bool, side string, tsMs int64,
@@ -106,6 +110,12 @@ func (aw *accWriter) Flush(isPartial bool) error {
 		if aw.publisher != nil {
 			aw.publisher.PublishBars(aw.ctx, closedBars)      // step 4: candles: + candles:close:
 			aw.publisher.PublishOBFeatures(aw.ctx, bar)       // step 5: ob_features:
+		}
+		if aw.candles1sPub != nil {
+			aw.candles1sPub.Publish1sBar(aw.ctx, bar) //nolint:errcheck — fire-and-forget; internal method logs on error
+		}
+		if aw.heatmapWriter != nil {
+			aw.heatmapWriter.WriteHeatmap(aw.ctx, bar.TsSecMs, bids, asks) //nolint:errcheck — fire-and-forget; internal method logs on error
 		}
 	}
 	aw.acc.BarReset()
@@ -358,6 +368,15 @@ func main() {
 			m.RedisPublishFailureTotal.WithLabelValues(exchange, symbol).Inc()
 		})
 
+		candles1sPub := pubsubwriter.New(pubsubwriter.NewRealClient(rdb), p.exchange, p.symbol)
+
+		hw, err := heatmapwriter.New(ctx, cfg.QuestDBILPAddr, p.exchange, p.symbol)
+		if err != nil {
+			logger.Error("heatmap writer init failed",
+				"exchange", p.exchange, "symbol", p.symbol, "error", err)
+			os.Exit(1)
+		}
+
 		aw := &accWriter{
 			acc: acc, w: w, ob: ob, btw: btw, rdb: rdb,
 			exchange: p.exchange, symbol: p.symbol, ctx: ctx,
@@ -365,7 +384,9 @@ func main() {
 			cascadeFailureCounter: func() {
 				m.CascadeStateWriteFailureTotal.WithLabelValues(exchange, symbol).Inc()
 			},
-			publisher: pub,
+			publisher:     pub,
+			candles1sPub:  candles1sPub,
+			heatmapWriter: hw,
 		}
 		barClose := make(chan consumer.BarCloseSig, 1)
 		partialPublish := make(chan consumer.PartialPublishSig, 1)
@@ -624,6 +645,11 @@ func main() {
 		}
 		if err := e.w.Close(shutdownCtx); err != nil {
 			logger.Error("writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		}
+		if e.aw.heatmapWriter != nil {
+			if err := e.aw.heatmapWriter.Close(shutdownCtx); err != nil {
+				logger.Error("heatmap writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+			}
 		}
 	}
 

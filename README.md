@@ -855,6 +855,8 @@ These appear as the `gap_cause` field alongside `orderbook gap emitted`.
 | WARN | `questdb: WAL suspended — issuing RESUME WAL` | WAL engine suspended. Automatic recovery via `RESUME WAL`. |
 | ERROR | `questdb: RESUME WAL failed` | Automatic recovery failed. Check QuestDB logs and disk space. |
 | ERROR | `questdb: WAL drain write failed` | During shutdown drain, a WAL-related write failed. |
+| WARN | `heatmap: ilp write failed` | A single ILP row in the `orderbook_heatmap` batch failed. The remaining rows in that batch were not written. One second of heatmap depth data is lost. |
+| WARN | `heatmap: ilp flush failed` | The ILP batch flush for `orderbook_heatmap` failed after all rows were queued. One second of heatmap data is lost. |
 
 ---
 

@@ -37,7 +37,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-10
+last_updated: 2026-05-11
+# updated: 17-2 done; 5 review patches applied (unused import, ILP buffer poison, double-log, ctx guard, NaN/Inf filter)
 # updated: epic-16 done; retrospective done; review patches applied to 16-1, 16-2, 16-3
 # updated: epic-17 added (live frontend & orderbook fanout — 5 stories, brainstormed 2026-05-10)
 project: magnum-opus
@@ -191,7 +192,7 @@ development_status:
   # ─── Epic 17: Live Frontend & Orderbook Fanout ────────────────────────────────
   epic-17: in-progress
   17-1-aggregator-orderbook-pubsub: done
-  17-2-candle-service-1s-pubsub-and-heatmap-writer: backlog
-  17-3-depthview-gateway-dual-channel-subscription: backlog
+  17-2-candle-service-1s-pubsub-and-heatmap-writer: done
+  17-3-depthview-gateway-dual-channel-subscription: review
   17-4-bot-service-orderbook-subscription: backlog
   17-5-frontend-heatmap-ladder-and-microstructure-panels: backlog
