@@ -190,9 +190,10 @@ development_status:
   epic-16-retrospective: done
 
   # ─── Epic 17: Live Frontend & Orderbook Fanout ────────────────────────────────
-  epic-17: in-progress
+  epic-17: done
   17-1-aggregator-orderbook-pubsub: done
   17-2-candle-service-1s-pubsub-and-heatmap-writer: done
   17-3-depthview-gateway-dual-channel-subscription: done
   17-4-bot-service-orderbook-subscription: done
-  17-5-frontend-heatmap-ladder-and-microstructure-panels: review
+  17-5-frontend-heatmap-ladder-and-microstructure-panels: done
+  epic-17-retrospective: done
