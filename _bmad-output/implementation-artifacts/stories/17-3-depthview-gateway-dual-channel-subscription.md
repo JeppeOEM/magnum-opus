@@ -1,6 +1,6 @@
 # Story 17.3: depthview Gateway — Dual-Channel Subscription & Message Routing
 
-Status: review
+Status: done
 
 ## Story
 
@@ -486,6 +486,20 @@ func TestSubscribeOnConnect_SendsLastSnapshot(t *testing.T) {
 - coder/websocket Accept: `/home/mrqdt/go/pkg/mod/github.com/coder/websocket@v1.8.14/accept.go`
 - coder/websocket Read/Write: `/home/mrqdt/go/pkg/mod/github.com/coder/websocket@v1.8.14/read.go`, `write.go`
 - go-redis PubSub: `rdb.PSubscribe(ctx, patterns...)` → `.Channel()` → `for msg := range ch`
+
+### Review Findings
+
+- [x] [Review][Patch] Shutdown context has no timeout — hangs indefinitely on misbehaving clients [cmd/gateway/main.go:41]
+- [x] [Review][Patch] Redis pubsub no reconnect — silently goes dark when pubsub channel closes [cmd/gateway/main.go:50-65]
+- [x] [Review][Patch] uint16 cast with no bounds check — wraps silently if level count > 65535 [internal/codec/codec.go:51-52]
+- [x] [Review][Patch] parseLevels silent skip — no slog.Warn on unparseable pair data loss [internal/codec/codec.go:83-86]
+- [x] [Review][Patch] WritePump goroutine leak — for-range loop does not check ctx.Done() [internal/hub/hub.go:51-60]
+- [x] [Review][Patch] lastSnap memory leak — symbol entries never evicted from map [internal/hub/hub.go:68]
+- [x] [Review][Patch] Unknown WebSocket opcode silently discarded — no warning log [cmd/gateway/main.go:99-104]
+- [x] [Review][Patch] Empty symbol guard missing — symLen==0 pollutes bySymbol map [cmd/gateway/main.go:94-98]
+- [x] [Review][Patch] WebSocket message type not validated — text frames accepted as binary control [cmd/gateway/main.go:87]
+- [x] [Review][Defer] InjectType int64 precision via map[string]any round-trip [internal/codec/codec.go:66-73] — deferred, no practical impact for 1s candle display data
+- [x] [Review][Defer] No protocol version byte — premature for v1 [internal/codec/codec.go] — deferred, pre-existing design choice
 
 ## Dev Agent Record
 

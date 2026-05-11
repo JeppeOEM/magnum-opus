@@ -47,14 +47,22 @@ func (c *Client) Send(typ websocket.MessageType, data []byte) {
 }
 
 // WritePump drains the client's send channel and writes to the WebSocket.
-// Runs until the channel is closed or a write error occurs.
+// Runs until ctx is cancelled, the channel is closed, or a write error occurs.
 func (c *Client) WritePump(ctx context.Context) {
-	for msg := range c.send {
-		if err := c.conn.Write(ctx, msg.typ, msg.data); err != nil {
-			if ctx.Err() == nil {
-				slog.Warn("gateway: ws write failed", "err", err)
-			}
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case msg, ok := <-c.send:
+			if !ok {
+				return
+			}
+			if err := c.conn.Write(ctx, msg.typ, msg.data); err != nil {
+				if ctx.Err() == nil {
+					slog.Warn("gateway: ws write failed", "err", err)
+				}
+				return
+			}
 		}
 	}
 }
@@ -93,6 +101,7 @@ func (h *Hub) UnregisterSender(s Sender) {
 		delete(clients, s)
 		if len(clients) == 0 {
 			delete(h.bySymbol, sym)
+			delete(h.lastSnap, sym)
 		}
 	}
 }
@@ -121,6 +130,7 @@ func (h *Hub) Unsubscribe(s Sender, symbol string) {
 		delete(clients, s)
 		if len(clients) == 0 {
 			delete(h.bySymbol, symbol)
+			delete(h.lastSnap, symbol)
 		}
 	}
 }

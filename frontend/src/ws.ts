@@ -10,12 +10,33 @@ export interface SnapshotMsg {
   asks: { price: number; size: number }[];
 }
 
+export interface Candles1sMsg {
+  type: "candles1s";
+  ts_ns: number;
+  exchange: string;
+  symbol: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  ofi: number;
+  ofi_l1: number;
+  spread: number;
+  bid_depth_l1: number;
+  ask_depth_l1: number;
+  bid_depth_top10: number;
+  ask_depth_top10: number;
+  realized_vol: number;
+}
+
 type Handler<T> = (msg: T) => void;
 
 export class WebSocketClient {
   private ws: WebSocket | null = null;
   private subscriptions = new Set<string>();
   private snapshotHandlers: Handler<SnapshotMsg>[] = [];
+  private candles1sHandlers: Handler<Candles1sMsg>[] = [];
   private statusHandlers: Handler<string>[] = [];
   private retryDelay = 100;
 
@@ -24,6 +45,7 @@ export class WebSocketClient {
   }
 
   onSnapshot(h: Handler<SnapshotMsg>) { this.snapshotHandlers.push(h); }
+  onCandles1s(h: Handler<Candles1sMsg>) { this.candles1sHandlers.push(h); }
   onStatus(h: Handler<string>) { this.statusHandlers.push(h); }
 
   subscribe(symbol: string) {
@@ -52,8 +74,12 @@ export class WebSocketClient {
       for (const sym of this.subscriptions) this.sendSubscribe(sym);
     });
 
-    ws.addEventListener("message", (ev: MessageEvent<ArrayBuffer>) => {
-      this.decode(ev.data);
+    ws.addEventListener("message", (ev: MessageEvent) => {
+      if (ev.data instanceof ArrayBuffer) {
+        this.decode(ev.data);
+      } else if (typeof ev.data === "string") {
+        this.decodeText(ev.data);
+      }
     });
 
     ws.addEventListener("close", () => {
@@ -104,6 +130,17 @@ export class WebSocketClient {
       this.emit(this.snapshotHandlers, { tsNs, bids, asks });
     }
     // HEARTBEAT (0x03): nothing to do beyond keeping the connection alive
+  }
+
+  private decodeText(text: string) {
+    try {
+      const msg = JSON.parse(text);
+      if (msg.type === "candles1s") {
+        this.emit(this.candles1sHandlers, msg as Candles1sMsg);
+      }
+    } catch {
+      console.error("[ws] failed to parse text message:", text.slice(0, 200));
+    }
   }
 
   private sendSubscribe(symbol: string) {

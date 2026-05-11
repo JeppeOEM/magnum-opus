@@ -6,6 +6,8 @@ package codec
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"math"
 	"strconv"
 )
@@ -43,6 +45,10 @@ func EncodeBinary(payload []byte) ([]byte, error) {
 	bids := parseLevels(dp.Bids)
 	asks := parseLevels(dp.Asks)
 
+	if len(bids) > 0xFFFF || len(asks) > 0xFFFF {
+		return nil, errors.New("level count exceeds uint16 max")
+	}
+
 	// 13 byte header + 12 bytes per level
 	buf := make([]byte, 13+(len(bids)+len(asks))*12)
 
@@ -78,11 +84,13 @@ func parseLevels(raw [][]string) []levelEntry {
 	out := make([]levelEntry, 0, len(raw))
 	for _, pair := range raw {
 		if len(pair) < 2 {
+			slog.Warn("gateway: parseLevels skipping malformed pair", "len", len(pair))
 			continue
 		}
 		p, errP := strconv.ParseFloat(pair[0], 64)
 		s, errS := strconv.ParseFloat(pair[1], 64)
 		if errP != nil || errS != nil {
+			slog.Warn("gateway: parseLevels skipping unparseable pair", "pair", pair)
 			continue
 		}
 		out = append(out, levelEntry{price: p, size: s})

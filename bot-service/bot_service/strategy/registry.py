@@ -316,6 +316,12 @@ class FileWatcher:
                 queue_max_depth=self._settings.bot_queue_max_depth,
             )
 
+            mode = strategy.orderbook_mode
+            if mode != "none":
+                self._bus_manager.provision_pubsub(
+                    class_name, mode, strategy._on_orderbook, strategy._on_candles1s
+                )
+
             stream_keys: set[str] = set()
             for symbol, tf in strategy._bar_handlers:
                 stream_keys.add(f"candles:close:{self._exchange}:{symbol}:{tf}")
@@ -353,6 +359,7 @@ class FileWatcher:
         if class_name not in self._loaded:
             return
         _, handle, stop_event, _ = self._loaded.pop(class_name)
+        self._bus_manager.deprovision_pubsub(class_name)
         _stop_thread(handle, stop_event, float(self._settings.bot_shutdown_timeout_s))
         self._bus_manager.dynamic_deregister(class_name)
         log.info("strategy_unloaded", strategy=class_name, reason=reason)

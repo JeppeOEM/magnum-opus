@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of 17-4-bot-service-orderbook-subscription (2026-05-11)
+
+- **D-17-4-1: No reconnect in `_run_pubsub`** (`event_bus.py`) — Single Redis error or network blip exits the pub/sub thread permanently; only one `pubsub_thread_error` log line as signal. Explicit "future hardening item" per story spec. Add a retry loop matching `_consume_loop`'s exponential backoff.
+- **D-17-4-2: `_handle_crash` doesn't call `deprovision_pubsub`** (`registry.py`) — Callbacks leak on crash path; old strategy instance could receive pub/sub messages during backoff window. No current impact (all strategies are mode="none"). Fix: add `deprovision_pubsub` call in `_handle_crash` before `dynamic_deregister`.
+- **D-17-4-3: `stop_all()` doesn't call `deprovision_pubsub`** (`registry.py`) — Same risk as D-17-4-2; callbacks for stopped strategies remain registered if stop_all bypasses _unload. Fix: call `deprovision_pubsub` in `stop_all` loop.
+- **D-17-4-4: `ps.listen()` blocks indefinitely; stop() can't unblock it** (`event_bus.py`) — `_stop_event.is_set()` is only checked between messages; `join(timeout=5s)` silently times out in quiet periods. Fix: call `ps.unsubscribe()` or `ps.close()` before joining to wake the generator.
+- **D-17-4-5: TOCTOU gap — deprovisioned strategy may receive one callback after deprovision** (`event_bus.py`) — Snapshot-under-lock-iterate-outside pattern: `deprovision_pubsub` could complete between the lock release and the callback call. No current impact with no-op base callbacks.
+
 ## Deferred from: code review of 15-3-ma-cross-baseline (2026-05-10)
 
 - **D-15-3-1: No position-flip logic — sell entry posted without closing existing long** (`ma_cross_bot.py`) — `order_role="entry"` for both buy and sell; no exit order before reversing. On a paper baseline this is acceptable but creates incorrect P&L accounting. Fix: track open side and post exit before new entry.
@@ -236,3 +244,9 @@
 - **D-17-1-2: `sort.Slice` non-stable for price strings that parse to the same float64** (`aggregator/internal/writer/pubsub/publisher.go:sortedLevels`) — Two textually-different price strings (e.g. "29500.0" and "29500.00") producing the same float64 yield non-deterministic level ordering. Exchange price strings are canonical in practice; use `sort.Stable` if determinism becomes a requirement.
 - **D-17-1-3: `WithOBPublisher` has no post-Run() call guard** (`aggregator/internal/coordinator/coordinator.go`) — Calling `WithOBPublisher` after `coordinator.Run()` is a data race on `w.pub`. Same contract as `WithMetrics` (pre-existing). Add a `started` guard if the API needs to be made safe.
 - **D-17-1-4: `sendAndWait` and absence tests use wall-clock `time.Sleep`** (`aggregator/internal/coordinator/obpublisher_test.go`) — Polling loop and fixed 50ms sleep are fragile under CI load. Replace with channel-based notification from `fakeOBPublisher` for deterministic test timing.
+
+
+## Deferred from: code review of 17-3-depthview-gateway-dual-channel-subscription (2026-05-11)
+
+- **D-17-3-1: InjectType int64 precision via map[string]any round-trip** (`gateway/internal/codec/codec.go:66-73`) — JSON decode into `map[string]any` converts int64 fields (e.g. ts_ns) to float64, losing ~128ns precision on re-encode. No practical impact for 1s candle display; use direct JSON byte injection if precision matters in future.
+- **D-17-3-2: No protocol version byte in binary frame header** (`gateway/internal/codec/codec.go`) — Binary frames have no version field; breaking protocol changes will silently corrupt clients. Premature for v1 single-consumer deployment; add version byte when second consumer is introduced.

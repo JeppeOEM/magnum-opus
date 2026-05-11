@@ -40,6 +40,10 @@ class MACrossBot(BaseStrategy):
     def close_on_bus_timeout(self) -> bool:
         return False
 
+    @property
+    def orderbook_mode(self) -> str:
+        return "none"
+
     def subscribe(self) -> None:
         self.get_history(_SYMBOL, _TF, self.min_lookback)
         self.register_bar_handler(_SYMBOL, _TF, self._on_bar)

@@ -48,6 +48,10 @@ class RSIBot(BaseStrategy):
     def close_on_bus_timeout(self) -> bool:
         return False
 
+    @property
+    def orderbook_mode(self) -> str:
+        return "none"
+
     def add_indicators(self, df: pd.DataFrame) -> None:
         df.ta.rsi(length=_RSI_PERIOD, append=True)  # type: ignore[attr-defined]
 

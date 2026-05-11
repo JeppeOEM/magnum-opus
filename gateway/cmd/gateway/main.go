@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/coder/websocket"
 	goredis "github.com/redis/go-redis/v9"
@@ -38,7 +40,9 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
 	}()
 
 	slog.Info("gateway: listening", "addr", cfg.ListenAddr)
@@ -48,16 +52,29 @@ func main() {
 }
 
 func runSubscriber(ctx context.Context, rdb *goredis.Client, h *hub.Hub) {
+	for {
+		if err := subscribe(ctx, rdb, h); err != nil {
+			slog.Warn("gateway: pubsub subscriber error, reconnecting", "err", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func subscribe(ctx context.Context, rdb *goredis.Client, h *hub.Hub) error {
 	ps := rdb.PSubscribe(ctx, "orderbook:*", "candles1s:*")
 	defer ps.Close()
 	ch := ps.Channel()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case msg, ok := <-ch:
 			if !ok {
-				return
+				return errors.New("pubsub channel closed")
 			}
 			h.Route(msg.Channel, []byte(msg.Payload))
 		}
@@ -84,14 +101,20 @@ func wsHandler(serverCtx context.Context, h *hub.Hub) http.HandlerFunc {
 		go c.WritePump(ctx)
 
 		for {
-			_, data, err := conn.Read(ctx)
+			msgType, data, err := conn.Read(ctx)
 			if err != nil {
 				return
+			}
+			if msgType != websocket.MessageBinary {
+				continue
 			}
 			if len(data) < 2 {
 				continue
 			}
 			symLen := int(data[1])
+			if symLen == 0 {
+				continue
+			}
 			if len(data) < 2+symLen {
 				continue
 			}
@@ -101,6 +124,8 @@ func wsHandler(serverCtx context.Context, h *hub.Hub) http.HandlerFunc {
 				h.Subscribe(c, symbol)
 			case msgUnsubscribe:
 				h.Unsubscribe(c, symbol)
+			default:
+				slog.Warn("gateway: unknown message opcode", "opcode", data[0])
 			}
 		}
 	}

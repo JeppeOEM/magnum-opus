@@ -7,11 +7,19 @@ const GAP = 6;           // px between price chart and volume chart
 const MARGIN = { top: 10, right: 60, bottom: 20 };
 const VOL_MARGIN_BOTTOM = 30;
 
+interface BotOrder {
+  time: number;
+  price: number;
+  side: "buy" | "sell";
+  strategy: string;
+}
+
 export class CandleChart {
   private svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
   private gCandles: d3.Selection<SVGGElement, unknown, null, undefined>;
   private gProfile: d3.Selection<SVGGElement, unknown, null, undefined>;
   private gVolume: d3.Selection<SVGGElement, unknown, null, undefined>;
+  private gOverlay: d3.Selection<SVGGElement, unknown, null, undefined>;
   private gXAxis: d3.Selection<SVGGElement, unknown, null, undefined>;
   private gYAxis: d3.Selection<SVGGElement, unknown, null, undefined>;
   private gVolAxis: d3.Selection<SVGGElement, unknown, null, undefined>;
@@ -33,6 +41,7 @@ export class CandleChart {
     this.gProfile = this.svg.append("g").attr("class", "profile");
     this.gCandles = this.svg.append("g").attr("class", "candles");
     this.gVolume  = this.svg.append("g").attr("class", "volume");
+    this.gOverlay = this.svg.append("g").attr("class", "overlay");
     this.gXAxis   = this.svg.append("g").attr("class", "x-axis");
     this.gYAxis   = this.svg.append("g").attr("class", "y-axis");
     this.gVolAxis = this.svg.append("g").attr("class", "vol-axis");
@@ -102,6 +111,7 @@ export class CandleChart {
     this.drawProfile();
     this.drawVolume();
     this.drawAxes();
+    this.drawOverlay();
   }
 
   private drawCandles() {
@@ -214,6 +224,46 @@ export class CandleChart {
       .attr("transform", `translate(${PROFILE_W + width},0)`)
       .call(d3.axisRight(volYScale).ticks(3)
         .tickFormat(d => d3.format(".2s")(d as number)));
+  }
+
+  private getTestOrders(): BotOrder[] {
+    if (this.candles.length === 0) return [];
+    const last = this.candles[this.candles.length - 1];
+    return [
+      { time: last.time, price: last.low * 0.999, side: "buy", strategy: "ofi_bot" },
+      { time: last.time, price: last.high * 1.001, side: "sell", strategy: "ma_cross" },
+    ];
+  }
+
+  private drawOverlay() {
+    const orders = this.getTestOrders();
+    if (orders.length === 0) return;
+    const { xScale, yScale } = this;
+    const candleSpan = this.candles.length > 1
+      ? (xScale(this.candles[1].time) - xScale(this.candles[0].time))
+      : 6;
+    const size = 8;
+
+    this.gOverlay.selectAll<SVGPathElement, BotOrder>("path.order-marker")
+      .data(orders, d => `${d.time}-${d.side}`)
+      .join(
+        enter => enter.append("path").attr("class", "order-marker")
+          .call(sel => sel.append("title")),
+        update => update,
+        exit => exit.remove(),
+      )
+      .attr("d", d => {
+        const x = xScale(d.time) + candleSpan / 2;
+        const y = yScale(d.price);
+        if (d.side === "buy") {
+          return `M${x},${y - size} L${x + size * 0.6},${y} L${x - size * 0.6},${y} Z`;
+        }
+        return `M${x},${y + size} L${x + size * 0.6},${y} L${x - size * 0.6},${y} Z`;
+      })
+      .attr("fill", d => d.side === "buy" ? "#4caf50" : "#ef5350")
+      .attr("opacity", 0.85)
+      .select("title")
+      .text(d => d.strategy);
   }
 
   // Store bucket width for profile bar height calculation

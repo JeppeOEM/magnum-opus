@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 import socket
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import redis
 import structlog
@@ -73,6 +76,10 @@ class BusManager:
         self._started = False
         self._stop_event = threading.Event()
         self._thread = None
+        self._pubsub_ob_callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._pubsub_c1s_callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._pubsub_lock: threading.RLock = threading.RLock()
+        self._pubsub_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -118,6 +125,26 @@ class BusManager:
         with self._handles_lock:
             self._handles.pop(name, None)
 
+    def provision_pubsub(
+        self,
+        name: str,
+        mode: str,
+        ob_callback: Callable[[dict[str, Any]], None],
+        candles1s_callback: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """Register pub/sub callbacks for a strategy. Thread-safe."""
+        with self._pubsub_lock:
+            if mode in ("full_stream", "both"):
+                self._pubsub_ob_callbacks[name] = ob_callback
+            if mode in ("snapshot_1s", "both"):
+                self._pubsub_c1s_callbacks[name] = candles1s_callback
+
+    def deprovision_pubsub(self, name: str) -> None:
+        """Remove pub/sub callbacks for a strategy. Thread-safe. No-op if not registered."""
+        with self._pubsub_lock:
+            self._pubsub_ob_callbacks.pop(name, None)
+            self._pubsub_c1s_callbacks.pop(name, None)
+
     def start(self) -> None:
         """Spawn the daemon consumer thread and begin routing events."""
         self._started = True
@@ -125,12 +152,18 @@ class BusManager:
             target=self._run, daemon=True, name="bus-manager"
         )
         self._thread.start()
+        self._pubsub_thread = threading.Thread(
+            target=self._run_pubsub, daemon=True, name="bus-pubsub"
+        )
+        self._pubsub_thread.start()
 
     def stop(self) -> None:
         """Signal the consumer thread to stop and wait up to 5 s for it to exit."""
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+        if self._pubsub_thread is not None:
+            self._pubsub_thread.join(timeout=5.0)
 
     def is_alive(self) -> bool:
         """Return True if the bus-manager thread is still running."""
@@ -320,6 +353,58 @@ class BusManager:
     # ------------------------------------------------------------------
     # Internal — helpers
     # ------------------------------------------------------------------
+
+    def _run_pubsub(self) -> None:
+        """Subscribe to orderbook:* and candles1s:* Redis pub/sub patterns and dispatch."""
+        settings = get_settings()
+        r: redis.Redis[bytes] = redis.from_url(settings.redis_url)
+        ps = r.pubsub()
+        try:
+            ps.psubscribe("orderbook:*", "candles1s:*")
+            for raw_msg in ps.listen():
+                if self._stop_event.is_set():
+                    break
+                if raw_msg["type"] != "pmessage":
+                    continue
+                channel_raw = raw_msg["channel"]
+                channel: str = channel_raw.decode() if isinstance(channel_raw, bytes) else channel_raw
+                self._dispatch_pubsub(channel, raw_msg["data"])
+        except Exception as exc:
+            if not self._stop_event.is_set():
+                log.error("pubsub_thread_error", error=str(exc))
+        finally:
+            ps.close()
+            r.close()
+
+    def _dispatch_pubsub(self, channel: str, raw: bytes | str) -> None:
+        """JSON-decode raw pub/sub data and route to registered callbacks."""
+        raw_str: str = raw.decode() if isinstance(raw, bytes) else raw
+        try:
+            payload: dict[str, Any] = json.loads(raw_str)
+        except json.JSONDecodeError as exc:
+            log.error(
+                "pubsub_json_parse_error",
+                channel=channel,
+                raw=raw_str[:200],
+                error=str(exc),
+            )
+            return
+        if channel.startswith("orderbook:"):
+            with self._pubsub_lock:
+                callbacks = list(self._pubsub_ob_callbacks.values())
+            for cb in callbacks:
+                try:
+                    cb(payload)
+                except Exception as exc:
+                    log.error("pubsub_callback_error", channel=channel, error=str(exc))
+        elif channel.startswith("candles1s:"):
+            with self._pubsub_lock:
+                callbacks = list(self._pubsub_c1s_callbacks.values())
+            for cb in callbacks:
+                try:
+                    cb(payload)
+                except Exception as exc:
+                    log.error("pubsub_callback_error", channel=channel, error=str(exc))
 
     @staticmethod
     def _ensure_consumer_groups(

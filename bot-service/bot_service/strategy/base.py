@@ -8,7 +8,7 @@ import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 import pandas as pd
@@ -77,6 +77,20 @@ class BaseStrategy(ABC):
         """Register event handlers. Routing table is fixed after this returns."""
         ...
 
+    # ---- Orderbook pub/sub ----
+
+    _VALID_OB_MODES: frozenset[str] = frozenset({"none", "snapshot_1s", "full_stream", "both"})
+
+    @property
+    def orderbook_mode(self) -> str:
+        return "none"
+
+    def _on_orderbook(self, payload: dict[str, Any]) -> None:
+        """Called from the BusManager pub/sub thread. Must be thread-safe."""
+
+    def _on_candles1s(self, payload: dict[str, Any]) -> None:
+        """Called from the BusManager pub/sub thread. Must be thread-safe."""
+
     # ---- Lifecycle ----
 
     def __init__(self, name: str, settings: Settings) -> None:
@@ -107,6 +121,11 @@ class BaseStrategy(ABC):
         # Prevents concurrent emergency-close threads for the same symbol (thread explosion guard)
         self._emergency_close_lock = threading.Lock()
         self._emergency_close_in_flight: set[str] = set()
+        mode = self.orderbook_mode
+        if mode not in self._VALID_OB_MODES:
+            raise ValueError(
+                f"Invalid orderbook_mode {mode!r}; must be one of {sorted(self._VALID_OB_MODES)}"
+            )
 
     # ---- Indicator computation hook ----
 
