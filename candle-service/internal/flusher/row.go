@@ -89,6 +89,13 @@ type Snapshot1sRow struct {
 	ImbalanceStackSell *int32   `parquet:"imbalance_stack_sell"`
 	ImbalanceRatio     *float64 `parquet:"imbalance_ratio"`
 
+	// Auction Signals (Signal Group B)
+	SinglePrintCount      *int32  `parquet:"single_print_count"`
+	SinglePrintLevelsJSON *string `parquet:"single_print_levels_json"`
+	UnfinishedTop         *bool   `parquet:"unfinished_top"`
+	UnfinishedBottom      *bool   `parquet:"unfinished_bottom"`
+	AbsorptionDetected    *bool   `parquet:"absorption_detected"`
+
 	// Block trades
 	BlockBuyVolume  *float64 `parquet:"block_buy_volume"`
 	BlockSellVolume *float64 `parquet:"block_sell_volume"`

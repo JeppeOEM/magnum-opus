@@ -1394,3 +1394,54 @@ func TestAccumulator_Imbalance_ClearedByBarReset(t *testing.T) {
 	assert.Nil(t, bar2.ImbalanceSellCount, "ImbalanceSellCount must be nil after BarReset")
 	assert.Nil(t, bar2.ImbalanceRatio, "ImbalanceRatio must be nil after BarReset")
 }
+
+func TestAccumulator_Auction_FieldsSetOnBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	// 5+ trades needed for absorption; buy-heavy (60%+) with tiny price move
+	for i := 0; i < 3; i++ {
+		acc.Apply("67000.0", "100.0", true, "buy", 0, noQ, q)
+	}
+	for i := 0; i < 2; i++ {
+		acc.Apply("67000.0", "30.0", true, "sell", 0, noQ, q)
+	}
+
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.SinglePrintCount, "SinglePrintCount must be non-nil when trades present")
+	require.NotNil(t, bar.SinglePrintLevelsJSON, "SinglePrintLevelsJSON must be non-nil")
+	require.NotNil(t, bar.UnfinishedTop, "UnfinishedTop must be non-nil")
+	require.NotNil(t, bar.UnfinishedBottom, "UnfinishedBottom must be non-nil")
+	require.NotNil(t, bar.AbsorptionDetected, "AbsorptionDetected must be non-nil")
+	// All trades at same price level — no single prints by definition (only one level)
+	assert.Equal(t, 0, *bar.SinglePrintCount, "single price level cannot produce single prints")
+	assert.Equal(t, "[]", *bar.SinglePrintLevelsJSON, "no single prints → empty JSON array sentinel")
+}
+
+func TestAccumulator_Auction_NilOnZeroTradeBar(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.SinglePrintCount, "zero-trade bar: SinglePrintCount must be nil")
+	assert.Nil(t, bar.SinglePrintLevelsJSON, "zero-trade bar: SinglePrintLevelsJSON must be nil")
+	assert.Nil(t, bar.UnfinishedTop, "zero-trade bar: UnfinishedTop must be nil")
+	assert.Nil(t, bar.UnfinishedBottom, "zero-trade bar: UnfinishedBottom must be nil")
+	assert.Nil(t, bar.AbsorptionDetected, "zero-trade bar: AbsorptionDetected must be nil")
+}
+
+func TestAccumulator_Auction_ClearedByBarReset(t *testing.T) {
+	acc, _ := newAcc(t)
+	q := bq("67000", "1", "67001", "1")
+	acc.Apply("67000.0", "50.0", true, "buy", 0, noQ, q)
+	acc.Apply("67000.0", "10.0", true, "sell", 0, noQ, q)
+
+	bar1 := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar1.SinglePrintCount, "bar1 must have SinglePrintCount")
+
+	acc.BarReset()
+
+	bar2 := acc.CurrentBar(epoch.UnixMilli()+1000, false)
+	assert.Nil(t, bar2.SinglePrintCount, "SinglePrintCount must be nil after BarReset with no trades")
+	assert.Nil(t, bar2.SinglePrintLevelsJSON, "SinglePrintLevelsJSON must be nil after BarReset")
+	assert.Nil(t, bar2.UnfinishedTop, "UnfinishedTop must be nil after BarReset")
+	assert.Nil(t, bar2.UnfinishedBottom, "UnfinishedBottom must be nil after BarReset")
+	assert.Nil(t, bar2.AbsorptionDetected, "AbsorptionDetected must be nil after BarReset")
+}

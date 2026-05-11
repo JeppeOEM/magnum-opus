@@ -687,6 +687,11 @@ func parseCSVRow(rec []string, idx map[string]int) (Snapshot1sRow, error) {
 	row.ImbalanceStackBuy = parseInt32(get("imbalance_stack_buy"))
 	row.ImbalanceStackSell = parseInt32(get("imbalance_stack_sell"))
 	row.ImbalanceRatio = parseFloat(get("imbalance_ratio"))
+	row.SinglePrintCount = parseInt32(get("single_print_count"))
+	row.SinglePrintLevelsJSON = getString(get("single_print_levels_json"))
+	row.UnfinishedTop = parseBool(get("unfinished_top"))
+	row.UnfinishedBottom = parseBool(get("unfinished_bottom"))
+	row.AbsorptionDetected = parseBool(get("absorption_detected"))
 	row.BlockBuyVolume = parseFloat(get("block_buy_volume"))
 	row.BlockSellVolume = parseFloat(get("block_sell_volume"))
 	row.MaxTradeSize = parseFloat(get("max_trade_size"))
@@ -749,6 +754,14 @@ func parseFloat(s string) *float64 {
 	if err != nil {
 		return nil
 	}
+	return &v
+}
+
+func parseBool(s string) *bool {
+	if s == "" {
+		return nil
+	}
+	v := s == "true"
 	return &v
 }
 

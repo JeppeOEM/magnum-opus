@@ -300,6 +300,13 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 		row = row.Int64Column("imbalance_stack_sell", int64(*bar.ImbalanceStackSell))
 		row = row.Float64Column("imbalance_ratio", *bar.ImbalanceRatio)
 	}
+	if bar.SinglePrintCount != nil && bar.SinglePrintLevelsJSON != nil && bar.UnfinishedTop != nil && bar.UnfinishedBottom != nil && bar.AbsorptionDetected != nil {
+		row = row.Int64Column("single_print_count", int64(*bar.SinglePrintCount))
+		row = row.StringColumn("single_print_levels_json", *bar.SinglePrintLevelsJSON)
+		row = row.BoolColumn("unfinished_top", *bar.UnfinishedTop)
+		row = row.BoolColumn("unfinished_bottom", *bar.UnfinishedBottom)
+		row = row.BoolColumn("absorption_detected", *bar.AbsorptionDetected)
+	}
 
 	// Block trades
 	if bar.BlockBuyVolume != nil {

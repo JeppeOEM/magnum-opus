@@ -100,6 +100,13 @@ type Bar struct {
 	ImbalanceStackSell *int
 	ImbalanceRatio     *float64
 
+	// Auction Signals (Signal Group B) — nil when TradeCount==0
+	SinglePrintCount      *int
+	SinglePrintLevelsJSON *string
+	UnfinishedTop         *bool
+	UnfinishedBottom      *bool
+	AbsorptionDetected    *bool
+
 	// Block trades — nil when no block trades occurred or threshold unavailable
 	BlockBuyVolume  *float64
 	BlockSellVolume *float64
@@ -605,6 +612,15 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 			bar.ImbalanceStackBuy = ptrInt(sigs.StackBuy)
 			bar.ImbalanceStackSell = ptrInt(sigs.StackSell)
 			bar.ImbalanceRatio = ptr(sigs.Ratio)
+			if a.high != 0 && a.low != 0 && a.open != 0 && a.close != 0 {
+				asigs := features.ComputeAuctionSignals(a.footprintMap, a.high, a.low)
+				bar.SinglePrintCount = ptrInt(asigs.SinglePrintCount)
+				bar.SinglePrintLevelsJSON = ptrStr(asigs.SinglePrintLevelsJSON)
+				bar.UnfinishedTop = ptrBool(asigs.UnfinishedTop)
+				bar.UnfinishedBottom = ptrBool(asigs.UnfinishedBottom)
+				detected := features.DetectAbsorption(a.buyVolume, a.volumeSum, a.open, a.close, a.tradeCount)
+				bar.AbsorptionDetected = ptrBool(detected)
+			}
 		}
 	}
 
@@ -853,8 +869,10 @@ func (a *Accumulator) Reset() {
 	a.footprintMap = make(map[string]features.FootprintCell)
 }
 
-func ptr(f float64) *float64 { return &f }
-func ptrInt(i int) *int      { return &i }
+func ptr(f float64) *float64    { return &f }
+func ptrInt(i int) *int         { return &i }
+func ptrStr(s string) *string   { return &s }
+func ptrBool(b bool) *bool      { return &b }
 
 func max64(a, b int64) int64 {
 	if a > b {

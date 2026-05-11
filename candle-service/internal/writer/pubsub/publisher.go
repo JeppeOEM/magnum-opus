@@ -87,6 +87,19 @@ func (p *Publisher) Publish1sBar(ctx context.Context, bar accumulator.Bar) error
 		payload["imbalance_stack_sell"] = *bar.ImbalanceStackSell
 		payload["imbalance_ratio"] = *bar.ImbalanceRatio
 	}
+	if bar.SinglePrintCount != nil {
+		payload["single_print_count"] = *bar.SinglePrintCount
+		payload["single_print_levels_json"] = *bar.SinglePrintLevelsJSON
+	}
+	if bar.UnfinishedTop != nil && *bar.UnfinishedTop {
+		payload["unfinished_top"] = "true"
+	}
+	if bar.UnfinishedBottom != nil && *bar.UnfinishedBottom {
+		payload["unfinished_bottom"] = "true"
+	}
+	if bar.AbsorptionDetected != nil && *bar.AbsorptionDetected {
+		payload["absorption_detected"] = "true"
+	}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		if ctx.Err() == nil {
