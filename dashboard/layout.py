@@ -66,6 +66,9 @@ layout = dbc.Container(
                 ),
             ],
         ),
+        # dcc.Store components — data layer, invisible
+        dcc.Store(id="candle-store", data=[]),
+        dcc.Store(id="last-ts", data=None),
     ],
     fluid=True,
     style={"padding": "12px"},

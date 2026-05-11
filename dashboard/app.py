@@ -1,8 +1,12 @@
+import logging
+
 import dash
 import dash_bootstrap_components as dbc
 from plotly.subplots import make_subplots
 
 from layout import layout
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
 app = dash.Dash(
     __name__,
