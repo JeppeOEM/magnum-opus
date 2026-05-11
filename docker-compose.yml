@@ -164,6 +164,26 @@ services:
           memory: 2g
     restart: unless-stopped
 
+  dashboard:
+    profiles: [dashboard]
+    build:
+      context: ./dashboard
+    environment:
+      QUESTDB_HTTP_ADDR: http://questdb:9000
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8050:8050"
+    depends_on:
+      redis:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.51.0
     volumes:

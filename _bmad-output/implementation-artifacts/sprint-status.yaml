@@ -208,8 +208,8 @@ development_status:
   epic-19-retrospective: done
 
   # ─── Epic 18: Dash Dashboard Core ─────────────────────────────────────────────
-  epic-18: backlog
-  18-1-scaffold-dockerfile-compose-theme-skeleton: backlog
+  epic-18: in-progress
+  18-1-scaffold-dockerfile-compose-theme-skeleton: done
   18-2a-questdb-history-loader-dcc-store-symbol-switcher: backlog
   18-2b-live-poll-questdb-redis-ob-features-merge: backlog
   18-3-candlestick-overlays-volume-bars-absorption: backlog

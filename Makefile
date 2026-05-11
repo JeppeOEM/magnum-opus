@@ -7,7 +7,7 @@ REPORTS    := test-results
 export VERSION GIT_SHA BUILD_TIME
 
 .PHONY: up down logs watch monitoring-logs \
-        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-frontend \
+        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-frontend dev-dashboard \
         test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
 ## Spin up all services including one paper-trading bot — filtered logs by default, VERBOSE=1 for raw JSON
@@ -37,7 +37,7 @@ up:
 
 ## Stop and remove all containers (including test infra)
 down:
-	docker compose --profile candle-blue --profile candle-green --profile bot down
+	docker compose --profile candle-blue --profile candle-green --profile bot --profile dashboard down
 	docker compose -f docker-compose.test.yml down 2>/dev/null || true
 
 ## Tail aggregator logs (when running detached)
@@ -169,6 +169,14 @@ dev-gateway:
 ## Connects to the gateway at ws://localhost:8083 by default
 dev-frontend:
 	cd frontend && npm run dev
+
+## Run the Dash dashboard (http://localhost:8050; requires local Redis + QuestDB)
+## Requires dashboard/.venv — run `python3 -m venv dashboard/.venv && dashboard/.venv/bin/pip install -r dashboard/requirements.txt`
+dev-dashboard:
+	cd dashboard && \
+	QUESTDB_HTTP_ADDR=http://localhost:9000 \
+	REDIS_URL=redis://localhost:6379 \
+	.venv/bin/python app.py
 
 ## Start everything: infra + aggregator + candle + bot + gateway + frontend (Ctrl+C stops all)
 run: dev-infra
