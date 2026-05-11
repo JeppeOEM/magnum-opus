@@ -205,4 +205,16 @@ development_status:
   19-3-imbalance-signals-group-a: done
   19-4-unfinished-auction-absorption-group-b: done
   19-5-divergence-cvd-iceberg-group-d: done
-  epic-19-retrospective: optional
+  epic-19-retrospective: done
+
+  # ─── Epic 18: Dash Dashboard Core ─────────────────────────────────────────────
+  epic-18: backlog
+  18-1-scaffold-dockerfile-compose-theme-skeleton: backlog
+  18-2a-questdb-history-loader-dcc-store-symbol-switcher: backlog
+  18-2b-live-poll-questdb-redis-ob-features-merge: backlog
+  18-3-candlestick-overlays-volume-bars-absorption: backlog
+  18-4-heatmaps-vol-profile-delta-ob-depth: backlog
+  18-5-cvd-bid-ask-secondary-y-axis: backlog
+  18-6-layout-assembly-poc-liquidity-overlay: backlog
+  18-7-retire-vite-cleanup: backlog
+  epic-18-retrospective: optional
