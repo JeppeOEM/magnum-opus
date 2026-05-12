@@ -7,6 +7,29 @@ SYMBOL_OPTIONS = [
     {"label": "BTC-USDT (Bybit)", "value": "bybit:BTC-USDT"},
 ]
 
+_TF_OPTIONS = [
+    {"label": "1s",  "value": "1s"},
+    {"label": "1m",  "value": "1m"},
+    {"label": "2m",  "value": "2m"},
+    {"label": "3m",  "value": "3m"},
+    {"label": "4m",  "value": "4m"},
+    {"label": "6m",  "value": "6m"},
+    {"label": "10m", "value": "10m"},
+    {"label": "12m", "value": "12m"},
+    {"label": "15m", "value": "15m"},
+    {"label": "30m", "value": "30m"},
+    {"label": "45m", "value": "45m"},
+    {"label": "1h",  "value": "1h"},
+    {"label": "2h",  "value": "2h"},
+    {"label": "3h",  "value": "3h"},
+    {"label": "4h",  "value": "4h"},
+    {"label": "6h",  "value": "6h"},
+    {"label": "8h",  "value": "8h"},
+    {"label": "12h", "value": "12h"},
+    {"label": "1d",  "value": "1d"},
+    {"label": "1w",  "value": "1w"},
+]
+
 layout = dbc.Container(
     [
         dbc.Row(
@@ -18,7 +41,16 @@ layout = dbc.Container(
                         value="kucoin:BTC-USDT",
                         clearable=False,
                     ),
-                    width=4,
+                    width=3,
+                ),
+                dbc.Col(
+                    dcc.Dropdown(
+                        id="tf-dropdown",
+                        options=_TF_OPTIONS,
+                        value="1s",
+                        clearable=False,
+                    ),
+                    width=1,
                 ),
                 dbc.Col(
                     html.Div(
@@ -75,6 +107,7 @@ layout = dbc.Container(
         dcc.Store(id="ob-store", data=[]),
         dcc.Store(id="ob-cursor", data="0"),
         dcc.Store(id="ob-cursor-symbol", data=""),
+        dcc.Store(id="active-tf", data="1s"),
         dcc.Interval(id="live-interval", interval=1000, n_intervals=0),
         # Footprint modal — opened by clicking a candlestick bar
         dbc.Modal(

@@ -164,6 +164,79 @@ func TestAccumulator_Apply_QuoteVolume(t *testing.T) {
 	assert.InDelta(t, 530.0, *bar.QuoteVolume, 1e-9)
 }
 
+// TestAccumulator_CurrentBar_TWAP_CloseTimestampVsOpenTimestamp verifies that
+// CurrentBar must be called with the bar-close timestamp (tsSecMs), not barOpenMs.
+//
+// For a multi-minute accumulator, trades span the full minute window. If the caller
+// passes barOpenMs instead of tsSecMs, barEndMs = barOpenMs+1000 falls before the
+// last trade's timestamp → the final hold-time segment is negative → last price is
+// silently excluded from TWAP, yielding a stale (wrong) result.
+//
+// This documents the invariant exercised by flushParallelTF:
+//
+//	bar1m := aw.acc1m.CurrentBar(tsSecMs, false)  // ← pass close time
+//	bar1m.TsSecMs = barOpenMs                      // ← then override for QuestDB row
+func TestAccumulator_CurrentBar_TWAP_CloseTimestampVsOpenTimestamp(t *testing.T) {
+	q := bq("100", "1", "101", "1")
+
+	// Scenario: 1m bar, trades at +1s and +59s into the bar.
+	// barOpenMs = 0, tsSecMs (1s bar close that triggers 1m flush) = 60_000.
+	barOpenMs := int64(0)
+	tsSecMs := int64(60_000)
+
+	// Correct: pass tsSecMs (close time) → barEndMs=61000, last hold-time=2000ms.
+	// Expected TWAP: price100 held 58000ms, price200 held 2000ms →
+	// (100*58000 + 200*2000) / 60000 ≈ 103.333
+	accCorrect, _ := newAcc(t)
+	accCorrect.Apply("100", "1", true, "buy", 1_000, noQ, q)
+	accCorrect.Apply("200", "1", true, "buy", 59_000, q, q)
+	barCorrect := accCorrect.CurrentBar(tsSecMs, false)
+	require.NotNil(t, barCorrect.TWAP)
+	assert.InDelta(t, 103.333, *barCorrect.TWAP, 0.001, "TWAP with close timestamp")
+
+	// Wrong path: pass barOpenMs → barEndMs=1000ms < lastTradeTsMs=59000 → hold-time negative.
+	// Only the segment (price100, 58000ms) is included → TWAP = 100.0 (price200 ignored).
+	accWrong, _ := newAcc(t)
+	accWrong.Apply("100", "1", true, "buy", 1_000, noQ, q)
+	accWrong.Apply("200", "1", true, "buy", 59_000, q, q)
+	barWrong := accWrong.CurrentBar(barOpenMs, false)
+	require.NotNil(t, barWrong.TWAP)
+	assert.InDelta(t, 100.0, *barWrong.TWAP, 0.001, "TWAP with open timestamp drops last segment")
+
+	// Override pattern: CurrentBar(tsSecMs) then set TsSecMs = barOpenMs is safe.
+	// TWAP is computed before TsSecMs is overridden by the caller.
+	barOverride := accCorrect.CurrentBar(tsSecMs, false)
+	barOverride.TsSecMs = barOpenMs
+	assert.Equal(t, barOpenMs, barOverride.TsSecMs, "TsSecMs override sets QuestDB row time")
+	require.NotNil(t, barOverride.TWAP)
+	assert.InDelta(t, 103.333, *barOverride.TWAP, 0.001, "TWAP unchanged after TsSecMs override")
+}
+
+// TestAccumulator_CrashMarkingPattern documents the Reset+IncrementGap pattern used
+// in accWriter.Reset() to mark the first post-restart bar on acc1m and acc15m.
+// The main 1s accumulator is NOT given an extra IncrementGap after Reset (intentional:
+// the 1s granularity does not need gap marking the same way).
+func TestAccumulator_CrashMarkingPattern(t *testing.T) {
+	q := bq("100", "1", "101", "1")
+
+	// acc1m / acc15m: Reset() clears gap_count, then IncrementGap() marks first bar.
+	accParallel, _ := newAcc(t)
+	accParallel.Apply("100", "1", true, "buy", 0, noQ, q)
+	accParallel.IncrementGap() // gap from before reset
+	accParallel.Reset()
+	accParallel.IncrementGap() // crash marking
+	bar := accParallel.CurrentBar(epoch.UnixMilli(), false)
+	assert.Equal(t, 1, bar.GapCount, "first post-restart bar must have gap_count=1")
+	assert.Nil(t, bar.Open, "Reset clears trade state before crash mark")
+
+	// acc (1s): Reset() only — no post-Reset IncrementGap.
+	acc1s, _ := newAcc(t)
+	acc1s.Apply("100", "1", true, "buy", 0, noQ, q)
+	acc1s.Reset()
+	bar1s := acc1s.CurrentBar(epoch.UnixMilli(), false)
+	assert.Equal(t, 0, bar1s.GapCount, "1s acc after plain Reset has gap_count=0")
+}
+
 func TestAccumulator_IsPartial_Flag(t *testing.T) {
 	acc, _ := newAcc(t)
 	assert.True(t, acc.CurrentBar(epoch.UnixMilli(), true).IsPartial)

@@ -19,16 +19,19 @@ _QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
     Output("ob-store", "data"),
     Output("ob-cursor", "data"),
     Output("ob-cursor-symbol", "data"),
+    Output("active-tf", "data"),
     Input("symbol-dropdown", "value"),
+    Input("tf-dropdown", "value"),
 )
-def update_candle_store(selected):
+def update_candle_store(selected, tf):
+    tf = tf or "1s"
     if not selected:
-        return [], None, [], "0", ""
+        return [], None, [], "0", "", tf
     exchange, symbol = selected.split(":", 1)
-    rows = data.fetch_history(exchange, symbol, _QUESTDB_URL)
+    rows = data.fetch_history(exchange, symbol, _QUESTDB_URL, tf=tf)
     max_ts = rows[-1]["ts"] if rows else None  # rows is ascending (newest last) — see fetch_history
     ob_cursor = data.fetch_ob_snapshot(exchange, symbol)
-    return rows, max_ts, [], ob_cursor, selected
+    return rows, max_ts, [], ob_cursor, selected, tf
 
 
 @callback(
@@ -43,14 +46,16 @@ def update_candle_store(selected):
     State("ob-store", "data"),
     State("ob-cursor", "data"),
     State("ob-cursor-symbol", "data"),
+    State("active-tf", "data"),
     prevent_initial_call=True,
 )
-def live_update(n, candle_rows, last_ts, selected, ob_rows, ob_cursor, ob_cursor_symbol):
+def live_update(n, candle_rows, last_ts, selected, ob_rows, ob_cursor, ob_cursor_symbol, active_tf):
     if not selected or not last_ts:
         return no_update, no_update, no_update, no_update
     exchange, symbol = selected.split(":", 1)
+    tf = active_tf or "1s"
 
-    new_candles = data.fetch_new_candles(exchange, symbol, last_ts, _QUESTDB_URL)
+    new_candles = data.fetch_new_candles(exchange, symbol, last_ts, _QUESTDB_URL, tf=tf)
 
     if ob_cursor_symbol != selected:
         # cursor not yet seeded for current symbol — skip ob fetch this tick

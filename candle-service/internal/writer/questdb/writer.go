@@ -29,6 +29,7 @@ type WriterConfig struct {
 	FlushInterval    time.Duration // ILP batch flush interval
 	WALProbeInterval time.Duration // How often to probe WAL when stale
 	WALBufferSize    int           // Max bars buffered during WAL suspension
+	TableName        string        // QuestDB table to write to; defaults to "snapshot_1s"
 }
 
 // walEntry holds a bar queued during WAL suspension.
@@ -134,9 +135,16 @@ func (w *Writer) writeWithRetry(ctx context.Context, bar accumulator.Bar) error 
 	}
 }
 
+func (w *Writer) tableName() string {
+	if w.cfg.TableName != "" {
+		return w.cfg.TableName
+	}
+	return "snapshot_1s"
+}
+
 // writeBar writes a single bar row to the ILP sender and flushes.
 func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
-	row := w.sender.Table("snapshot_1s").
+	row := w.sender.Table(w.tableName()).
 		Symbol("exchange", bar.Exchange).
 		Symbol("symbol", bar.Symbol)
 
@@ -536,7 +544,7 @@ func (w *Writer) isWALSuspended(ctx context.Context) (bool, error) {
 			continue
 		}
 		name, _ := row[0].(string)
-		if name != "snapshot_1s" {
+		if name != w.tableName() {
 			continue
 		}
 		suspended, _ := row[1].(bool)
@@ -560,9 +568,9 @@ func (w *Writer) IsWALSuspended() bool {
 	return w.walSuspended.Load()
 }
 
-// resumeWAL issues ALTER TABLE snapshot_1s RESUME WAL via REST.
+// resumeWAL issues ALTER TABLE <table> RESUME WAL via REST.
 func (w *Writer) resumeWAL(ctx context.Context) error {
-	q := url.QueryEscape("ALTER TABLE snapshot_1s RESUME WAL")
+	q := url.QueryEscape("ALTER TABLE " + w.tableName() + " RESUME WAL")
 	addr := w.cfg.HTTPAddr
 	if !strings.HasPrefix(addr, "http") {
 		addr = "http://" + addr

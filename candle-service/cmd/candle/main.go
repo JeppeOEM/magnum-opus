@@ -70,6 +70,14 @@ type accWriter struct {
 	candles1sPub          *pubsubwriter.Publisher // nil = disabled
 	heatmapWriter         *heatmapwriter.Writer   // nil = disabled
 
+	// Parallel per-timeframe accumulators — compute full footprint signals at each TF boundary.
+	acc1m          *accumulator.Accumulator
+	acc15m         *accumulator.Accumulator
+	w1m            *questdbwriter.Writer
+	w15m           *questdbwriter.Writer
+	openDepthSet1m  bool
+	openDepthSet15m bool
+
 	// CVD state — maintained across bar boundaries
 	cumDelta     float64
 	prevCumDelta float64
@@ -82,9 +90,22 @@ func (aw *accWriter) Apply(price, size string, isTrade bool, side string, tsMs i
 	prev := features.BestQuote{BidPrice: prevBid, BidSize: prevBidSz, AskPrice: prevAsk, AskSize: prevAskSz}
 	curr := features.BestQuote{BidPrice: currBid, BidSize: currBidSz, AskPrice: currAsk, AskSize: currAskSz}
 	aw.acc.Apply(price, size, isTrade, side, tsMs, prev, curr)
-	if !aw.openDepthSet && currBid != "" && currAsk != "" {
-		aw.acc.SetOpenDepth(features.ComputeDepthSnapshot(aw.ob.AllBids(), aw.ob.AllAsks()))
-		aw.openDepthSet = true
+	aw.acc1m.Apply(price, size, isTrade, side, tsMs, prev, curr)
+	aw.acc15m.Apply(price, size, isTrade, side, tsMs, prev, curr)
+	if currBid != "" && currAsk != "" && (!aw.openDepthSet || !aw.openDepthSet1m || !aw.openDepthSet15m) {
+		depth := features.ComputeDepthSnapshot(aw.ob.AllBids(), aw.ob.AllAsks())
+		if !aw.openDepthSet {
+			aw.acc.SetOpenDepth(depth)
+			aw.openDepthSet = true
+		}
+		if !aw.openDepthSet1m {
+			aw.acc1m.SetOpenDepth(depth)
+			aw.openDepthSet1m = true
+		}
+		if !aw.openDepthSet15m {
+			aw.acc15m.SetOpenDepth(depth)
+			aw.openDepthSet15m = true
+		}
 	}
 	if isTrade {
 		parsedSize, err := strconv.ParseFloat(size, 64)
@@ -92,6 +113,8 @@ func (aw *accWriter) Apply(price, size string, isTrade bool, side string, tsMs i
 			aw.btw.Add(parsedSize)
 			if threshold, ok := aw.btw.Threshold(); ok && parsedSize > threshold {
 				aw.acc.ApplyBlockTrade(side, parsedSize)
+				aw.acc1m.ApplyBlockTrade(side, parsedSize)
+				aw.acc15m.ApplyBlockTrade(side, parsedSize)
 			}
 		}
 	}
@@ -142,11 +165,51 @@ func (aw *accWriter) Flush(isPartial bool) error {
 		if aw.heatmapWriter != nil {
 			aw.heatmapWriter.WriteHeatmap(aw.ctx, bar.TsSecMs, bids, asks) //nolint:errcheck — fire-and-forget; internal method logs on error
 		}
+
+		// Flush parallel per-TF accumulators at their respective boundaries.
+		aw.flushParallelTF(tsSecMs, bids, asks)
 	}
 	aw.acc.BarReset()
 	aw.openDepthSet = false
 	aw.persistBlockWindow()
 	return nil
+}
+
+// flushParallelTF checks whether the 1m or 15m bar has closed and, if so, finalises
+// the corresponding accumulator and writes its bar to QuestDB. Called only on full
+// 1s bar closes (not partial flushes).
+func (aw *accWriter) flushParallelTF(tsSecMs int64, bids, asks map[string]string) {
+	if cascade.IsBarClose(tsSecMs, cascade.TF1m) {
+		if len(bids) > 0 || len(asks) > 0 {
+			aw.acc1m.SetCloseDepth(features.ComputeDepthSnapshot(bids, asks))
+		}
+		aw.acc1m.SeedFromLastKnown()
+		barOpenMs := time.Unix(tsSecMs/1000, 0).UTC().Truncate(time.Minute).UnixMilli()
+		bar1m := aw.acc1m.CurrentBar(tsSecMs, false)
+		bar1m.TsSecMs = barOpenMs
+		if err := aw.w1m.WriteBar(aw.ctx, bar1m); err != nil {
+			slog.WarnContext(aw.ctx, "1m bar write failed",
+				"exchange", aw.exchange, "symbol", aw.symbol, "error", err)
+		}
+		aw.acc1m.BarReset()
+		aw.openDepthSet1m = false
+	}
+
+	if cascade.IsBarClose(tsSecMs, cascade.TF15m) {
+		if len(bids) > 0 || len(asks) > 0 {
+			aw.acc15m.SetCloseDepth(features.ComputeDepthSnapshot(bids, asks))
+		}
+		aw.acc15m.SeedFromLastKnown()
+		barOpenMs := time.Unix(tsSecMs/1000, 0).UTC().Truncate(15 * time.Minute).UnixMilli()
+		bar15m := aw.acc15m.CurrentBar(tsSecMs, false)
+		bar15m.TsSecMs = barOpenMs
+		if err := aw.w15m.WriteBar(aw.ctx, bar15m); err != nil {
+			slog.WarnContext(aw.ctx, "15m bar write failed",
+				"exchange", aw.exchange, "symbol", aw.symbol, "error", err)
+		}
+		aw.acc15m.BarReset()
+		aw.openDepthSet15m = false
+	}
 }
 
 // persistBlockWindow writes the current blockwindow contents to Redis as a LIST.
@@ -234,15 +297,23 @@ func (aw *accWriter) ApplyOBEvent(kind consumer.OBEventKind, side string, parsed
 	switch kind {
 	case consumer.OBEventAdd:
 		aw.acc.IncrementOBAdd(side, parsedSize)
+		aw.acc1m.IncrementOBAdd(side, parsedSize)
+		aw.acc15m.IncrementOBAdd(side, parsedSize)
 	case consumer.OBEventCancel:
 		aw.acc.IncrementOBCancel(side)
+		aw.acc1m.IncrementOBCancel(side)
+		aw.acc15m.IncrementOBCancel(side)
 	case consumer.OBEventModify:
 		aw.acc.IncrementOBModify()
+		aw.acc1m.IncrementOBModify()
+		aw.acc15m.IncrementOBModify()
 	}
 }
 
 func (aw *accWriter) IncrementGap() {
 	aw.acc.IncrementGap()
+	aw.acc1m.IncrementGap()
+	aw.acc15m.IncrementGap()
 	// Reset CVD running state on any data gap — discontinuity breaks the delta series.
 	aw.cumDelta = 0
 	aw.prevCumDelta = 0
@@ -251,7 +322,13 @@ func (aw *accWriter) IncrementGap() {
 
 func (aw *accWriter) Reset() {
 	aw.acc.Reset()
+	aw.acc1m.Reset()
+	aw.acc15m.Reset()
+	aw.acc1m.IncrementGap()  // marks first post-restart bar with gap_count>=1
+	aw.acc15m.IncrementGap() // same
 	aw.openDepthSet = false
+	aw.openDepthSet1m = false
+	aw.openDepthSet15m = false
 	aw.cumDelta = 0
 	aw.prevCumDelta = 0
 	aw.prevClose = nil
@@ -382,6 +459,8 @@ func main() {
 					"gap_cause", g.GapCause)
 			})
 		acc := accumulator.New(p.exchange, p.symbol, wallClock{})
+		acc1m := accumulator.New(p.exchange, p.symbol, wallClock{})
+		acc15m := accumulator.New(p.exchange, p.symbol, wallClock{})
 
 		w, err := questdbwriter.New(ctx, writerCfg, logger)
 		if err != nil {
@@ -392,6 +471,40 @@ func main() {
 		w.SetWALDropCounter(m.WALDropTotal.Inc)
 		w.SetWriteLatencyObserver(m.QuestDBWriteLatencyMs.Observe)
 		w.StartWALProbe(ctx)
+
+		w1m, err := questdbwriter.New(ctx, questdbwriter.WriterConfig{
+			ILPAddr:          cfg.QuestDBILPAddr,
+			HTTPAddr:         cfg.QuestDBHTTPAddr,
+			FlushInterval:    time.Duration(cfg.QuestDBILPFlushMs) * time.Millisecond,
+			WALProbeInterval: time.Duration(cfg.WALProbeIntervalS) * time.Second,
+			WALBufferSize:    cfg.WALBufferSize,
+			TableName:        "snapshot_1m",
+		}, logger)
+		if err != nil {
+			logger.Error("1m questdb writer init failed",
+				"exchange", p.exchange, "symbol", p.symbol, "error", err)
+			os.Exit(1)
+		}
+		w1m.SetWALDropCounter(m.WALDropTotal.Inc)
+		w1m.SetWriteLatencyObserver(m.QuestDBWriteLatencyMs.Observe)
+		w1m.StartWALProbe(ctx)
+
+		w15m, err := questdbwriter.New(ctx, questdbwriter.WriterConfig{
+			ILPAddr:          cfg.QuestDBILPAddr,
+			HTTPAddr:         cfg.QuestDBHTTPAddr,
+			FlushInterval:    time.Duration(cfg.QuestDBILPFlushMs) * time.Millisecond,
+			WALProbeInterval: time.Duration(cfg.WALProbeIntervalS) * time.Second,
+			WALBufferSize:    cfg.WALBufferSize,
+			TableName:        "snapshot_15m",
+		}, logger)
+		if err != nil {
+			logger.Error("15m questdb writer init failed",
+				"exchange", p.exchange, "symbol", p.symbol, "error", err)
+			os.Exit(1)
+		}
+		w15m.SetWALDropCounter(m.WALDropTotal.Inc)
+		w15m.SetWriteLatencyObserver(m.QuestDBWriteLatencyMs.Observe)
+		w15m.StartWALProbe(ctx)
 
 		btw := blockwindow.New(cfg.BlockTradeWindow, cfg.BlockTradeMinSample)
 		btwKey := "candle:btw:" + p.exchange + ":" + p.symbol
@@ -434,6 +547,8 @@ func main() {
 			publisher:     pub,
 			candles1sPub:  candles1sPub,
 			heatmapWriter: hw,
+			acc1m: acc1m, w1m: w1m,
+			acc15m: acc15m, w15m: w15m,
 		}
 		barClose := make(chan consumer.BarCloseSig, 1)
 		partialPublish := make(chan consumer.PartialPublishSig, 1)
@@ -544,7 +659,7 @@ func main() {
 		}
 		walState := "ok"
 		for _, e := range entries {
-			if e.w.IsWALSuspended() {
+			if e.w.IsWALSuspended() || e.aw.w1m.IsWALSuspended() || e.aw.w15m.IsWALSuspended() {
 				walState = "suspended"
 				break
 			}
@@ -667,7 +782,7 @@ func main() {
 						if lag > maxLag {
 							maxLag = lag
 						}
-						if e.w.IsWALSuspended() {
+						if e.w.IsWALSuspended() || e.aw.w1m.IsWALSuspended() || e.aw.w15m.IsWALSuspended() {
 							walOK = false
 						}
 					}
@@ -704,6 +819,22 @@ func main() {
 		}
 		if err := e.w.Close(shutdownCtx); err != nil {
 			logger.Error("writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		}
+		bar1mFinal := e.aw.acc1m.CurrentBar(tsSecMs, true)
+		bar1mFinal.TsSecMs = time.Unix(tsSecMs/1000, 0).UTC().Truncate(time.Minute).UnixMilli()
+		if err := e.aw.w1m.WriteBar(shutdownCtx, bar1mFinal); err != nil {
+			logger.Error("1m final flush failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		}
+		if err := e.aw.w1m.Close(shutdownCtx); err != nil {
+			logger.Error("1m writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		}
+		bar15mFinal := e.aw.acc15m.CurrentBar(tsSecMs, true)
+		bar15mFinal.TsSecMs = time.Unix(tsSecMs/1000, 0).UTC().Truncate(15 * time.Minute).UnixMilli()
+		if err := e.aw.w15m.WriteBar(shutdownCtx, bar15mFinal); err != nil {
+			logger.Error("15m final flush failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		}
+		if err := e.aw.w15m.Close(shutdownCtx); err != nil {
+			logger.Error("15m writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
 		}
 		if e.aw.heatmapWriter != nil {
 			if err := e.aw.heatmapWriter.Close(shutdownCtx); err != nil {
