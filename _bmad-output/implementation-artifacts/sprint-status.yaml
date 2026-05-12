@@ -215,6 +215,6 @@ development_status:
   18-3-candlestick-overlays-volume-bars-absorption: done
   18-4-heatmaps-vol-profile-delta-ob-depth: done
   18-5-cvd-bid-ask-secondary-y-axis: done
-  18-6-layout-assembly-poc-liquidity-overlay: backlog
+  18-6-layout-assembly-poc-liquidity-overlay: done
   18-7-retire-vite-cleanup: backlog
   epic-18-retrospective: optional

@@ -7,8 +7,6 @@ SYMBOL_OPTIONS = [
     {"label": "BTC-USDT (Bybit)", "value": "bybit:BTC-USDT"},
 ]
 
-_PLACEHOLDER_STYLE = {"height": "100%", "background": "#2a2a2a", "color": "#555", "display": "flex", "alignItems": "center", "justifyContent": "center"}
-
 layout = dbc.Container(
     [
         dbc.Row(
@@ -24,43 +22,53 @@ layout = dbc.Container(
         ),
         dbc.Row(
             [
+                # Left column: top panels + bottom panels stacked
                 dbc.Col(
-                    dcc.Loading(
-                        dcc.Graph(id="candlestick-graph", figure={}, style={"height": "420px"}),
-                        id="loading-candlestick",
-                    ),
-                    width=5,
-                ),
-                dbc.Col(
-                    dcc.Loading(
-                        dcc.Graph(id="vol-profile-graph", figure={}, style={"height": "420px"}),
-                        id="loading-vol-profile",
-                    ),
-                    width=2,
-                ),
-                dbc.Col(
-                    dcc.Loading(
-                        dcc.Graph(id="heatmap-graph", figure={}, style={"height": "720px"}),
-                        id="loading-heatmaps",
-                    ),
-                    width=5,
-                ),
-            ],
-            style={"marginBottom": "8px"},
-        ),
-        dbc.Row(
-            [
-                dbc.Col(
-                    dcc.Loading(
-                        dcc.Graph(id="cvd-graph", figure={}, style={"height": "280px"}),
-                        id="loading-cvd",
-                    ),
+                    [
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(id="candlestick-graph", figure={}, style={"height": "420px"}),
+                                        id="loading-candlestick",
+                                    ),
+                                    width=10,
+                                ),
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(id="vol-profile-graph", figure={}, style={"height": "420px"}),
+                                        id="loading-vol-profile",
+                                    ),
+                                    width=2,
+                                ),
+                            ],
+                        ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(id="cvd-graph", figure={}, style={"height": "280px"}),
+                                        id="loading-cvd",
+                                    ),
+                                    width=6,
+                                ),
+                                dbc.Col(
+                                    dcc.Loading(
+                                        dcc.Graph(id="bidask-graph", figure={}, style={"height": "280px"}),
+                                        id="loading-bidask",
+                                    ),
+                                    width=6,
+                                ),
+                            ],
+                        ),
+                    ],
                     width=6,
                 ),
+                # Right column: heatmap spanning full height of both left sub-rows
                 dbc.Col(
                     dcc.Loading(
-                        dcc.Graph(id="bidask-graph", figure={}, style={"height": "280px"}),
-                        id="loading-bidask",
+                        dcc.Graph(id="heatmap-graph", figure={}, style={"height": "700px"}),
+                        id="loading-heatmaps",
                     ),
                     width=6,
                 ),

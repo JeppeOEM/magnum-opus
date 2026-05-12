@@ -81,6 +81,7 @@ def update_candlestick(candle_rows):
     if not df.empty:
         fig = charts.add_volume_levels(fig, df)
         fig = charts.add_volume_bubbles(fig, df)
+        fig = liquidity_overlay(fig, df)
     return fig
 
 
@@ -88,6 +89,20 @@ def absorption_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
     # Stub: renders no markers until absorption_detected field is available (Epic 20).
     # Activation: when 'absorption_detected' column is in df, add go.Scatter
     # (mode='markers', marker_symbol='diamond') at flagged candles, row=1, col=1.
+    return fig
+
+
+def liquidity_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
+    # Stub: renders nothing until poc_price/value_area_high/value_area_low
+    # are available from Epic 20 candle service output.
+    # Activation: if fields present, add:
+    #   fig.add_hrect(y0=va_low, y1=va_high, fillcolor="rgba(255,200,0,0.08)", row=1, col=1)
+    #   fig.add_hline(y=poc_price, line_color="#FFD700", line_dash="dot", row=1, col=1)
+    # Note (Epic 20): add_volume_levels already renders a histogram-based VA band and POC
+    # marker — decide whether to remove/replace it when these exact fields activate.
+    if not all(c in df.columns for c in ["poc_price", "value_area_high", "value_area_low"]):
+        return fig
+    # (Epic 20 implementation activates here when fields arrive)
     return fig
 
 
