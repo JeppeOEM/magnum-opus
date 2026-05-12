@@ -13,7 +13,7 @@ Real-time crypto market data pipeline. Two Go services connect live exchange Web
 - [Quick Start](#quick-start)
 - [Running with Docker Compose](#running-with-docker-compose)
 - [Dev Mode](#dev-mode)
-- [Frontend](#frontend)
+- [Dashboard](#dashboard)
 - [Monitoring & Observability](#monitoring--observability)
 - [Viewing Logs](#viewing-logs)
 - [Health Endpoints](#health-endpoints)
@@ -92,7 +92,6 @@ KuCoin WS / Bybit WS
 
 - **Docker** and **Docker Compose v2** — `docker compose version` must return v2.x
 - **Go 1.22+** — only needed for `make dev`, `make test`, and running the gateway
-- **Node.js 18+** — only needed for the frontend (`npm run dev`)
 - **jq** and **curl** — only needed for the blue-green deploy script
 - **Python 3** — used by `scripts/logfmt.py` (bundled, no install needed)
 
@@ -234,68 +233,34 @@ make dev-infra-down     # stops and removes Redis + QuestDB
 
 ---
 
-## Frontend
+## Dashboard
 
-The frontend is a Vite + TypeScript app under `frontend/`. It requires the **gateway** service (also in this repo under `gateway/`) which multiplexes live orderbook and 1s candle pub/sub from Redis to the browser over a single WebSocket.
+The dashboard is a Python Dash + Plotly app under `dashboard/`, served at `http://localhost:8050`. It reads historical OHLCV data from QuestDB (`snapshot_1s`) and live orderbook features from Redis (`ob_features`).
 
 ### Pages
 
 | URL | Description |
 |-----|-------------|
-| `http://localhost:5173/` | Candle chart with volume profile and bot order overlay stub |
-| `http://localhost:5173/heatmap.html` | Live orderbook heatmap, depth ladder, microstructure health gauge |
+| `http://localhost:8050/` | Candlestick + Volume Profile, Delta Heatmap, OB Depth Heatmap, CVD, Bid/Ask Volume |
 
-### Start (dev mode)
+### Start
 
-One command starts infra (Redis + QuestDB), all backend services, the gateway, and the frontend together:
-
-```bash
-cd frontend && npm install   # one-time setup
-make run                     # starts everything — Ctrl+C stops all
-```
-
-Or run individual pieces in separate terminals:
+The dashboard is included in the default `make up` compose stack (under the `dashboard` profile). For local dev:
 
 ```bash
 make dev-infra       # Redis + QuestDB (Docker, detached)
 make dev-aggregator  # Terminal 1
 make dev-candle      # Terminal 2
-make dev-bot         # Terminal 3
-make dev-gateway     # Terminal 4 — listens on :8083
-make dev-frontend    # Terminal 5 — listens on :5173
-```
-
-The frontend connects to the gateway at `ws://localhost:8083` by default (no env vars needed). To override:
-
-```bash
-GATEWAY_ADDR=:9000 make dev-gateway
-VITE_WS_URL=ws://localhost:9000 make dev-frontend
+make dev-gateway     # Terminal 3 — listens on :8083
+make dev-dashboard   # Terminal 4 — listens on :8050
 ```
 
 ### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GATEWAY_ADDR` | `:8083` | Gateway listen address |
-| `REDIS_ADDR` | `localhost:6379` | Redis address for the gateway |
-| `VITE_WS_URL` | `ws://localhost:8083` | WebSocket URL the frontend connects to |
-| `VITE_API_URL` | `http://localhost:3000` | REST API base URL for historical heatmap and candle data |
-
-### Production build
-
-```bash
-cd frontend
-npm run build        # output in frontend/dist/
-```
-
-Serves `dist/index.html` and `dist/heatmap.html` from any static file server.
-
-### Heatmap features
-
-- **Linear mode** (default): one column per orderbook tick.
-- **Non-linear mode** (toggle button): column width proportional to OFI magnitude — `N = max(1, round(clamp(|ofi| / rollingMean, 0.25, 4)))` columns per 1s candle. Quiet seconds are compressed; high-activity seconds are expanded.
-- **Microstructure health gauge**: `clamp((ofi / spread) × bid_ask_imbalance, −1, 1)` — green > 0.3, amber −0.3 to 0.3, red < −0.3.
-- **Waiting overlay**: shown until the first live orderbook message arrives.
+| `QUESTDB_HTTP_ADDR` | `http://questdb:9000` | QuestDB HTTP address for history queries |
+| `REDIS_URL` | `redis://redis:6379` | Redis URL for live ob_features stream |
 
 ---
 

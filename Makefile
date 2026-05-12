@@ -7,7 +7,7 @@ REPORTS    := test-results
 export VERSION GIT_SHA BUILD_TIME
 
 .PHONY: up down logs watch monitoring-logs \
-        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-frontend dev-dashboard \
+        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-dashboard \
         test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
 
 ## Spin up all services including one paper-trading bot — filtered logs by default, VERBOSE=1 for raw JSON
@@ -165,11 +165,6 @@ dev-gateway:
 	GATEWAY_ADDR=$${GATEWAY_ADDR:-:8083} \
 	go run ./cmd/gateway/
 
-## Run the frontend Vite dev server (http://localhost:5173)
-## Connects to the gateway at ws://localhost:8083 by default
-dev-frontend:
-	cd frontend && npm run dev
-
 ## Run the Dash dashboard (http://localhost:8050; requires local Redis + QuestDB)
 ## Requires dashboard/.venv — run `python3 -m venv dashboard/.venv && dashboard/.venv/bin/pip install -r dashboard/requirements.txt`
 dev-dashboard:
@@ -178,13 +173,12 @@ dev-dashboard:
 	REDIS_URL=redis://localhost:6379 \
 	.venv/bin/python app.py
 
-## Start everything: infra + aggregator + candle + bot + gateway + frontend (Ctrl+C stops all)
+## Start everything: infra + aggregator + candle + bot + gateway (Ctrl+C stops all)
 run: dev-infra
 	@printf "\n  %-14s %s\n"  "aggregator"    "http://localhost:8080"
 	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081"
 	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090"
 	@printf   "  %-14s %s\n"  "gateway"        "ws://localhost:8083"
-	@printf   "  %-14s %s\n"  "frontend"       "http://localhost:5173   heatmap: /heatmap.html"
 	@printf   "  %-14s %s\n\n" "questdb"       "http://localhost:9000"
 	@set -a; [ -f .env ] && . .env; set +a; \
 	set -a; [ -f candle-service/.env ] && . candle-service/.env; set +a; \
@@ -214,9 +208,8 @@ run: dev-infra
 	  REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
 	  GATEWAY_ADDR=$${GATEWAY_ADDR:-:8083} \
 	  go run ./cmd/gateway/ ) & GATEWAY=$$!; \
-	( cd frontend && npm run dev ) & FRONTEND=$$!; \
-	trap "kill $$AGG $$CANDLE $$BOT $$GATEWAY $$FRONTEND 2>/dev/null" INT TERM EXIT; \
-	wait $$AGG $$CANDLE $$BOT $$GATEWAY $$FRONTEND
+	trap "kill $$AGG $$CANDLE $$BOT $$GATEWAY 2>/dev/null" INT TERM EXIT; \
+	wait $$AGG $$CANDLE $$BOT $$GATEWAY
 
 ## Start infra + all three services (interleaved logs, Ctrl+C stops all)
 dev: dev-infra

@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 18-7-retire-vite-cleanup (2026-05-12)
+
+- **D-18-7-1: `make run` comment says "Start everything" but dashboard not launched or printed** — `Makefile` `run` target launches aggregator, candle, bot, and gateway but not the dashboard; the "Start everything" comment header is misleading. Pre-existing design — dashboard was never in `run` (only old Vite frontend was). Fix: either add dashboard launch to `run` or clarify the comment.
+
 ## Deferred from: code review of 18-6-layout-assembly-poc-liquidity-overlay (2026-05-12)
 
 - **D-18-6-1: No tests for dashboard** — pre-existing condition across all of Epic 18; no test files exist under `dashboard/`; layout restructuring, liquidity overlay call path, and subplot wiring all rely on manual visual verification. Fix: add unit tests asserting trace/shape count for key chart builders when a dashboard testing approach is established.
