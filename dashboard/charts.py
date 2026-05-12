@@ -1,19 +1,17 @@
-import copy
-
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-from app import BASE_FIGURE
-
-
-def _base_fig() -> go.Figure:
-    # Use deepcopy to avoid accumulating traces on the BASE_FIGURE singleton
-    # across repeated callback invocations under live updates.
-    return copy.deepcopy(BASE_FIGURE)
+_DARK = dict(
+    paper_bgcolor="#222222",
+    plot_bgcolor="#222222",
+    font_color="#CCCCCC",
+)
 
 
 def build_candlestick(df: pd.DataFrame) -> go.Figure:
-    fig = _base_fig()
+    fig = go.Figure()
+    fig.update_layout(**_DARK, xaxis_rangeslider_visible=False, margin=dict(l=40, r=10, t=20, b=30))
     if df.empty:
         return fig
     fig.add_trace(
@@ -26,15 +24,7 @@ def build_candlestick(df: pd.DataFrame) -> go.Figure:
             increasing_line_color="#26A69A",
             decreasing_line_color="#EF5350",
             name="OHLCV",
-        ),
-        row=1, col=1,
-    )
-    fig.update_layout(
-        paper_bgcolor="#222222",
-        plot_bgcolor="#222222",
-        font_color="#CCCCCC",
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=40, r=10, t=20, b=30),
+        )
     )
     return fig
 
@@ -54,28 +44,19 @@ def add_volume_levels(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
     poc = level_vol.idxmax()
     total_vol = level_vol.sum()
 
-    # Value Area: levels sorted by volume descending, cumsum to 70%
     sorted_levels = level_vol.sort_values(ascending=False)
     cumsum = sorted_levels.cumsum()
     va_levels = sorted_levels[cumsum <= total_vol * 0.70].index
     va_low = float(va_levels.min()) if len(va_levels) > 0 else None
     va_high = float(va_levels.max()) if len(va_levels) > 0 else None
 
-    # Value Area band
     if va_low is not None and va_high is not None:
-        fig.add_hrect(
-            y0=va_low, y1=va_high,
-            fillcolor="rgba(255,200,0,0.08)",
-            line_width=0,
-            row=1, col=1,
-        )
+        fig.add_hrect(y0=va_low, y1=va_high, fillcolor="rgba(255,200,0,0.08)", line_width=0)
 
-    # Top 20 price levels rendered as horizontal shapes with xref="x domain"
-    # (subplot-relative x-coordinates) to avoid clash with the timestamp x-axis.
     top_levels = level_vol.nlargest(20)
     max_level_vol = float(top_levels.max())
     for price, vol in top_levels.items():
-        bar_width = float(vol) / max_level_vol * 0.15  # up to 15% of subplot width
+        bar_width = float(vol) / max_level_vol * 0.15
         color = "#FFD700" if float(price) == float(poc) else "rgba(100,130,210,0.35)"
         opacity = 0.7 if float(price) == float(poc) else 0.4
         fig.add_shape(
@@ -87,7 +68,6 @@ def add_volume_levels(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
             fillcolor=color,
             opacity=opacity,
             line_width=0,
-            row=1, col=1,
         )
 
     return fig
@@ -120,14 +100,14 @@ def add_volume_bubbles(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
             name="Vol Bubbles",
             showlegend=False,
             hoverinfo="skip",
-        ),
-        row=1, col=1,
+        )
     )
     return fig
 
 
 def build_delta_heatmap(df: pd.DataFrame) -> go.Figure:
-    fig = _base_fig()
+    fig = go.Figure()
+    fig.update_layout(**_DARK, margin=dict(l=10, r=10, t=20, b=30))
     if df.empty:
         return fig
     required = ["ts", "close", "buy_volume", "volume"]
@@ -143,22 +123,11 @@ def build_delta_heatmap(df: pd.DataFrame) -> go.Figure:
             x=df["ts"],
             y=pd.to_numeric(df["close"], errors="coerce"),
             z=df["delta"],
-            colorscale=[
-                [0.0, "#EF5350"],
-                [0.5, "#222222"],
-                [1.0, "#26A69A"],
-            ],
+            colorscale=[[0.0, "#EF5350"], [0.5, "#222222"], [1.0, "#26A69A"]],
             zmid=0,
             showscale=False,
             name="Delta",
-        ),
-        row=1, col=3,
-    )
-    fig.update_layout(
-        paper_bgcolor="#222222",
-        plot_bgcolor="#222222",
-        font_color="#CCCCCC",
-        margin=dict(l=10, r=10, t=20, b=30),
+        )
     )
     return fig
 
@@ -178,7 +147,6 @@ def add_ob_depth_heatmap(fig: go.Figure, ob_rows: list) -> go.Figure:
         return fig
 
     ob_df["depth"] = ob_df["bid_depth_l1"] + ob_df["ask_depth_l1"]
-
     ts_col = "ts" if "ts" in ob_df.columns else None
     fig.add_trace(
         go.Heatmap(
@@ -189,14 +157,14 @@ def add_ob_depth_heatmap(fig: go.Figure, ob_rows: list) -> go.Figure:
             showscale=False,
             opacity=0.6,
             name="OB Depth",
-        ),
-        row=1, col=3,
+        )
     )
     return fig
 
 
 def build_vol_profile(df: pd.DataFrame) -> go.Figure:
-    fig = _base_fig()
+    fig = go.Figure()
+    fig.update_layout(**_DARK, margin=dict(l=5, r=5, t=20, b=30), bargap=0.05)
     if df.empty:
         return fig
     required = ["close", "volume"]
@@ -223,21 +191,14 @@ def build_vol_profile(df: pd.DataFrame) -> go.Figure:
             marker_color="rgba(100,130,210,0.5)",
             name="Vol Profile",
             showlegend=False,
-        ),
-        row=1, col=2,
-    )
-    fig.update_layout(
-        paper_bgcolor="#222222",
-        plot_bgcolor="#222222",
-        font_color="#CCCCCC",
-        margin=dict(l=5, r=5, t=20, b=30),
-        bargap=0.05,
+        )
     )
     return fig
 
 
 def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
-    fig = _base_fig()
+    fig = go.Figure()
+    fig.update_layout(**_DARK, margin=dict(l=40, r=10, t=10, b=30))
     if df.empty:
         return fig
     required = ["ts", "buy_volume", "volume"]
@@ -252,7 +213,6 @@ def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
         return fig
 
     df["cvd"] = (2 * df["buy_volume"] - df["volume"]).cumsum()
-
     pos = df["cvd"].clip(lower=0)
     neg = df["cvd"].clip(upper=0)
 
@@ -265,8 +225,7 @@ def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
             mode="lines",
             name="CVD+",
             showlegend=False,
-        ),
-        row=2, col=1,
+        )
     )
     fig.add_trace(
         go.Scatter(
@@ -277,20 +236,14 @@ def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
             mode="lines",
             name="CVD-",
             showlegend=False,
-        ),
-        row=2, col=1,
-    )
-    fig.update_layout(
-        paper_bgcolor="#222222",
-        plot_bgcolor="#222222",
-        font_color="#CCCCCC",
-        margin=dict(l=40, r=10, t=10, b=30),
+        )
     )
     return fig
 
 
 def build_bidask_panel(df: pd.DataFrame) -> go.Figure:
-    fig = _base_fig()
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.update_layout(**_DARK, margin=dict(l=40, r=10, t=10, b=30), barmode="overlay")
     if df.empty:
         return fig
     required = ["ts", "buy_volume", "volume"]
@@ -310,22 +263,12 @@ def build_bidask_panel(df: pd.DataFrame) -> go.Figure:
     ratio = (df["buy_volume"] / df["volume"]).clip(0, 1)
 
     fig.add_trace(
-        go.Bar(
-            x=df["ts"], y=ask_vol,
-            marker_color="#26A69A",
-            name="Ask Vol",
-            showlegend=False,
-        ),
-        row=2, col=2,
+        go.Bar(x=df["ts"], y=ask_vol, marker_color="#26A69A", name="Ask Vol", showlegend=False),
+        secondary_y=False,
     )
     fig.add_trace(
-        go.Bar(
-            x=df["ts"], y=bid_vol,
-            marker_color="#EF5350",
-            name="Bid Vol",
-            showlegend=False,
-        ),
-        row=2, col=2,
+        go.Bar(x=df["ts"], y=bid_vol, marker_color="#EF5350", name="Bid Vol", showlegend=False),
+        secondary_y=False,
     )
     fig.add_trace(
         go.Scatter(
@@ -335,14 +278,7 @@ def build_bidask_panel(df: pd.DataFrame) -> go.Figure:
             name="Ratio",
             showlegend=False,
         ),
-        row=2, col=2, secondary_y=True,
+        secondary_y=True,
     )
-    fig.update_yaxes(range=[0, 1], row=2, col=2, secondary_y=True)
-    fig.update_layout(
-        paper_bgcolor="#222222",
-        plot_bgcolor="#222222",
-        font_color="#CCCCCC",
-        margin=dict(l=40, r=10, t=10, b=30),
-        barmode="overlay",
-    )
+    fig.update_yaxes(range=[0, 1], secondary_y=True)
     return fig
