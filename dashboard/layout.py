@@ -33,14 +33,14 @@ layout = dbc.Container(
                 ),
                 dbc.Col(
                     dcc.Loading(
-                        dbc.Card("Vol Profile", body=True, style={**_PLACEHOLDER_STYLE, "height": "420px"}),
+                        dcc.Graph(id="vol-profile-graph", figure={}, style={"height": "420px"}),
                         id="loading-vol-profile",
                     ),
                     width=2,
                 ),
                 dbc.Col(
                     dcc.Loading(
-                        dbc.Card("Heatmaps", body=True, style={**_PLACEHOLDER_STYLE, "height": "720px"}),
+                        dcc.Graph(id="heatmap-graph", figure={}, style={"height": "720px"}),
                         id="loading-heatmaps",
                     ),
                     width=5,

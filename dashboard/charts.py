@@ -124,3 +124,113 @@ def add_volume_bubbles(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
         row=1, col=1,
     )
     return fig
+
+
+def build_delta_heatmap(df: pd.DataFrame) -> go.Figure:
+    fig = _base_fig()
+    if df.empty:
+        return fig
+    required = ["ts", "close", "buy_volume", "volume"]
+    if not all(c in df.columns for c in required):
+        return fig
+
+    df = df.dropna(subset=["buy_volume", "volume", "close"]).copy()
+    df["delta"] = 2 * pd.to_numeric(df["buy_volume"], errors="coerce") - pd.to_numeric(df["volume"], errors="coerce")
+    df = df.dropna(subset=["delta"])
+
+    fig.add_trace(
+        go.Heatmap(
+            x=df["ts"],
+            y=pd.to_numeric(df["close"], errors="coerce"),
+            z=df["delta"],
+            colorscale=[
+                [0.0, "#EF5350"],
+                [0.5, "#222222"],
+                [1.0, "#26A69A"],
+            ],
+            zmid=0,
+            showscale=False,
+            name="Delta",
+        ),
+        row=1, col=3,
+    )
+    fig.update_layout(
+        paper_bgcolor="#222222",
+        plot_bgcolor="#222222",
+        font_color="#CCCCCC",
+        margin=dict(l=10, r=10, t=20, b=30),
+    )
+    return fig
+
+
+def add_ob_depth_heatmap(fig: go.Figure, ob_rows: list) -> go.Figure:
+    if not ob_rows:
+        return fig
+    ob_df = pd.DataFrame(ob_rows)
+    required_ob = ["bid_depth_l1", "ask_depth_l1", "best_bid"]
+    if not all(c in ob_df.columns for c in required_ob):
+        return fig
+
+    for col in ["bid_depth_l1", "ask_depth_l1", "best_bid"]:
+        ob_df[col] = pd.to_numeric(ob_df[col], errors="coerce")
+    ob_df = ob_df.dropna(subset=["bid_depth_l1", "ask_depth_l1", "best_bid"])
+    if ob_df.empty:
+        return fig
+
+    ob_df["depth"] = ob_df["bid_depth_l1"] + ob_df["ask_depth_l1"]
+
+    ts_col = "ts" if "ts" in ob_df.columns else None
+    fig.add_trace(
+        go.Heatmap(
+            x=ob_df[ts_col] if ts_col else list(range(len(ob_df))),
+            y=ob_df["best_bid"],
+            z=ob_df["depth"],
+            colorscale="Blues",
+            showscale=False,
+            opacity=0.6,
+            name="OB Depth",
+        ),
+        row=1, col=3,
+    )
+    return fig
+
+
+def build_vol_profile(df: pd.DataFrame) -> go.Figure:
+    fig = _base_fig()
+    if df.empty:
+        return fig
+    required = ["close", "volume"]
+    if not all(c in df.columns for c in required):
+        return fig
+
+    df = df.copy()
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df = df.dropna(subset=["close", "volume"])
+
+    price_range = df["close"].max() - df["close"].min()
+    if price_range <= 0:
+        return fig
+    bucket_size = max(price_range / 50, 0.01)
+    df["price_level"] = (df["close"] / bucket_size).round() * bucket_size
+    level_vol = df.groupby("price_level")["volume"].sum().reset_index()
+
+    fig.add_trace(
+        go.Bar(
+            x=level_vol["volume"],
+            y=level_vol["price_level"],
+            orientation="h",
+            marker_color="rgba(100,130,210,0.5)",
+            name="Vol Profile",
+            showlegend=False,
+        ),
+        row=1, col=2,
+    )
+    fig.update_layout(
+        paper_bgcolor="#222222",
+        plot_bgcolor="#222222",
+        font_color="#CCCCCC",
+        margin=dict(l=5, r=5, t=20, b=30),
+        bargap=0.05,
+    )
+    return fig

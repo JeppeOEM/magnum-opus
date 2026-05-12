@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 18-4-heatmaps-vol-profile-delta-ob-depth (2026-05-12)
+
+- **D-18-4-1: Unbounded `ob-store` / `candle-store` growth in `live_update`** (`dashboard/callbacks.py:61,67`) — `(candle_rows or []) + new_candles` and `(ob_rows or []) + new_ob` accumulate indefinitely; no ring-buffer or cap; eventually causes slow renders and potential browser OOM on long-running sessions. Pre-existing from story 18-2b. Fix: trim stores to a max length (e.g. last 500 candles, last 1000 OB entries) in live_update.
+
 ## Deferred from: code review of 19-5-divergence-cvd-iceberg-group-d (2026-05-11)
 
 - **D-19-5-1: CVDDivergence has no standalone unit test** — Computed inline in accWriter, not a standalone pure function; testing requires integration harness. Low risk given simple comparison logic.

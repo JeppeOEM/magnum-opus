@@ -1,3 +1,4 @@
+import copy
 import os
 
 import pandas as pd
@@ -88,3 +89,47 @@ def absorption_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
     # Activation: when 'absorption_detected' column is in df, add go.Scatter
     # (mode='markers', marker_symbol='diamond') at flagged candles, row=1, col=1.
     return fig
+
+
+@callback(
+    Output("heatmap-graph", "figure"),
+    Input("candle-store", "data"),
+    Input("ob-store", "data"),
+)
+def update_heatmap(candle_rows, ob_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    fig = charts.build_delta_heatmap(df)
+    fig = charts.add_ob_depth_heatmap(fig, ob_rows or [])
+    return fig
+
+
+@callback(
+    Output("vol-profile-graph", "figure"),
+    Input("candle-store", "data"),
+)
+def update_vol_profile(candle_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    return charts.build_vol_profile(df)
+
+
+@callback(
+    Output("heatmap-graph", "figure", allow_duplicate=True),
+    Input("candlestick-graph", "relayoutData"),
+    State("heatmap-graph", "figure"),
+    prevent_initial_call=True,
+)
+def sync_yaxis_zoom(relay_data, heatmap_fig):
+    if not relay_data or not heatmap_fig:
+        return no_update
+    if "yaxis.range[0]" in relay_data and "yaxis.range[1]" in relay_data:
+        fig = copy.deepcopy(heatmap_fig)
+        if "layout" not in fig:
+            fig["layout"] = {}
+        if "yaxis" not in fig["layout"]:
+            fig["layout"]["yaxis"] = {}
+        fig["layout"]["yaxis"]["range"] = [
+            float(relay_data["yaxis.range[0]"]),
+            float(relay_data["yaxis.range[1]"]),
+        ]
+        return fig
+    return no_update

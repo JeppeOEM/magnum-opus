@@ -1,5 +1,5 @@
 # generated: 2026-05-05
-# last_updated: 2026-05-10
+# last_updated: 2026-05-12
 # updated: 12-1 done (all review patches applied); deferred-work.md created for D1-D4
 # updated: epic 5 stories renumbered (migration runner added as 5-1, old 1-6 → 2-7); epic 9 stories expanded (DDL split to 9-1, flush+catchup 9-2, alerting 9-3, blue-green 9-4)
 # project: magnum-opus
@@ -213,7 +213,7 @@ development_status:
   18-2a-questdb-history-loader-dcc-store-symbol-switcher: done
   18-2b-live-poll-questdb-redis-ob-features-merge: done
   18-3-candlestick-overlays-volume-bars-absorption: done
-  18-4-heatmaps-vol-profile-delta-ob-depth: backlog
+  18-4-heatmaps-vol-profile-delta-ob-depth: done
   18-5-cvd-bid-ask-secondary-y-axis: backlog
   18-6-layout-assembly-poc-liquidity-overlay: backlog
   18-7-retire-vite-cleanup: backlog
