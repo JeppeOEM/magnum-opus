@@ -198,7 +198,8 @@ def _run_verbose():
     except KeyboardInterrupt:
         pass
 
-_ALERT_ERROR_KEYWORDS = ("error", "failed", "fatal", "exception", "traceback", "exit code", "exited with")
+import re as _re
+_ALERT_ERROR_RE = _re.compile(r'\b(error|fail|failed|fatal|exception|traceback)\b|exit code|exited with')
 
 def _run_alerts():
     """Print WARN/ERROR JSON logs plus all non-JSON service output (startup messages, crash traces, build errors)."""
@@ -211,7 +212,7 @@ def _run_alerts():
                 # No service prefix — raw docker output (build steps, engine events).
                 # Show only lines that look like failures; suppress normal progress noise.
                 lower = line.lower()
-                if any(kw in lower for kw in _ALERT_ERROR_KEYWORDS):
+                if _ALERT_ERROR_RE.search(lower):
                     print(f"\033[2m{line}\033[0m", flush=True)
                 continue
 

@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+from datetime import datetime, timezone
 
 import pandas as pd
 from dash import Input, Output, State, callback, no_update
@@ -60,13 +61,13 @@ def live_update(n, candle_rows, last_ts, selected, ob_rows, ob_cursor, ob_cursor
     out_candles = no_update
     out_ts = no_update
     if new_candles:
-        out_candles = (candle_rows or []) + new_candles
+        out_candles = ((candle_rows or []) + new_candles)[-500:]
         out_ts = new_candles[-1]["ts"]
 
     out_ob = no_update
     out_cursor = no_update
     if new_ob:
-        out_ob = (ob_rows or []) + new_ob
+        out_ob = ((ob_rows or []) + new_ob)[-1000:]
         out_cursor = new_cursor
 
     return out_candles, out_ts, out_ob, out_cursor
@@ -96,10 +97,13 @@ def absorption_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
         return fig
     if "close" not in absorbed.columns:
         return fig
+    close_vals = pd.to_numeric(absorbed["close"], errors="coerce")
+    if close_vals.isna().all():
+        return fig
     fig.add_trace(
         go.Scatter(
             x=absorbed["ts"],
-            y=pd.to_numeric(absorbed["close"], errors="coerce"),
+            y=close_vals,
             mode="markers",
             marker=dict(symbol="diamond", size=10, color="#FF9800", opacity=0.8),
             name="Absorption",
@@ -111,7 +115,7 @@ def absorption_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
 
 
 def liquidity_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
-    if df.empty:
+    if df.empty or len(df) < 2:
         return fig
     required = ["poc_price", "value_area_high", "value_area_low", "ts"]
     if not all(c in df.columns for c in required):
@@ -257,3 +261,31 @@ def update_cvd(candle_rows):
 def update_bidask(candle_rows):
     df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
     return charts.build_bidask_panel(df)
+
+
+@callback(
+    Output("status-bar", "children"),
+    Input("candle-store", "data"),
+    Input("ob-store", "data"),
+)
+def update_status_bar(candle_rows, ob_rows):
+    now = datetime.now(timezone.utc)
+    parts = []
+
+    if candle_rows:
+        n = len(candle_rows)
+        last_ts_raw = candle_rows[-1].get("ts", "")
+        try:
+            last_ts = pd.Timestamp(last_ts_raw, tz="UTC")
+            age_s = int((now - last_ts.to_pydatetime()).total_seconds())
+            age_str = f"{age_s}s ago" if age_s < 120 else f"{age_s // 60}m ago"
+            parts.append(f"candles: {n}  |  last bar: {last_ts.strftime('%H:%M:%S')} UTC  |  age: {age_str}")
+        except Exception:
+            parts.append(f"candles: {n}")
+    else:
+        parts.append("candles: no data — is the stack running?")
+
+    if ob_rows:
+        parts.append(f"ob ticks: {len(ob_rows)}")
+
+    return "  ·  ".join(parts)

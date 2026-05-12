@@ -1,5 +1,5 @@
 import dash_bootstrap_components as dbc
-from dash import dcc
+from dash import dcc, html
 
 SYMBOL_OPTIONS = [
     {"label": "BTC-USDT (KuCoin)", "value": "kucoin:BTC-USDT"},
@@ -10,15 +10,25 @@ SYMBOL_OPTIONS = [
 layout = dbc.Container(
     [
         dbc.Row(
-            dbc.Col(
-                dcc.Dropdown(
-                    id="symbol-dropdown",
-                    options=SYMBOL_OPTIONS,
-                    value="kucoin:BTC-USDT",
-                    clearable=False,
-                    style={"marginBottom": "8px"},
-                )
-            )
+            [
+                dbc.Col(
+                    dcc.Dropdown(
+                        id="symbol-dropdown",
+                        options=SYMBOL_OPTIONS,
+                        value="kucoin:BTC-USDT",
+                        clearable=False,
+                    ),
+                    width=4,
+                ),
+                dbc.Col(
+                    html.Div(
+                        id="status-bar",
+                        style={"color": "#888", "fontSize": "12px", "lineHeight": "36px", "paddingLeft": "12px"},
+                    ),
+                    width=8,
+                ),
+            ],
+            style={"marginBottom": "8px"},
         ),
         dbc.Row(
             [
@@ -28,17 +38,11 @@ layout = dbc.Container(
                         dbc.Row(
                             [
                                 dbc.Col(
-                                    dcc.Loading(
-                                        dcc.Graph(id="candlestick-graph", figure={}, style={"height": "420px"}),
-                                        id="loading-candlestick",
-                                    ),
+                                    dcc.Graph(id="candlestick-graph", figure={}, style={"height": "420px"}),
                                     width=10,
                                 ),
                                 dbc.Col(
-                                    dcc.Loading(
-                                        dcc.Graph(id="vol-profile-graph", figure={}, style={"height": "420px"}),
-                                        id="loading-vol-profile",
-                                    ),
+                                    dcc.Graph(id="vol-profile-graph", figure={}, style={"height": "420px"}),
                                     width=2,
                                 ),
                             ],
@@ -46,17 +50,11 @@ layout = dbc.Container(
                         dbc.Row(
                             [
                                 dbc.Col(
-                                    dcc.Loading(
-                                        dcc.Graph(id="cvd-graph", figure={}, style={"height": "280px"}),
-                                        id="loading-cvd",
-                                    ),
+                                    dcc.Graph(id="cvd-graph", figure={}, style={"height": "280px"}),
                                     width=6,
                                 ),
                                 dbc.Col(
-                                    dcc.Loading(
-                                        dcc.Graph(id="bidask-graph", figure={}, style={"height": "280px"}),
-                                        id="loading-bidask",
-                                    ),
+                                    dcc.Graph(id="bidask-graph", figure={}, style={"height": "280px"}),
                                     width=6,
                                 ),
                             ],
@@ -66,10 +64,7 @@ layout = dbc.Container(
                 ),
                 # Right column: heatmap spanning full height of both left sub-rows
                 dbc.Col(
-                    dcc.Loading(
-                        dcc.Graph(id="heatmap-graph", figure={}, style={"height": "700px"}),
-                        id="loading-heatmaps",
-                    ),
+                    dcc.Graph(id="heatmap-graph", figure={}, style={"height": "700px"}),
                     width=6,
                 ),
             ],

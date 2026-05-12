@@ -389,6 +389,9 @@ func (a *Accumulator) Apply(price, size string, isTrade bool, side string, tsMs 
 	if err != nil {
 		return
 	}
+	if s <= 0 {
+		return
+	}
 
 	// TWAP accumulation: use price held since last trade, before updating close.
 	if a.tradeCount > 0 {
@@ -889,8 +892,6 @@ func (a *Accumulator) Reset() {
 	a.hasLastKnownOB = false
 	a.lastMidPrice = 0
 	a.hasLastMid = false
-	a.tradePriceLevels = make(map[string]struct{})
-	a.footprintMap = make(map[string]features.FootprintCell)
 }
 
 func ptr(f float64) *float64    { return &f }

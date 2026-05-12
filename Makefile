@@ -175,7 +175,7 @@ dev-dashboard:
 	REDIS_URL=redis://localhost:6379 \
 	.venv/bin/python app.py
 
-## Start everything: infra + aggregator + candle + bot + gateway (Ctrl+C stops all)
+## Start backend services: infra + aggregator + candle + bot + gateway (dashboard: make dev-dashboard)
 run: dev-infra
 	@printf "\n  %-14s %s\n"  "aggregator"    "http://localhost:8080"
 	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081"

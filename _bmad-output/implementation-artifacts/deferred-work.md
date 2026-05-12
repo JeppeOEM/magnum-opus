@@ -2,12 +2,12 @@
 
 ## Deferred from: code review of 20-1-liquidity-overlay-absorption-markers (2026-05-12)
 
-- **D-20-1-1: Single-row df produces zero-width POC line** — one-row DataFrame passes the empty guard; `iloc[0] == iloc[-1]` gives identical x-endpoints; Plotly renders a point not a line. Low severity, visual only.
-- **D-20-1-2: all-NaN close in absorption_overlay → silent invisible trace** — `pd.to_numeric(absorbed["close"])` can yield all-NaN; trace added but renders nothing. Data quality concern, pre-existing upstream.
+- ~~**D-20-1-1: Single-row df produces zero-width POC line**~~ — **Fixed 2026-05-12**: `liquidity_overlay` now returns early when `len(df) < 2`.
+- ~~**D-20-1-2: all-NaN close in absorption_overlay → silent invisible trace**~~ — **Fixed 2026-05-12**: `absorption_overlay` now checks `close_vals.isna().all()` before adding the trace.
 
 ## Deferred from: code review of 18-7-retire-vite-cleanup (2026-05-12)
 
-- **D-18-7-1: `make run` comment says "Start everything" but dashboard not launched or printed** — `Makefile` `run` target launches aggregator, candle, bot, and gateway but not the dashboard; the "Start everything" comment header is misleading. Pre-existing design — dashboard was never in `run` (only old Vite frontend was). Fix: either add dashboard launch to `run` or clarify the comment.
+- ~~**D-18-7-1: `make run` comment says "Start everything" but dashboard not launched or printed**~~ — **Fixed 2026-05-12**: comment updated to "Start backend services: infra + aggregator + candle + bot + gateway (dashboard: make dev-dashboard)".
 
 ## Deferred from: code review of 18-6-layout-assembly-poc-liquidity-overlay (2026-05-12)
 
@@ -15,7 +15,7 @@
 
 ## Deferred from: code review of 18-4-heatmaps-vol-profile-delta-ob-depth (2026-05-12)
 
-- **D-18-4-1: Unbounded `ob-store` / `candle-store` growth in `live_update`** (`dashboard/callbacks.py:61,67`) — `(candle_rows or []) + new_candles` and `(ob_rows or []) + new_ob` accumulate indefinitely; no ring-buffer or cap; eventually causes slow renders and potential browser OOM on long-running sessions. Pre-existing from story 18-2b. Fix: trim stores to a max length (e.g. last 500 candles, last 1000 OB entries) in live_update.
+- ~~**D-18-4-1: Unbounded `ob-store` / `candle-store` growth in `live_update`**~~ — **Fixed 2026-05-12**: `candle-store` capped to last 500 rows, `ob-store` capped to last 1000 rows in `live_update`.
 
 ## Deferred from: code review of 19-5-divergence-cvd-iceberg-group-d (2026-05-11)
 
@@ -25,9 +25,9 @@
 
 ## Deferred from: code review of 19-2-value-area-signal-group-c (2026-05-11)
 
-- **D-19-2-1: `FootprintJSON` non-nil while `POCPrice` nil for zero-size trades** — If a zero-size trade arrives, footprintMap gets an entry with vol=0; `ComputeValueArea` returns `ok=false` leaving `POCPrice` nil, but `FootprintJSON` is still encoded. Fix: add `if s <= 0 { return }` guard in `Apply()` after size parse. Pre-existing 19-1 design issue.
-- **D-19-2-2: `derefF(bar.SellVolume)` vs `*bar.BuyVolume` asymmetry in pubsub publisher** — Within `if bar.BuyVolume != nil`, `sell_volume` uses `derefF` (silent 0 on nil) while `buy_volume` uses direct deref (panic on nil). Symmetric `*bar.SellVolume` would be safer. Pre-existing 19-1 change.
-- **D-19-2-3: `Reset()` redundant `make` after `BarReset()`'s `clear` for footprintMap** — `Reset()` calls `BarReset()` (which clears the map), then does `make()` on footprintMap again, discarding the just-cleared allocation. Minor performance waste. Pre-existing 19-1 pattern.
+- ~~**D-19-2-1: `FootprintJSON` non-nil while `POCPrice` nil for zero-size trades**~~ — **Fixed 2026-05-12**: `Apply()` now returns early when `s <= 0` after size parse.
+- ~~**D-19-2-2: `derefF(bar.SellVolume)` vs `*bar.BuyVolume` asymmetry in pubsub publisher**~~ — **Fixed 2026-05-12**: guard is now `if bar.BuyVolume != nil && bar.SellVolume != nil`; both use direct deref.
+- ~~**D-19-2-3: `Reset()` redundant `make` after `BarReset()`'s `clear` for footprintMap**~~ — **Fixed 2026-05-12**: removed redundant `make` calls from `Reset()`; `BarReset()` already clears both maps in-place.
 - **D-19-2-4: No test for malformed price-string keys in `ComputeValueArea`** — `strconv.ParseFloat` errors silently `continue`; no test exercises this. Low risk given exchange prices are well-formatted, but a test covering skip-on-bad-key would improve robustness. Pre-existing 19-1 data-contract assumption.
 
 ## Deferred from: code review of 17-4-bot-service-orderbook-subscription (2026-05-11)
@@ -266,7 +266,7 @@
 
 ## Deferred from: quick-dev fix — make watch startup visibility (2026-05-10)
 
-- **D-QD-1: `_ALERT_ERROR_KEYWORDS` broad substrings produce false-positive noise** (`scripts/logfmt.py`) — keywords like `"error"` and `"failed"` are substrings that match Docker pull retry progress lines (e.g. "Retrying failed download...") and build step annotations, producing dim grey noise during image pulls. Fix: tighten to whole-word patterns (`re.search(r'\b(error|fail|fatal)\b', lower)`) or add a known-noisy prefix exclusion list (e.g. skip lines starting with `#`/`---`/`=>`).
+- ~~**D-QD-1: `_ALERT_ERROR_KEYWORDS` broad substrings produce false-positive noise**~~ — **Fixed 2026-05-12**: replaced substring scan with `re.compile(r'\b(error|fail|failed|fatal|exception|traceback)\b|exit code|exited with')` for whole-word matching.
 
 ## Deferred from: code review of 17-1-aggregator-orderbook-pubsub (2026-05-10)
 

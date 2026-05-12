@@ -13,7 +13,7 @@ _DARK = dict(
 
 def build_candlestick(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
-    fig.update_layout(**_DARK, xaxis_rangeslider_visible=False, margin=dict(l=40, r=10, t=20, b=30))
+    fig.update_layout(**_DARK, uirevision="candlestick", xaxis_rangeslider_visible=False, margin=dict(l=40, r=10, t=20, b=30))
     if df.empty:
         return fig
     fig.add_trace(
@@ -109,7 +109,7 @@ def add_volume_bubbles(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
 
 def build_delta_heatmap(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
-    fig.update_layout(**_DARK, margin=dict(l=10, r=10, t=20, b=30))
+    fig.update_layout(**_DARK, uirevision="heatmap", margin=dict(l=10, r=10, t=20, b=30))
     if df.empty:
         return fig
     required = ["ts", "close", "buy_volume", "volume"]
@@ -166,7 +166,7 @@ def add_ob_depth_heatmap(fig: go.Figure, ob_rows: list) -> go.Figure:
 
 def build_vol_profile(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
-    fig.update_layout(**_DARK, margin=dict(l=5, r=5, t=20, b=30), bargap=0.05)
+    fig.update_layout(**_DARK, uirevision="vol-profile", margin=dict(l=5, r=5, t=20, b=30), bargap=0.05)
     if df.empty:
         return fig
     required = ["close", "volume"]
@@ -200,7 +200,7 @@ def build_vol_profile(df: pd.DataFrame) -> go.Figure:
 
 def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
-    fig.update_layout(**_DARK, margin=dict(l=40, r=10, t=10, b=30))
+    fig.update_layout(**_DARK, uirevision="cvd", margin=dict(l=40, r=10, t=10, b=30))
     if df.empty:
         return fig
     required = ["ts", "buy_volume", "volume"]
@@ -245,7 +245,7 @@ def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
 
 def build_bidask_panel(df: pd.DataFrame) -> go.Figure:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.update_layout(**_DARK, margin=dict(l=40, r=10, t=10, b=30), barmode="overlay")
+    fig.update_layout(**_DARK, uirevision="bidask", margin=dict(l=40, r=10, t=10, b=30), barmode="overlay")
     if df.empty:
         return fig
     required = ["ts", "buy_volume", "volume"]
