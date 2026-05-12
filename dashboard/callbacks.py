@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 
 import pandas as pd
@@ -146,6 +147,7 @@ def update_heatmap(candle_rows, ob_rows):
     df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
     fig = charts.build_delta_heatmap(df)
     fig = charts.add_ob_depth_heatmap(fig, ob_rows or [])
+    fig = charts.add_iceberg_borders(fig, df)
     return fig
 
 
@@ -179,6 +181,64 @@ def sync_yaxis_zoom(relay_data, heatmap_fig):
         ]
         return fig
     return no_update
+
+
+@callback(
+    Output("footprint-modal", "is_open"),
+    Output("footprint-chart", "figure"),
+    Output("footprint-modal-title", "children"),
+    Input("candlestick-graph", "clickData"),
+    State("candle-store", "data"),
+    prevent_initial_call=True,
+)
+def open_footprint_modal(click_data, candle_rows):
+    if not click_data or not click_data.get("points"):
+        return no_update, no_update, no_update
+    try:
+        clicked_ts = click_data["points"][0]["x"]
+    except (KeyError, IndexError):
+        return no_update, no_update, no_update
+    if not candle_rows:
+        return no_update, no_update, no_update
+
+    # Plotly normalizes datetime x-values (strips T/Z/microseconds); compare at second precision
+    try:
+        clicked_sec = pd.Timestamp(clicked_ts).floor("s")
+    except Exception:
+        return no_update, no_update, no_update
+
+    row = None
+    for r in candle_rows:
+        try:
+            if pd.Timestamp(r.get("ts", "")).floor("s") == clicked_sec:
+                row = r
+                break
+        except Exception:
+            continue
+    if row is None:
+        return no_update, no_update, no_update
+
+    fp_json = row.get("footprint_json")
+    if not fp_json:
+        return no_update, no_update, no_update
+
+    sp_levels = None
+    sp_json = row.get("single_print_levels_json")
+    if sp_json:
+        try:
+            parsed = json.loads(sp_json)
+            if isinstance(parsed, list):
+                sp_levels = frozenset(
+                    str(float(p)) for p in parsed if isinstance(p, str)
+                )
+        except Exception:
+            pass
+
+    fig = charts.build_footprint_chart(fp_json, single_print_levels=sp_levels)
+    if not fig.data:
+        return no_update, no_update, no_update
+
+    return True, fig, f"Footprint: {clicked_ts}"
 
 
 @callback(

@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -281,4 +283,136 @@ def build_bidask_panel(df: pd.DataFrame) -> go.Figure:
         secondary_y=True,
     )
     fig.update_yaxes(range=[0, 1], secondary_y=True)
+    return fig
+
+
+def _longest_run(flags: list) -> int:
+    max_len = cur = 0
+    for f in flags:
+        cur = cur + 1 if f else 0
+        max_len = max(max_len, cur)
+    return max_len
+
+
+def build_footprint_chart(footprint_json_str: str, single_print_levels=None) -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(**_DARK, margin=dict(l=60, r=10, t=30, b=30), barmode="overlay")
+    try:
+        fp = json.loads(footprint_json_str)
+        if not fp or not isinstance(fp, dict):
+            return fig
+        # Sort by numeric value descending; keep original string keys for dict lookup
+        price_pairs = sorted(
+            ((float(p), p) for p in fp.keys()),
+            reverse=True,
+        )
+        prices_numeric = [num for num, _ in price_pairs]
+        buy_vols = []
+        sell_vols = []
+        buy_imb = []
+        sell_imb = []
+        for _, key in price_pairs:
+            cell = fp[key]
+            if not isinstance(cell, dict):
+                cell = {}
+            b = float(cell.get("b") or 0)
+            s = float(cell.get("s") or 0)
+            buy_vols.append(b)
+            sell_vols.append(-s)
+            buy_imb.append(s > 0 and b > 3.0 * s)
+            sell_imb.append(b > 0 and s > 3.0 * b)
+
+        bar_colors_buy = ["#00E676" if imb else "#26A69A" for imb in buy_imb]
+        bar_colors_sell = ["#FF1744" if imb else "#EF5350" for imb in sell_imb]
+        stack_buy = _longest_run(buy_imb)
+        stack_sell = _longest_run(sell_imb)
+
+        sp_count = 0
+        if single_print_levels:
+            for i, (_, key) in enumerate(price_pairs):
+                if str(float(key)) in single_print_levels:
+                    bar_colors_buy[i] = "#FFC107"
+                    bar_colors_sell[i] = "#FF6F00"
+                    sp_count += 1
+
+        fig.add_trace(
+            go.Bar(
+                y=prices_numeric,
+                x=buy_vols,
+                orientation="h",
+                name="Buy",
+                marker_color=bar_colors_buy,
+                showlegend=False,
+            )
+        )
+        fig.add_trace(
+            go.Bar(
+                y=prices_numeric,
+                x=sell_vols,
+                orientation="h",
+                name="Sell",
+                marker_color=bar_colors_sell,
+                showlegend=False,
+            )
+        )
+        fig.update_layout(
+            title=dict(
+                text=f"↑ Stack {stack_buy}  ↓ Stack {stack_sell}  | SP: {sp_count}",
+                font=dict(size=12, color="#CCCCCC"),
+                x=0.5,
+            )
+        )
+    except Exception:
+        return fig
+    return fig
+
+
+def add_iceberg_borders(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
+    if df.empty or "ts" not in df.columns:
+        return fig
+    if "iceberg_bid_detected" not in df.columns and "iceberg_ask_detected" not in df.columns:
+        return fig
+    if "iceberg_price" not in df.columns:
+        return fig
+
+    prices = pd.to_numeric(df["iceberg_price"], errors="coerce")
+
+    if "iceberg_bid_detected" in df.columns:
+        raw_bid = df["iceberg_bid_detected"].replace({"true": 1, "false": 0, "True": 1, "False": 0})
+        mask = pd.to_numeric(raw_bid, errors="coerce").fillna(0).astype(bool)
+        bid_df = df[mask].copy()
+        bid_df["_price"] = prices[mask]
+        bid_df = bid_df.dropna(subset=["_price"])
+        if not bid_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=bid_df["ts"],
+                    y=bid_df["_price"],
+                    mode="markers",
+                    marker=dict(symbol="square-open", size=14, color="#00BCD4", line=dict(width=2)),
+                    name="Iceberg Bid",
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+
+    if "iceberg_ask_detected" in df.columns:
+        raw_ask = df["iceberg_ask_detected"].replace({"true": 1, "false": 0, "True": 1, "False": 0})
+        mask = pd.to_numeric(raw_ask, errors="coerce").fillna(0).astype(bool)
+        ask_df = df[mask].copy()
+        ask_df["_price"] = prices[mask]
+        ask_df = ask_df.dropna(subset=["_price"])
+        if not ask_df.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=ask_df["ts"],
+                    y=ask_df["_price"],
+                    mode="markers",
+                    marker=dict(symbol="square-open", size=14, color="#E040FB", line=dict(width=2)),
+                    name="Iceberg Ask",
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+
     return fig

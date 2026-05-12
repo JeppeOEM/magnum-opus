@@ -81,6 +81,16 @@ layout = dbc.Container(
         dcc.Store(id="ob-cursor", data="0"),
         dcc.Store(id="ob-cursor-symbol", data=""),
         dcc.Interval(id="live-interval", interval=1000, n_intervals=0),
+        # Footprint modal — opened by clicking a candlestick bar
+        dbc.Modal(
+            [
+                dbc.ModalHeader(id="footprint-modal-title"),
+                dbc.ModalBody(dcc.Graph(id="footprint-chart", figure={}, style={"height": "500px"})),
+            ],
+            id="footprint-modal",
+            is_open=False,
+            size="lg",
+        ),
     ],
     fluid=True,
     style={"padding": "12px"},
