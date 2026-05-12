@@ -8,7 +8,43 @@ from data import (
     _merge_footprint_jsons,
     _merge_single_print_levels,
     _aggregate_rows,
+    last_source_ts,
 )
+
+
+# ---------------------------------------------------------------------------
+# last_source_ts — live-update cursor advancement
+# ---------------------------------------------------------------------------
+
+class TestLastSourceTs:
+    def test_direct_tf_returns_unchanged(self):
+        ts = "2024-01-01T00:01:00.000000Z"
+        assert last_source_ts("1s", ts) == ts
+        assert last_source_ts("1m", ts) == ts
+        assert last_source_ts("15m", ts) == ts
+
+    def test_2m_advances_by_1m(self):
+        # 2m bar open = 00:00 → last source row = 00:01
+        result = last_source_ts("2m", "2024-01-01T00:00:00.000000Z")
+        assert result == "2024-01-01T00:01:00.000000Z"
+
+    def test_3m_advances_by_2m(self):
+        result = last_source_ts("3m", "2024-01-01T00:00:00.000000Z")
+        assert result == "2024-01-01T00:02:00.000000Z"
+
+    def test_30m_advances_by_15m(self):
+        # 30m bar = 2 × 15m rows; last source row = open + 15m
+        result = last_source_ts("30m", "2024-01-01T01:00:00.000000Z")
+        assert result == "2024-01-01T01:15:00.000000Z"
+
+    def test_1h_advances_by_45m(self):
+        # 1h bar = 4 × 15m rows; last source row = open + 45m
+        result = last_source_ts("1h", "2024-01-01T02:00:00.000000Z")
+        assert result == "2024-01-01T02:45:00.000000Z"
+
+    def test_unknown_tf_returns_unchanged(self):
+        ts = "2024-01-01T00:00:00.000000Z"
+        assert last_source_ts("99m", ts) == ts
 
 
 # ---------------------------------------------------------------------------
@@ -242,25 +278,27 @@ class TestAggregateRowsSinglePrintUnion:
 
 class TestAggregateRowsIncompleteWindowFilter:
     def test_current_incomplete_bar_is_dropped(self):
-        # Row A: 2h ago (in a complete 1h window). Row B: 20min ago (current 1h window, incomplete).
-        # Using recent timestamps keeps the resample range small (no giant gap to 2024).
+        # Align to the current hour boundary so each row's 1h bin is deterministic.
+        # Row A: in the previous (complete) 1h window.
+        # Row B: at the START of the current (incomplete) 1h window.
         now = datetime.now(timezone.utc)
-        ts_a = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-        ts_b = (now - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        hour_floor = now.replace(minute=0, second=0, microsecond=0)
+        ts_a = (hour_floor - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        ts_b = hour_floor.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         rows = [
             _row(ts_a, 100, 110, 95, 105),
             _row(ts_b, 105, 115, 100, 112),
         ]
         result = _aggregate_rows(rows, "1h", "1h")
-        # The recent (incomplete) bar is filtered; only complete historical bars survive.
-        closes = [r["close"] for r in result if r.get("close") == r.get("close")]  # exclude NaN
-        assert 112.0 not in closes, "incomplete current-window bar must be filtered"
+        closes = [r["close"] for r in result if r.get("close") == r.get("close")]
+        assert 112.0 not in closes, "bar at current 1h window open must be filtered"
         assert 105.0 in closes, "complete historical bar must be kept"
 
     def test_complete_historical_bars_are_kept(self):
         now = datetime.now(timezone.utc)
-        ts_a = (now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-        ts_b = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        hour_floor = now.replace(minute=0, second=0, microsecond=0)
+        ts_a = (hour_floor - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        ts_b = (hour_floor - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         rows = [
             _row(ts_a, 100, 110, 95, 105, volume=10),
             _row(ts_b, 105, 115, 100, 112, volume=15),

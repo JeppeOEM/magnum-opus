@@ -29,7 +29,9 @@ def update_candle_store(selected, tf):
         return [], None, [], "0", "", tf
     exchange, symbol = selected.split(":", 1)
     rows = data.fetch_history(exchange, symbol, _QUESTDB_URL, tf=tf)
-    max_ts = rows[-1]["ts"] if rows else None  # rows is ascending (newest last) — see fetch_history
+    # For aggregated TFs, advance last_ts to the last source row of the bar so live
+    # updates don't re-fetch the second half of the already-stored bar on next tick.
+    max_ts = data.last_source_ts(tf, rows[-1]["ts"]) if rows else None
     ob_cursor = data.fetch_ob_snapshot(exchange, symbol)
     return rows, max_ts, [], ob_cursor, selected, tf
 

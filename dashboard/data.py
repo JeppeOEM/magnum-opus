@@ -247,6 +247,32 @@ def _aggregate_rows(rows: list[dict], freq: str, tf: str) -> list[dict]:
     return agg_df.to_dict(orient="records")
 
 
+_TF_BASE_PERIOD: dict[str, timedelta] = {
+    "snapshot_1s":  timedelta(seconds=1),
+    "snapshot_1m":  timedelta(minutes=1),
+    "snapshot_15m": timedelta(minutes=15),
+}
+
+
+def last_source_ts(tf: str, bar_open_ts: str) -> str:
+    """Return the source-table timestamp of the last row that contributed to bar_open_ts.
+
+    For direct TFs (freq=None, n=1) this is bar_open_ts itself.
+    For aggregated TFs the bar spans n base periods; the last source row sits at
+    bar_open_ts + (n - 1) * base_period.  Using this as last_ts in live-update
+    queries avoids re-fetching the second half of the already-stored bar.
+    """
+    table, freq, n = _TF_INFO.get(tf, ("snapshot_1s", None, 1))
+    if freq is None or n <= 1:
+        return bar_open_ts
+    base = _TF_BASE_PERIOD.get(table, timedelta(minutes=1))
+    try:
+        dt = pd.Timestamp(bar_open_ts, tz="UTC") + pd.Timedelta((n - 1) * base)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    except Exception:
+        return bar_open_ts
+
+
 def fetch_history(exchange: str, symbol: str, questdb_url: str, limit: int = 500, tf: str = "1s") -> list[dict]:
     if not _SAFE_IDENT.match(exchange) or not _SAFE_IDENT.match(symbol):
         logger.error("fetch_history: unsafe exchange=%r symbol=%r rejected", exchange, symbol)
