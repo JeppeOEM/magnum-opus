@@ -21,7 +21,7 @@ BASE_FIGURE = make_subplots(
     shared_yaxes='rows',
     column_widths=[0.38, 0.12, 0.50],
     row_heights=[0.70, 0.30],
-    specs=[[{}, {}, {"rowspan": 2}], [{}, {}, None]]
+    specs=[[{}, {}, {"rowspan": 2}], [{}, {"secondary_y": True}, None]]
 )
 
 app.layout = layout

@@ -52,14 +52,14 @@ layout = dbc.Container(
             [
                 dbc.Col(
                     dcc.Loading(
-                        dbc.Card("CVD", body=True, style={**_PLACEHOLDER_STYLE, "height": "280px"}),
+                        dcc.Graph(id="cvd-graph", figure={}, style={"height": "280px"}),
                         id="loading-cvd",
                     ),
                     width=6,
                 ),
                 dbc.Col(
                     dcc.Loading(
-                        dbc.Card("Bid/Ask", body=True, style={**_PLACEHOLDER_STYLE, "height": "280px"}),
+                        dcc.Graph(id="bidask-graph", figure={}, style={"height": "280px"}),
                         id="loading-bidask",
                     ),
                     width=6,

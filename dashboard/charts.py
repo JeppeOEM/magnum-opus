@@ -234,3 +234,115 @@ def build_vol_profile(df: pd.DataFrame) -> go.Figure:
         bargap=0.05,
     )
     return fig
+
+
+def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
+    fig = _base_fig()
+    if df.empty:
+        return fig
+    required = ["ts", "buy_volume", "volume"]
+    if not all(c in df.columns for c in required):
+        return fig
+
+    df = df.copy()
+    df["buy_volume"] = pd.to_numeric(df["buy_volume"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df = df.dropna(subset=["buy_volume", "volume", "ts"]).sort_values("ts")
+    if df.empty:
+        return fig
+
+    df["cvd"] = (2 * df["buy_volume"] - df["volume"]).cumsum()
+
+    pos = df["cvd"].clip(lower=0)
+    neg = df["cvd"].clip(upper=0)
+
+    fig.add_trace(
+        go.Scatter(
+            x=df["ts"], y=pos,
+            fill="tozeroy",
+            fillcolor="rgba(38,166,154,0.3)",
+            line=dict(color="#26A69A", width=1),
+            mode="lines",
+            name="CVD+",
+            showlegend=False,
+        ),
+        row=2, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df["ts"], y=neg,
+            fill="tozeroy",
+            fillcolor="rgba(239,83,80,0.3)",
+            line=dict(color="#EF5350", width=1),
+            mode="lines",
+            name="CVD-",
+            showlegend=False,
+        ),
+        row=2, col=1,
+    )
+    fig.update_layout(
+        paper_bgcolor="#222222",
+        plot_bgcolor="#222222",
+        font_color="#CCCCCC",
+        margin=dict(l=40, r=10, t=10, b=30),
+    )
+    return fig
+
+
+def build_bidask_panel(df: pd.DataFrame) -> go.Figure:
+    fig = _base_fig()
+    if df.empty:
+        return fig
+    required = ["ts", "buy_volume", "volume"]
+    if not all(c in df.columns for c in required):
+        return fig
+
+    df = df.copy()
+    df["buy_volume"] = pd.to_numeric(df["buy_volume"], errors="coerce")
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df = df.dropna(subset=["buy_volume", "volume", "ts"]).sort_values("ts")
+    df = df[df["volume"] > 0].copy()
+    if df.empty:
+        return fig
+
+    ask_vol = df["buy_volume"]
+    bid_vol = -(df["volume"] - df["buy_volume"])
+    ratio = (df["buy_volume"] / df["volume"]).clip(0, 1)
+
+    fig.add_trace(
+        go.Bar(
+            x=df["ts"], y=ask_vol,
+            marker_color="#26A69A",
+            name="Ask Vol",
+            showlegend=False,
+        ),
+        row=2, col=2,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=df["ts"], y=bid_vol,
+            marker_color="#EF5350",
+            name="Bid Vol",
+            showlegend=False,
+        ),
+        row=2, col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df["ts"], y=ratio,
+            line=dict(color="#CCCCCC", width=1),
+            mode="lines",
+            name="Ratio",
+            showlegend=False,
+        ),
+        row=2, col=2, secondary_y=True,
+    )
+    fig.update_yaxes(range=[0, 1], row=2, col=2, secondary_y=True)
+    fig.update_layout(
+        paper_bgcolor="#222222",
+        plot_bgcolor="#222222",
+        font_color="#CCCCCC",
+        margin=dict(l=40, r=10, t=10, b=30),
+        barmode="overlay",
+    )
+    return fig

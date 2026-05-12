@@ -133,3 +133,21 @@ def sync_yaxis_zoom(relay_data, heatmap_fig):
         ]
         return fig
     return no_update
+
+
+@callback(
+    Output("cvd-graph", "figure"),
+    Input("candle-store", "data"),
+)
+def update_cvd(candle_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    return charts.build_cvd_panel(df)
+
+
+@callback(
+    Output("bidask-graph", "figure"),
+    Input("candle-store", "data"),
+)
+def update_bidask(candle_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    return charts.build_bidask_panel(df)
