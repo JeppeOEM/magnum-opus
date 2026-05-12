@@ -199,7 +199,7 @@ development_status:
   epic-17-retrospective: done
 
   # ─── Epic 19: Candle Service Footprint + Signals ──────────────────────────────
-  epic-19: in-progress
+  epic-19: done
   19-1-footprint-accumulator-redis-stream-enrichment: done
   19-2-value-area-signal-group-c: done
   19-3-imbalance-signals-group-a: done
@@ -208,13 +208,13 @@ development_status:
   epic-19-retrospective: done
 
   # ─── Epic 20: DeepCharts Parity Rendering ────────────────────────────────────
-  epic-20: in-progress
+  epic-20: done
   20-1-liquidity-overlay-absorption-markers: done
   20-2-iceberg-cell-borders-ob-depth-heatmap: done
   20-3-footprint-modal-clickdata: done
   20-4-imbalance-diagonal-stack-modal: done
   20-5-single-print-highlighting-modal: done
-  epic-20-retrospective: optional
+  epic-20-retrospective: done
 
   # ─── Epic 18: Dash Dashboard Core ─────────────────────────────────────────────
   epic-18: done
