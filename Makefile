@@ -19,14 +19,15 @@ up:
 	@printf   "  %-14s %s\n"  "candle (green)" "http://localhost:8082   /health /metrics"
 	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090   /health /metrics"
 	@printf   "  %-14s %s\n"  "questdb"        "http://localhost:9000   (ILP: 9009)"
+	@printf   "  %-14s %s\n"  "dashboard"      "http://localhost:8050"
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
 	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
 	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
 	@set -o pipefail; \
 	if [ "$(VERBOSE)" = "1" ]; then \
-		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build; \
+		docker compose --profile candle-$(or $(SLOT),blue) --profile bot --profile dashboard up --build; \
 	else \
-		docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 | python3 scripts/logfmt.py; \
+		docker compose --profile candle-$(or $(SLOT),blue) --profile bot --profile dashboard up --build 2>&1 | python3 scripts/logfmt.py; \
 	fi; \
 	EXIT=$${PIPESTATUS[0]}; \
 	if [ $$EXIT -ne 0 ] && [ $$EXIT -ne 130 ]; then \
@@ -55,11 +56,12 @@ watch:
 	@printf   "  %-14s %s\n"  "candle (green)" "http://localhost:8082   /health /metrics"
 	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090   /health /metrics"
 	@printf   "  %-14s %s\n"  "questdb"        "http://localhost:9000   (ILP: 9009)"
+	@printf   "  %-14s %s\n"  "dashboard"      "http://localhost:8050"
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
 	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
 	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
 	@set -o pipefail; \
-	docker compose --profile candle-$(or $(SLOT),blue) --profile bot up --build 2>&1 \
+	docker compose --profile candle-$(or $(SLOT),blue) --profile bot --profile dashboard up --build 2>&1 \
 	| python3 scripts/logfmt.py --alerts; \
 	EXIT=$${PIPESTATUS[0]}; \
 	if [ $$EXIT -ne 0 ] && [ $$EXIT -ne 130 ]; then \
