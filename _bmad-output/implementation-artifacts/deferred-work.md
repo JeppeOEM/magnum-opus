@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 20-1-liquidity-overlay-absorption-markers (2026-05-12)
+
+- **D-20-1-1: Single-row df produces zero-width POC line** — one-row DataFrame passes the empty guard; `iloc[0] == iloc[-1]` gives identical x-endpoints; Plotly renders a point not a line. Low severity, visual only.
+- **D-20-1-2: all-NaN close in absorption_overlay → silent invisible trace** — `pd.to_numeric(absorbed["close"])` can yield all-NaN; trace added but renders nothing. Data quality concern, pre-existing upstream.
+
 ## Deferred from: code review of 18-7-retire-vite-cleanup (2026-05-12)
 
 - **D-18-7-1: `make run` comment says "Start everything" but dashboard not launched or printed** — `Makefile` `run` target launches aggregator, candle, bot, and gateway but not the dashboard; the "Start everything" comment header is misleading. Pre-existing design — dashboard was never in `run` (only old Vite frontend was). Fix: either add dashboard launch to `run` or clarify the comment.

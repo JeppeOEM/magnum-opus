@@ -207,6 +207,15 @@ development_status:
   19-5-divergence-cvd-iceberg-group-d: done
   epic-19-retrospective: done
 
+  # ─── Epic 20: DeepCharts Parity Rendering ────────────────────────────────────
+  epic-20: in-progress
+  20-1-liquidity-overlay-absorption-markers: done
+  20-2-iceberg-cell-borders-ob-depth-heatmap: backlog
+  20-3-footprint-modal-clickdata: backlog
+  20-4-imbalance-diagonal-stack-modal: backlog
+  20-5-single-print-highlighting-modal: backlog
+  epic-20-retrospective: optional
+
   # ─── Epic 18: Dash Dashboard Core ─────────────────────────────────────────────
   epic-18: done
   18-1-scaffold-dockerfile-compose-theme-skeleton: done

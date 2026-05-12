@@ -81,28 +81,59 @@ def update_candlestick(candle_rows):
     if not df.empty:
         fig = charts.add_volume_levels(fig, df)
         fig = charts.add_volume_bubbles(fig, df)
+        fig = absorption_overlay(fig, df)
         fig = liquidity_overlay(fig, df)
     return fig
 
 
 def absorption_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
-    # Stub: renders no markers until absorption_detected field is available (Epic 20).
-    # Activation: when 'absorption_detected' column is in df, add go.Scatter
-    # (mode='markers', marker_symbol='diamond') at flagged candles, row=1, col=1.
+    if df.empty or "absorption_detected" not in df.columns:
+        return fig
+    mask = pd.to_numeric(df["absorption_detected"], errors="coerce").fillna(0).astype(bool)
+    absorbed = df[mask]
+    if absorbed.empty:
+        return fig
+    if "close" not in absorbed.columns:
+        return fig
+    fig.add_trace(
+        go.Scatter(
+            x=absorbed["ts"],
+            y=pd.to_numeric(absorbed["close"], errors="coerce"),
+            mode="markers",
+            marker=dict(symbol="diamond", size=10, color="#FF9800", opacity=0.8),
+            name="Absorption",
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
     return fig
 
 
 def liquidity_overlay(fig: go.Figure, df: "pd.DataFrame") -> go.Figure:
-    # Stub: renders nothing until poc_price/value_area_high/value_area_low
-    # are available from Epic 20 candle service output.
-    # Activation: if fields present, add:
-    #   fig.add_hrect(y0=va_low, y1=va_high, fillcolor="rgba(255,200,0,0.08)", row=1, col=1)
-    #   fig.add_hline(y=poc_price, line_color="#FFD700", line_dash="dot", row=1, col=1)
-    # Note (Epic 20): add_volume_levels already renders a histogram-based VA band and POC
-    # marker — decide whether to remove/replace it when these exact fields activate.
-    if not all(c in df.columns for c in ["poc_price", "value_area_high", "value_area_low"]):
+    if df.empty:
         return fig
-    # (Epic 20 implementation activates here when fields arrive)
+    required = ["poc_price", "value_area_high", "value_area_low", "ts"]
+    if not all(c in df.columns for c in required):
+        return fig
+    valid = df[["poc_price", "value_area_high", "value_area_low"]].apply(pd.to_numeric, errors="coerce").dropna()
+    if valid.empty:
+        return fig
+    va_low = float(valid["value_area_low"].iloc[-1])
+    va_high = float(valid["value_area_high"].iloc[-1])
+    if va_low > va_high:
+        va_low, va_high = va_high, va_low
+    poc = float(valid["poc_price"].iloc[-1])
+    fig.add_hrect(y0=va_low, y1=va_high, fillcolor="rgba(255,200,0,0.08)", line_width=0)
+    fig.add_trace(
+        go.Scatter(
+            x=[df["ts"].iloc[0], df["ts"].iloc[-1]],
+            y=[poc, poc],
+            mode="lines",
+            line=dict(color="#FFD700", dash="dot", width=1),
+            name="POC",
+            showlegend=False,
+        )
+    )
     return fig
 
 
