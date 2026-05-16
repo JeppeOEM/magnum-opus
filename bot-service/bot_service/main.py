@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -33,8 +35,16 @@ _file_watcher: FileWatcher | None = None
 _circuit_breaker: DailyLossCircuitBreaker | None = None
 
 # Backtest async task tracking
+_IDENT_RE = re.compile(r"^[A-Za-z0-9_\-\.]+$")
+_BACKTEST_RESULTS_MAX = 500
 _backtest_tasks: dict[str, asyncio.Task[None]] = {}
-_backtest_results: dict[str, dict[str, Any]] = {}
+_backtest_results: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+
+def _put_result(run_id: str, data: dict[str, Any]) -> None:
+    _backtest_results[run_id] = data
+    while len(_backtest_results) > _BACKTEST_RESULTS_MAX:
+        _backtest_results.popitem(last=False)
 
 log = structlog.get_logger()
 
@@ -275,7 +285,7 @@ def _ilp_write_equity(questdb_ilp_addr: str, result: BacktestResult) -> None:
     from questdb.ingress import Sender, TimestampNanos
     from datetime import datetime, timezone
     host, port_str = questdb_ilp_addr.split(":")
-    run_at_ns = TimestampNanos(int(time.time() * 1e9))
+    run_at_int = int(time.time() * 1e9)
     with Sender.from_conf(f"tcp::addr={host}:{port_str};") as sender:
         for iso_ts, value in result.equity_curve:
             dt = datetime.fromisoformat(iso_ts).replace(tzinfo=timezone.utc)
@@ -283,7 +293,7 @@ def _ilp_write_equity(questdb_ilp_addr: str, result: BacktestResult) -> None:
             sender.row(
                 "backtest_equity",
                 symbols={"run_id": result.run_id, "strategy_name": result.strategy_name},
-                columns={"portfolio_value": value, "run_at": int(run_at_ns)},
+                columns={"portfolio_value": value, "run_at": run_at_int},
                 at=bar_ns,
             )
         sender.flush()
@@ -309,7 +319,9 @@ def _snapshot_exists(questdb_http_addr: str, strategy_name: str, file_hash: str)
         return False
 
 
-async def _run_backtest_task(run_id: str, req: BacktestRunRequest, path: Path) -> None:
+async def _run_backtest_task(
+    run_id: str, req: BacktestRunRequest, path: Path, file_bytes: bytes
+) -> None:
     settings = get_settings()
     try:
         result = await asyncio.to_thread(
@@ -325,7 +337,7 @@ async def _run_backtest_task(run_id: str, req: BacktestRunRequest, path: Path) -
             questdb_ilp_addr=settings.questdb_ilp_addr,
             sample_every=req.sample_every,
         )
-        code = path.read_text(encoding="utf-8")
+        code = file_bytes.decode("utf-8")
         if not _snapshot_exists(settings.questdb_http_addr, result.strategy_name, result.hash):
             await asyncio.to_thread(_ilp_write_snapshot, settings.questdb_ilp_addr, result, code)
         await asyncio.to_thread(_ilp_write_run, settings.questdb_ilp_addr, result)
@@ -335,10 +347,10 @@ async def _run_backtest_task(run_id: str, req: BacktestRunRequest, path: Path) -
         metrics = asdict(result)
         metrics.pop("equity_curve")
         metrics["equity_curve_points"] = len(result.equity_curve)
-        _backtest_results[run_id] = {"status": "done", "result": metrics}
+        _put_result(run_id, {"status": "done", "result": metrics})
     except Exception as exc:
         log.error("backtest_task_failed", run_id=run_id, error=str(exc))
-        _backtest_results[run_id] = {"status": "failed", "error": str(exc)}
+        _put_result(run_id, {"status": "failed", "error": str(exc)})
     finally:
         _backtest_tasks.pop(run_id, None)
 
@@ -364,13 +376,21 @@ def list_strategies() -> list[dict[str, str]]:
 async def backtest_run(req: BacktestRunRequest) -> dict[str, str]:
     import uuid
     settings = get_settings()
-    strategies_dir = Path(settings.bot_strategies_dir)
-    path = strategies_dir / f"{req.strategy_name}.py"
+    strategies_dir = Path(settings.bot_strategies_dir).resolve()
+    path = (strategies_dir / f"{req.strategy_name}.py").resolve()
+    try:
+        path.relative_to(strategies_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid strategy name")
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Strategy not found: {req.strategy_name}")
+    try:
+        file_bytes = path.read_bytes()
+    except OSError:
+        raise HTTPException(status_code=404, detail=f"Strategy not found: {req.strategy_name}")
     run_id = str(uuid.uuid4())
-    _backtest_results[run_id] = {"status": "running"}
-    task = asyncio.create_task(_run_backtest_task(run_id, req, path))
+    _put_result(run_id, {"status": "running"})
+    task = asyncio.create_task(_run_backtest_task(run_id, req, path, file_bytes))
     _backtest_tasks[run_id] = task
     return {"run_id": run_id, "status": "running"}
 
@@ -392,8 +412,12 @@ def backtest_runs(
     settings = get_settings()
     where_clauses = []
     if strategy_name:
+        if not _IDENT_RE.match(strategy_name):
+            raise HTTPException(status_code=400, detail="Invalid strategy_name")
         where_clauses.append(f"strategy_name = '{strategy_name}'")
     if hash:
+        if not _IDENT_RE.match(hash):
+            raise HTTPException(status_code=400, detail="Invalid hash")
         where_clauses.append(f"hash = '{hash}'")
     where = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     query = f"SELECT * FROM backtest_runs{where} ORDER BY run_at DESC LIMIT {limit}"

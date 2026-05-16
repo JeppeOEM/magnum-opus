@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS strategy_snapshots (
     hash            SYMBOL CAPACITY 256,
     code            STRING,
     first_seen      TIMESTAMP
-) TIMESTAMP(first_seen) PARTITION BY MONTH WAL;
+) TIMESTAMP(first_seen) PARTITION BY MONTH WAL
+DEDUP UPSERT KEYS(first_seen, strategy_name, hash);
 """
 
 _DDL_BACKTEST_RUNS = """

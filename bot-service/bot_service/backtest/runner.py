@@ -82,7 +82,9 @@ def load_strategy_class(path: Path) -> type[BaseStrategy]:
                 f"Multiple BaseStrategy subclasses in {path}: "
                 + ", ".join(c.__name__ for c in candidates)
             )
-        return candidates[0]
+        cls = candidates[0]
+        sys.modules.pop(module_name, None)
+        return cls
     except (ValueError, AttributeError):
         raise
     except Exception as exc:

@@ -47,12 +47,12 @@ def _fetch_snapshot(
     symbol: str,
     start: datetime,
     end: datetime,
-    tf: str | None = None,
 ) -> pd.DataFrame:
     """Fetch OHLCV rows from any snapshot table.
 
-    When ``tf`` is provided a ``AND tf = '{tf}'`` filter is added (needed for
-    multi-TF tables snapshot_1m and snapshot_15m which store multiple TFs).
+    Table routing (snapshot_1s / snapshot_1m / snapshot_15m) is done by the
+    caller via _TF_TABLE. No per-row tf filter is needed — each table stores
+    exactly one timeframe.
     """
     if start.tzinfo is None or end.tzinfo is None:
         raise ValueError("start and end must be timezone-aware datetimes")
@@ -61,12 +61,10 @@ def _fetch_snapshot(
     _validate_ident(table, "table")
     ts_start = int(start.timestamp() * 1_000_000)
     ts_end = int(end.timestamp() * 1_000_000)
-    tf_filter = f" AND tf = '{tf}'" if tf and tf != "1s" else ""
     query = (
         f"SELECT * FROM {table} "
         f"WHERE exchange = '{exchange}' AND symbol = '{symbol}' "
-        f"AND ts >= {ts_start} AND ts < {ts_end}"
-        f"{tf_filter} "
+        f"AND ts >= {ts_start} AND ts < {ts_end} "
         f"ORDER BY ts ASC"
     )
     resp = httpx.get(
@@ -225,7 +223,7 @@ class QuestDBFeed(bt.feeds.PandasData):  # type: ignore[misc]
         **kwargs: Any,
     ) -> None:
         table = _TF_TABLE.get(tf, "snapshot_1s")
-        df = _fetch_snapshot(questdb_http_addr, table, exchange, symbol, start, end, tf=tf)
+        df = _fetch_snapshot(questdb_http_addr, table, exchange, symbol, start, end)
         if df.empty:
             raise InsufficientHistoryError(exchange, symbol, start, end)
         df = _replace_gap_rows(df)

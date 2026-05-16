@@ -50,6 +50,6 @@ def collect_equity(strat: Any, sample_every: int) -> list[tuple[str, float]]:
             dt_float = strat.data.datetime.array[i]
             dt = bt.num2date(dt_float)
             result.append((dt.isoformat(), val))
-        except (IndexError, Exception):
+        except IndexError:
             pass
     return result
