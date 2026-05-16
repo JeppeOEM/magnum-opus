@@ -821,17 +821,24 @@ func main() {
 			logger.Error("writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
 		}
 		bar1mFinal := e.aw.acc1m.CurrentBar(tsSecMs, true)
-		bar1mFinal.TsSecMs = time.Unix(tsSecMs/1000, 0).UTC().Truncate(time.Minute).UnixMilli()
-		if err := e.aw.w1m.WriteBar(shutdownCtx, bar1mFinal); err != nil {
-			logger.Error("1m final flush failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		// Only write if the bar has trade data — an empty bar (Open==nil) means BarReset
+		// fired at a boundary in the same second as shutdown and would DEDUP-overwrite the
+		// complete bar that was just written by flushParallelTF.
+		if bar1mFinal.Open != nil {
+			bar1mFinal.TsSecMs = time.Unix(tsSecMs/1000, 0).UTC().Truncate(time.Minute).UnixMilli()
+			if err := e.aw.w1m.WriteBar(shutdownCtx, bar1mFinal); err != nil {
+				logger.Error("1m final flush failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+			}
 		}
 		if err := e.aw.w1m.Close(shutdownCtx); err != nil {
 			logger.Error("1m writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
 		}
 		bar15mFinal := e.aw.acc15m.CurrentBar(tsSecMs, true)
-		bar15mFinal.TsSecMs = time.Unix(tsSecMs/1000, 0).UTC().Truncate(15 * time.Minute).UnixMilli()
-		if err := e.aw.w15m.WriteBar(shutdownCtx, bar15mFinal); err != nil {
-			logger.Error("15m final flush failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+		if bar15mFinal.Open != nil {
+			bar15mFinal.TsSecMs = time.Unix(tsSecMs/1000, 0).UTC().Truncate(15 * time.Minute).UnixMilli()
+			if err := e.aw.w15m.WriteBar(shutdownCtx, bar15mFinal); err != nil {
+				logger.Error("15m final flush failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)
+			}
 		}
 		if err := e.aw.w15m.Close(shutdownCtx); err != nil {
 			logger.Error("15m writer close failed", "exchange", e.exchange, "symbol", e.symbol, "error", err)

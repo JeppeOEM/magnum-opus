@@ -30,7 +30,16 @@ _TF_OPTIONS = [
     {"label": "1w",  "value": "1w"},
 ]
 
-layout = dbc.Container(
+_nav = dbc.Nav(
+    [
+        dbc.NavLink("Charts", href="/", active="exact", id="nav-charts"),
+        dbc.NavLink("Bots", href="/bots", active="exact", id="nav-bots"),
+    ],
+    pills=True,
+    style={"marginBottom": "10px"},
+)
+
+_charts_page = dbc.Container(
     [
         dbc.Row(
             [
@@ -64,7 +73,6 @@ layout = dbc.Container(
         ),
         dbc.Row(
             [
-                # Left column: top panels + bottom panels stacked
                 dbc.Col(
                     [
                         dbc.Row(
@@ -94,14 +102,12 @@ layout = dbc.Container(
                     ],
                     width=6,
                 ),
-                # Right column: heatmap spanning full height of both left sub-rows
                 dbc.Col(
                     dcc.Graph(id="heatmap-graph", figure={}, style={"height": "700px"}),
                     width=6,
                 ),
             ],
         ),
-        # dcc.Store components — data layer, invisible
         dcc.Store(id="candle-store", data=[]),
         dcc.Store(id="last-ts", data=None),
         dcc.Store(id="ob-store", data=[]),
@@ -109,7 +115,6 @@ layout = dbc.Container(
         dcc.Store(id="ob-cursor-symbol", data=""),
         dcc.Store(id="active-tf", data="1s"),
         dcc.Interval(id="live-interval", interval=1000, n_intervals=0),
-        # Footprint modal — opened by clicking a candlestick bar
         dbc.Modal(
             [
                 dbc.ModalHeader(id="footprint-modal-title"),
@@ -119,6 +124,16 @@ layout = dbc.Container(
             is_open=False,
             size="lg",
         ),
+    ],
+    fluid=True,
+    style={"padding": "0"},
+)
+
+layout = dbc.Container(
+    [
+        dcc.Location(id="url", refresh=False),
+        _nav,
+        html.Div(id="page-content"),
     ],
     fluid=True,
     style={"padding": "12px"},

@@ -9,8 +9,20 @@ import plotly.graph_objects as go
 
 import charts
 import data
+from layout import _charts_page
+from layout_bots import bot_page_layout
 
 _QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
+
+
+@callback(
+    Output("page-content", "children"),
+    Input("url", "pathname"),
+)
+def render_page(pathname):
+    if pathname == "/bots":
+        return bot_page_layout
+    return _charts_page
 
 
 @callback(
@@ -69,7 +81,7 @@ def live_update(n, candle_rows, last_ts, selected, ob_rows, ob_cursor, ob_cursor
     out_ts = no_update
     if new_candles:
         out_candles = ((candle_rows or []) + new_candles)[-500:]
-        out_ts = new_candles[-1]["ts"]
+        out_ts = data.last_source_ts(tf, new_candles[-1]["ts"])
 
     out_ob = no_update
     out_cursor = no_update

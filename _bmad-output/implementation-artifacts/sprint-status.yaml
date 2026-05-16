@@ -37,7 +37,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-11
+last_updated: 2026-05-16
 # updated: 17-3 done; 9 review patches applied (shutdown timeout, pubsub reconnect, uint16 bounds, parseLevels warn, WritePump ctx, lastSnap eviction, unknown opcode warn, empty symbol guard, ws message type check)
 # updated: epic-16 done; retrospective done; review patches applied to 16-1, 16-2, 16-3
 # updated: epic-17 added (live frontend & orderbook fanout — 5 stories, brainstormed 2026-05-10)
@@ -227,3 +227,17 @@ development_status:
   18-6-layout-assembly-poc-liquidity-overlay: done
   18-7-retire-vite-cleanup: done
   epic-18-retrospective: done
+
+  # ─── Epic 21: Multi-Timeframe Two-Tier Storage ────────────────────────────────
+  epic-21: done
+  21-1-two-tier-go-accumulators-migrations-wal: done
+  21-2-aggregator-trade-feed-subscription: done
+  21-3-python-on-demand-tf-aggregation-dashboard: done
+  epic-21-retrospective: done
+
+  # ─── Epic 22: Bot Management Dashboard ───────────────────────────────────────
+  epic-22: done
+  22-1-multi-page-routing-bot-data-layer: done
+  22-2-bot-overview-page: done
+  22-3-individual-bot-drilldown: done
+  epic-22-retrospective: optional

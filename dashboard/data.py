@@ -100,7 +100,7 @@ def _merge_single_print_levels(spl_list: list[str | None]) -> str | None:
                 merged.update(str(p) for p in levels)
         except Exception:
             continue
-    return json.dumps(sorted(merged)) if merged else None
+    return json.dumps(sorted(merged, key=float)) if merged else None
 
 
 def _safe_float(v) -> float | None:

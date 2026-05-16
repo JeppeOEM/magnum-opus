@@ -15,7 +15,8 @@ app = dash.Dash(
 
 app.layout = layout
 
-import callbacks  # noqa: F401, E402 — must be last; callbacks import app from this module
+import callbacks  # noqa: F401, E402
+import callbacks_bots  # noqa: F401, E402
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8050, debug=False)

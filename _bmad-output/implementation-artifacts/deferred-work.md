@@ -276,6 +276,21 @@
 - **D-17-1-4: `sendAndWait` and absence tests use wall-clock `time.Sleep`** (`aggregator/internal/coordinator/obpublisher_test.go`) — Polling loop and fixed 50ms sleep are fragile under CI load. Replace with channel-based notification from `fakeOBPublisher` for deterministic test timing.
 
 
+## Deferred from: code review (Epic 22 — Bot Management Dashboard) (2026-05-16)
+
+- **D-22-1: Chart store/interval component lifecycle on navigation** (`dashboard/layout.py`) — `candle-store`, `live-interval`, and related `dcc.Store`/`dcc.Interval` components live inside `_charts_page` and are removed from the DOM when the user navigates to `/bots`. `suppress_callback_exceptions=True` prevents errors; chart state reinitializes from QuestDB on the next symbol/tf change after returning. Acceptable for single-user dashboard; would need to be reworked (e.g., move stores to the root layout) if chart state persistence across navigation becomes a requirement.
+- **D-22-2: `realized_pnl` always 0.0 — dashboard PnL metrics permanently zero** (`dashboard/bot_data.py`) — Pre-existing D-14-5-2; the bot-service never computes realized P&L and always writes `0.0`. The dashboard correctly reads whatever is in `order_events`. Fix D-14-5-2 (track open cost basis across fill pairs) for this to become meaningful.
+- **D-22-3: `compute_bot_metrics`/`compute_equity_curve` unguarded `KeyError` if column absent** (`dashboard/bot_data.py:157,138`) — `df["realized_pnl"]` raises `KeyError` if QuestDB returns rows missing the column (e.g., pre-migration rows or schema change). Schema always writes this field in production; low risk. Fix: use `df.get("realized_pnl", 0)` or guard with `if "realized_pnl" in df.columns`.
+
+## Deferred from: code review (Epic 21 — two-tier TF storage) (2026-05-16)
+
+- **D-21-1: `_safe_float` / `_safe_int` dead code** (`dashboard/data.py:106–119`) — Both helpers defined but never called. Harmless; if numeric sanitization of QuestDB responses is ever needed, call sites should use these.
+- **D-21-2: Gap asymmetry at restart** (`candle-service/cmd/candle/main.go:327–328`) — `acc1m`/`acc15m` receive `IncrementGap()` after `Reset()` (crash marking); `acc` (1s) does not. Intentional design per `TestAccumulator_CrashMarkingPattern`. Means `snapshot_1s` and `snapshot_1m` disagree on `gap_count` for the first post-restart bar.
+- **D-21-3: `fetch_new_candles` LIMIT 2000 insufficient for 1w TF after 3-week outage** (`dashboard/data.py:350`) — 1w bar requires 672×15m rows; LIMIT 2000 covers ~2.9 weeks of live data. Dashboard downtime >3 weeks silently truncates the third weekly bar. Rare edge case.
+- **D-21-4: `_is_complete` filter disables live updates for current open bar on long TFs** (`dashboard/data.py:238–245`) — For 1h/1d/1w TFs the current in-progress bar is always filtered out until it closes. By design (no partial aggregated bars), but means the chart appears stale for up to a week on the 1w TF. Reconsider if live partial-bar display is added.
+- **D-21-5: `e.w.Close()` called before `w1m`/`w15m.WriteBar` in shutdown loop** (`candle-service/cmd/candle/main.go:820`) — The 1s writer closes before the 1m/15m final bars are written; if `shutdownCtx` expires during the 1m/15m writes they are silently lost. Pre-existing shutdown ordering pattern.
+- **D-21-6: WAL probe DDL storm on high symbol counts** (`candle-service/cmd/candle/main.go`) — Each symbol spawns independent WAL probe goroutines for `snapshot_1m` and `snapshot_15m`; N symbols → N concurrent `RESUME WAL` DDL statements. Pre-existing pattern extended to two new tables; low severity.
+
 ## Deferred from: code review of 17-3-depthview-gateway-dual-channel-subscription (2026-05-11)
 
 - **D-17-3-1: InjectType int64 precision via map[string]any round-trip** (`gateway/internal/codec/codec.go:66-73`) — JSON decode into `map[string]any` converts int64 fields (e.g. ts_ns) to float64, losing ~128ns precision on re-encode. No practical impact for 1s candle display; use direct JSON byte injection if precision matters in future.
