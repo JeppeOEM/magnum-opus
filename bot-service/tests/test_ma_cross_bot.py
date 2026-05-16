@@ -135,7 +135,97 @@ def test_ma_cross_bot_drops_order_when_worker_none() -> None:
     # Should log a warning and not raise
 
 
-# ── T4: Result files ──────────────────────────────────────────────────────────
+# ── T4: Position flip logic ───────────────────────────────────────────────────
+
+@pytest.mark.l1
+def test_ma_cross_bot_hold_when_already_long() -> None:
+    MACrossBot = _import_ma_cross_bot()
+    bot = MACrossBot("MACrossBot", _make_settings())
+    mock_worker = MagicMock()
+    bot._order_worker = mock_worker
+    bot._exchange = "kucoin"
+    bot._current_side = "long"  # already long
+
+    df = _make_golden_cross_df()  # buy signal
+    bot._on_bar(df)
+
+    mock_worker.post.assert_not_called()
+
+
+@pytest.mark.l1
+def test_ma_cross_bot_hold_when_already_short() -> None:
+    MACrossBot = _import_ma_cross_bot()
+    bot = MACrossBot("MACrossBot", _make_settings())
+    mock_worker = MagicMock()
+    bot._order_worker = mock_worker
+    bot._exchange = "kucoin"
+    bot._current_side = "short"  # already short
+
+    df = _make_death_cross_df()  # sell signal
+    bot._on_bar(df)
+
+    mock_worker.post.assert_not_called()
+
+
+@pytest.mark.l1
+def test_ma_cross_bot_flip_long_to_short_posts_exit_then_entry() -> None:
+    MACrossBot = _import_ma_cross_bot()
+    bot = MACrossBot("MACrossBot", _make_settings())
+    mock_worker = MagicMock()
+    bot._order_worker = mock_worker
+    bot._exchange = "kucoin"
+    bot._current_side = "long"
+
+    df = _make_death_cross_df()  # sell signal → should flip
+    bot._on_bar(df)
+
+    assert mock_worker.post.call_count == 2
+    exit_req = mock_worker.post.call_args_list[0][0][0]
+    entry_req = mock_worker.post.call_args_list[1][0][0]
+    assert exit_req.side == "sell"
+    assert exit_req.order_role == "exit"
+    assert entry_req.side == "sell"
+    assert entry_req.order_role == "entry"
+    assert bot._current_side == "short"
+
+
+@pytest.mark.l1
+def test_ma_cross_bot_flip_short_to_long_posts_exit_then_entry() -> None:
+    MACrossBot = _import_ma_cross_bot()
+    bot = MACrossBot("MACrossBot", _make_settings())
+    mock_worker = MagicMock()
+    bot._order_worker = mock_worker
+    bot._exchange = "kucoin"
+    bot._current_side = "short"
+
+    df = _make_golden_cross_df()  # buy signal → should flip
+    bot._on_bar(df)
+
+    assert mock_worker.post.call_count == 2
+    exit_req = mock_worker.post.call_args_list[0][0][0]
+    entry_req = mock_worker.post.call_args_list[1][0][0]
+    assert exit_req.side == "buy"
+    assert exit_req.order_role == "exit"
+    assert entry_req.side == "buy"
+    assert entry_req.order_role == "entry"
+    assert bot._current_side == "long"
+
+
+@pytest.mark.l1
+def test_ma_cross_bot_gap_resets_current_side() -> None:
+    from bot_service.bus.event_types import GapMarker
+    MACrossBot = _import_ma_cross_bot()
+    bot = MACrossBot("MACrossBot", _make_settings())
+    bot._current_side = "long"
+
+    gap = GapMarker(exchange="kucoin", symbol="BTCUSDT", gap_cause="external_disconnect", ts=0)
+    bot.handle_gap(gap)
+
+    assert bot._current_side is None
+    assert bot._signal_invalid.get("BTCUSDT") is True
+
+
+# ── T5: Result files ──────────────────────────────────────────────────────────
 
 @pytest.mark.l1
 def test_fee_impact_result_exists_and_passes() -> None:

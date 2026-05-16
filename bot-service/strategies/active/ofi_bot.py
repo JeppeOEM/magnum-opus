@@ -6,6 +6,7 @@ import structlog
 from bot_service.exchange import OrderRequest
 from bot_service.strategy.base import BaseStrategy
 from bot_service.strategy.signals.ofi import compute_ofi_signal
+from bot_service.bus.event_types import GapMarker
 
 log = structlog.get_logger()
 
@@ -22,6 +23,7 @@ class OFIBot(BaseStrategy):
 
     @property
     def max_position_pct(self) -> float:
+        # Portfolio fraction (0–1); 0.05 = 5% of portfolio_value_usd per order.
         return 0.05
 
     @property
@@ -44,9 +46,31 @@ class OFIBot(BaseStrategy):
     def orderbook_mode(self) -> str:
         return "none"
 
+    def __init__(self, name: str, settings: object) -> None:
+        super().__init__(name, settings)  # type: ignore[arg-type]
+        self._current_side: str | None = None
+
     def subscribe(self) -> None:
         self.get_history(_SYMBOL, _TF, self.min_lookback)
         self.register_bar_handler(_SYMBOL, _TF, self._on_bar)
+
+    def handle_gap(self, gap: GapMarker) -> None:
+        self._current_side = None
+        super().handle_gap(gap)
+
+    def _post(self, side: str, role: str) -> None:
+        req = OrderRequest(
+            strategy=self._name,
+            exchange=self._exchange,
+            symbol=_SYMBOL,
+            side=side,
+            order_type="market",
+            order_role=role,
+            # Portfolio fraction (0–1); OrderQueueWorker._order_notional multiplies by portfolio_value_usd.
+            size=self.max_position_pct,
+            paper_trading=self.paper_trading,
+        )
+        self._order_worker.post(req)  # type: ignore[attr-defined]
 
     def _on_bar(self, df: pd.DataFrame) -> None:
         if self._signal_invalid.get(_SYMBOL, False):
@@ -54,27 +78,37 @@ class OFIBot(BaseStrategy):
         result = compute_ofi_signal(df, lookback=self.min_lookback, threshold=0.6)
         if result.action == "hold":
             return
-        side = "buy" if result.action == "buy" else "sell"
+
+        action = result.action  # "buy" or "sell"
+        target_side = "long" if action == "buy" else "short"
+
+        if self._current_side == target_side:
+            return  # already in the desired position
+
         if not self._exchange:
-            log.warning("exchange_not_injected_dropping_order", strategy=self._name, side=side)
+            log.warning("exchange_not_injected_dropping_order", strategy=self._name, action=action)
             return
-        req = OrderRequest(
-            strategy=self._name,
-            exchange=self._exchange,
-            symbol=_SYMBOL,
-            side=side,
-            order_type="market",
-            order_role="entry",
-            size=self.max_position_pct,
-            paper_trading=self.paper_trading,
-        )
+        if self._order_worker is None:
+            log.warning("order_worker_not_injected_dropping_order", strategy=self._name, action=action)
+            return
+
         log.info(
             "ofi_bot_signal",
-            side=side,
+            action=action,
             confidence=result.confidence,
             reason=result.reason,
+            current_side=self._current_side,
         )
-        if self._order_worker is None:
-            log.warning("order_worker_not_injected_dropping_order", strategy=self._name, side=side)
-            return
-        self._order_worker.post(req)  # type: ignore[attr-defined]
+
+        # Close opposite position first
+        if self._current_side == "long":
+            self._post("sell", "exit")
+            self._current_side = None
+        elif self._current_side == "short":
+            self._post("buy", "exit")
+            self._current_side = None
+
+        # Open new position
+        entry_side = "buy" if action == "buy" else "sell"
+        self._post(entry_side, "entry")
+        self._current_side = target_side

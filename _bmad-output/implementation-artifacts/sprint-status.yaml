@@ -241,3 +241,32 @@ development_status:
   22-2-bot-overview-page: done
   22-3-individual-bot-drilldown: done
   epic-22-retrospective: optional
+
+  # ─── Epic 23: Strategy Improvements ──────────────────────────────────────────
+  epic-23: in-progress
+  23-1-position-flip-and-exchange-fallback: ready-for-dev
+  23-2-basetrategy-tf-routing-and-ofi-size-validation: ready-for-dev
+  epic-23-retrospective: backlog
+
+  # ─── Epic 24: Risk Guardrails ─────────────────────────────────────────────────
+  epic-24: in-progress
+  24-1-emergency-stop-endpoint: ready-for-dev
+  24-2-daily-loss-limit-circuit-breaker: ready-for-dev
+  24-3-position-size-hard-limit: ready-for-dev
+  epic-24-retrospective: backlog
+
+  # ─── Epic 25: Realized P&L Tracking ──────────────────────────────────────────
+  epic-25: in-progress
+  25-1-cost-basis-tracking: ready-for-dev
+  25-2-realized-pnl-on-fills: ready-for-dev
+  25-3-backtest-pnl-computation: ready-for-dev
+  epic-25-retrospective: backlog
+
+  # ─── Epic 26: Live Trading Hardening ─────────────────────────────────────────
+  epic-26: in-progress
+  26-1-pubsub-reconnect-and-stop-unblocking: ready-for-dev
+  26-2-deprovision-pubsub-on-crash-and-stop: ready-for-dev
+  26-3-rest-fallback-fills-endpoint: ready-for-dev
+  26-4-exchange-timestamp-from-response: ready-for-dev
+  26-5-bybit-auth-escalation-and-kucoin-public-token: ready-for-dev
+  epic-26-retrospective: backlog
