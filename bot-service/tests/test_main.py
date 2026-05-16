@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import bot_service.main as main_module
 from bot_service.main import app
+from bot_service.strategy.circuit_breaker import DailyLossCircuitBreaker
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +17,7 @@ def reset_singletons() -> None:
     yield
     main_module._bus_manager = None
     main_module._file_watcher = None
+    main_module._circuit_breaker = None
 
 
 def _client(alive: bool, strategy_statuses: dict[str, str] | None = None) -> TestClient:
@@ -106,6 +108,67 @@ def test_health_includes_strategy_status_in_response() -> None:
     data = resp.json()
     assert "strategies" in data
     assert data["strategies"]["OFIBot"] == "running"
+
+
+# ── /health — circuit_breaker_tripped field ───────────────────────────────────
+
+@pytest.mark.l1
+def test_health_includes_circuit_breaker_tripped_false() -> None:
+    client = _client(alive=True)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["circuit_breaker_tripped"] is False
+
+
+@pytest.mark.l1
+def test_health_degraded_when_circuit_breaker_tripped() -> None:
+    mock_bm = MagicMock()
+    mock_bm.is_alive.return_value = True
+    main_module._bus_manager = mock_bm
+    cb = DailyLossCircuitBreaker(limit_usd=100.0)
+    cb.record_pnl(-101.0)
+    main_module._circuit_breaker = cb
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/health")
+    data = resp.json()
+    assert data["circuit_breaker_tripped"] is True
+    assert data["status"] == "degraded"
+
+
+# ── /stop-all ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.l1
+def test_stop_all_calls_file_watcher_stop_all() -> None:
+    mock_fw = MagicMock()
+    main_module._file_watcher = mock_fw
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post("/stop-all")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "stopped"}
+    mock_fw.stop_all.assert_called_once()
+
+
+@pytest.mark.l1
+def test_stop_all_returns_stopped_when_no_file_watcher() -> None:
+    main_module._file_watcher = None
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post("/stop-all")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "stopped"}
+
+
+@pytest.mark.l1
+def test_health_still_responds_after_stop_all() -> None:
+    mock_bm = MagicMock()
+    mock_bm.is_alive.return_value = True
+    main_module._bus_manager = mock_bm
+    mock_fw = MagicMock()
+    mock_fw.get_strategy_statuses.return_value = {}
+    main_module._file_watcher = mock_fw
+    client = TestClient(app, raise_server_exceptions=False)
+    client.post("/stop-all")
+    resp = client.get("/health")
+    assert resp.status_code == 200
 
 
 # ── /version ──────────────────────────────────────────────────────────────────

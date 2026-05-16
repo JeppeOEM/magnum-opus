@@ -8,6 +8,7 @@ import pytest
 
 from bot_service.bus.event_types import OrderFilled
 from bot_service.exchange import ExchangeRESTError, OrderRequest, PlacedOrder
+from bot_service.strategy.circuit_breaker import DailyLossCircuitBreaker
 from bot_service.strategy.order_worker import OrderQueueWorker
 
 
@@ -19,6 +20,9 @@ def _make_worker(
     max_position_pct: float = 0.10,
     portfolio_value_usd: float = 10_000.0,
     exchange_client: Any = None,
+    max_order_notional_usd: float = 0.0,
+    circuit_breaker: DailyLossCircuitBreaker | None = None,
+    on_circuit_breaker_trip: Any = None,
 ) -> OrderQueueWorker:
     if exchange_client is None:
         exchange_client = MagicMock()
@@ -29,6 +33,9 @@ def _make_worker(
         exchange_client=exchange_client,
         questdb_ilp_addr="localhost:9009",
         portfolio_value_usd=portfolio_value_usd,
+        max_order_notional_usd=max_order_notional_usd,
+        circuit_breaker=circuit_breaker,
+        on_circuit_breaker_trip=on_circuit_breaker_trip,
     )
 
 
@@ -439,6 +446,87 @@ async def test_fill_for_unknown_order_does_not_crash() -> None:
 
 # ---------------------------------------------------------------------------
 # T7: restore_open_order supports crash-recovery dedup (AC5)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# T8: Hard limit (24-3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+async def test_hard_limit_blocks_oversized_order() -> None:
+    client = MagicMock()
+    client.place_order = AsyncMock(return_value=_placed())
+    # Hard limit: $500; order notional = size=0.1 × limit=6000 = $600 > $500
+    worker = _make_worker(exchange_client=client, max_order_notional_usd=500.0)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="ETHUSDT",
+        side="buy",
+        order_type="limit",
+        order_role="entry",
+        size=0.1,
+        limit_price=6000.0,
+    )
+    await worker._process(req)
+    assert client.place_order.call_count == 0
+
+
+@pytest.mark.l1
+async def test_hard_limit_disabled_allows_same_order() -> None:
+    client = MagicMock()
+    client.place_order = AsyncMock(return_value=_placed())
+    # max_order_notional_usd=0 → disabled; same order should pass
+    worker = _make_worker(
+        exchange_client=client,
+        max_position_pct=1.0,
+        portfolio_value_usd=100_000.0,
+        max_order_notional_usd=0.0,
+    )
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="ETHUSDT",
+        side="buy",
+        order_type="limit",
+        order_role="entry",
+        size=0.1,
+        limit_price=6000.0,
+    )
+    await worker._process(req)
+    assert client.place_order.call_count == 1
+
+
+@pytest.mark.l1
+async def test_hard_limit_exempt_for_exit_orders() -> None:
+    client = MagicMock()
+    client.place_order = AsyncMock(return_value=_placed())
+    # Hard limit very small; exit should still go through
+    worker = _make_worker(exchange_client=client, max_order_notional_usd=1.0)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    exit_req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        order_type="limit",
+        order_role="exit",
+        size=0.01,
+        limit_price=30000.0,  # notional $300 >> $1 cap
+    )
+    await worker._process(exit_req)
+    assert client.place_order.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# T9: restore_open_order supports crash-recovery dedup (AC5)
 # ---------------------------------------------------------------------------
 
 

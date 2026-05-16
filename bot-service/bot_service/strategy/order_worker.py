@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import Any
+from typing import Any, Callable
 
 import structlog
 from questdb.ingress import Sender, TimestampNanos
@@ -18,6 +18,7 @@ from bot_service.metrics.prometheus import (
     inc_risk_gate_block,
     observe_order_execution_latency_ms,
 )
+from bot_service.strategy.circuit_breaker import DailyLossCircuitBreaker
 
 log = structlog.get_logger()
 
@@ -40,6 +41,9 @@ class OrderQueueWorker:
         exchange_client: ExchangeClient,
         questdb_ilp_addr: str,
         portfolio_value_usd: float,
+        max_order_notional_usd: float = 0.0,
+        circuit_breaker: DailyLossCircuitBreaker | None = None,
+        on_circuit_breaker_trip: Callable[[], None] | None = None,
     ) -> None:
         self._strategy_name = strategy_name
         self._max_position_pct = max_position_pct
@@ -47,6 +51,10 @@ class OrderQueueWorker:
         self._client = exchange_client
         self._questdb_ilp_addr = questdb_ilp_addr
         self._portfolio_value_usd = portfolio_value_usd
+        self._max_order_notional_usd = max_order_notional_usd
+        self._circuit_breaker = circuit_breaker
+        self._on_circuit_breaker_trip = on_circuit_breaker_trip
+        self._trip_fired = False
         self._queue: asyncio.Queue[OrderRequest] = asyncio.Queue()
         # order_id → (OrderRequest, PlacedOrder)
         self.open_orders: dict[str, tuple[OrderRequest, PlacedOrder]] = {}
@@ -99,6 +107,7 @@ class OrderQueueWorker:
         del self.open_orders[fill.order_id]
         inc_order_filled(self._strategy_name, fill.exchange, fill.symbol, fill.side)
 
+        realized_pnl = 0.0  # always 0.0 until Epic 25 adds cost-basis tracking
         await self._write_order_event(
             order_id=fill.order_id,
             client_order_id=placed.client_order_id,
@@ -116,7 +125,7 @@ class OrderQueueWorker:
             remaining_size=0.0,
             avg_fill_price=float(fill.fill_price),
             fee=float(fill.fee),
-            realized_pnl=0.0,
+            realized_pnl=realized_pnl,
             slippage=0.0,
             position_size_after=float(self._position_notional.get(fill.symbol, 0.0)),
             paper_trading=self._paper_trading,
@@ -124,6 +133,19 @@ class OrderQueueWorker:
             ts_placed=placed.ts_exchange * 1000,   # ms → µs for QuestDB TIMESTAMP
             ts_exchange=fill.ts_exchange * 1000,   # ms → µs for QuestDB TIMESTAMP
         )
+
+        if self._circuit_breaker is not None and not self._trip_fired:
+            self._circuit_breaker.record_pnl(realized_pnl)
+            if self._circuit_breaker.is_tripped():
+                log.critical(
+                    "daily_loss_limit_tripped",
+                    strategy=self._strategy_name,
+                    limit_usd=self._circuit_breaker._limit_usd,
+                    daily_pnl=self._circuit_breaker.daily_pnl,
+                )
+                self._trip_fired = True
+                if self._on_circuit_breaker_trip is not None:
+                    self._on_circuit_breaker_trip()
 
     async def run(self, stop_event: asyncio.Event) -> None:
         """Consume queue until stop_event is set."""
@@ -145,6 +167,17 @@ class OrderQueueWorker:
                 strategy=self._strategy_name,
                 symbol=req.symbol,
                 side=req.side,
+            )
+            return
+
+        if self._exceeds_hard_limit(req):
+            inc_risk_gate_block(self._strategy_name, req.symbol)
+            log.warning(
+                "order_hard_limit_blocked",
+                strategy=self._strategy_name,
+                symbol=req.symbol,
+                projected_notional=self._order_notional(req),
+                max_order_notional_usd=self._max_order_notional_usd,
             )
             return
 
@@ -198,6 +231,17 @@ class OrderQueueWorker:
         current_notional = self._position_notional.get(req.symbol, 0.0)
         max_allowed = self._max_position_pct * self._portfolio_value_usd
         return (current_notional + projected_notional) > max_allowed
+
+    def _exceeds_hard_limit(self, req: OrderRequest) -> bool:
+        """Return True if a single order exceeds the absolute USD notional cap.
+
+        Disabled when max_order_notional_usd == 0. Exit/stop orders are exempt.
+        """
+        if req.order_role in {"exit", "stop"}:
+            return False
+        if self._max_order_notional_usd <= 0:
+            return False
+        return self._order_notional(req) > self._max_order_notional_usd
 
     async def _place_and_persist(self, req: OrderRequest) -> None:
         """Call REST client, write QuestDB (BEFORE open_orders update for crash safety)."""

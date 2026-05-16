@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # Risk management
     bot_portfolio_value_usd: float = 10000.0
+    daily_loss_limit_usd: float = 0.0
+    max_order_notional_usd: float = 0.0
 
     # Paper trading
     bot_paper_latency_min_ms: int = 50

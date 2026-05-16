@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 import structlog
 
@@ -21,6 +22,7 @@ from bot_service.metrics.prometheus import (
     set_strategy_backoff_seconds,
 )
 from bot_service.strategy.base import BaseStrategy
+from bot_service.strategy.circuit_breaker import DailyLossCircuitBreaker
 from bot_service.strategy.order_worker import OrderQueueWorker
 from bot_service.strategy.reconciliation import run_startup_reconciliation
 
@@ -221,6 +223,8 @@ class FileWatcher:
         settings: Settings,
         questdb_http_addr: str,
         questdb_ilp_addr: str,
+        circuit_breaker: DailyLossCircuitBreaker | None = None,
+        on_circuit_breaker_trip: Callable[[], None] | None = None,
     ) -> None:
         self._bus_manager = bus_manager
         self._exchange_client = exchange_client
@@ -228,6 +232,8 @@ class FileWatcher:
         self._settings = settings
         self._questdb_http_addr = questdb_http_addr
         self._questdb_ilp_addr = questdb_ilp_addr
+        self._circuit_breaker = circuit_breaker
+        self._on_circuit_breaker_trip = on_circuit_breaker_trip
         self._strategies_dir = Path(settings.bot_strategies_dir)
         # class_name → (path, handle, stop_event, mtime)
         self._loaded: dict[str, tuple[Path, StrategyHandle, threading.Event, float]] = {}
@@ -296,6 +302,9 @@ class FileWatcher:
                 exchange_client=self._exchange_client,
                 questdb_ilp_addr=self._questdb_ilp_addr,
                 portfolio_value_usd=self._settings.bot_portfolio_value_usd,
+                max_order_notional_usd=self._settings.max_order_notional_usd,
+                circuit_breaker=self._circuit_breaker,
+                on_circuit_breaker_trip=self._on_circuit_breaker_trip,
             )
             await run_startup_reconciliation(
                 strategy=strategy,
@@ -457,6 +466,7 @@ class FileWatcher:
     def stop_all(self) -> None:
         """Stop all loaded strategy threads. Called during service teardown."""
         for class_name in list(self._loaded.keys()):
+            self._bus_manager.deprovision_pubsub(class_name)
             _, handle, stop_event, _ = self._loaded.pop(class_name)
             _stop_thread(handle, stop_event, float(self._settings.bot_shutdown_timeout_s))
             self._bus_manager.dynamic_deregister(class_name)

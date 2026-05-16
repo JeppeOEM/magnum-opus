@@ -20,11 +20,13 @@ from bot_service.exchange.bybit.rest import BybitRESTClient
 from bot_service.exchange.kucoin.rest import KuCoinRESTClient
 from bot_service.metrics.prometheus import get_registry
 from bot_service.persistence.schema import SchemaApplyError, apply_schema
+from bot_service.strategy.circuit_breaker import DailyLossCircuitBreaker
 from bot_service.strategy.registry import FileWatcher
 
 # Module-level singletons — set inside lifespan, read by /health endpoint
 _bus_manager: BusManager | None = None
 _file_watcher: FileWatcher | None = None
+_circuit_breaker: DailyLossCircuitBreaker | None = None
 
 
 def _configure_logging_early() -> None:
@@ -60,7 +62,7 @@ def _configure_logging(log_level: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global _bus_manager, _file_watcher
+    global _bus_manager, _file_watcher, _circuit_breaker
 
     # Step 1: early logging before credentials available
     _configure_logging_early()
@@ -88,6 +90,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Step 4a: create Bus Manager (not yet started)
     _bus_manager = BusManager()
 
+    # Step 4a2: create circuit breaker (disabled when daily_loss_limit_usd == 0)
+    _circuit_breaker = DailyLossCircuitBreaker(settings.daily_loss_limit_usd)
+
     # Step 4b: create exchange client and FileWatcher
     # Exchange client is selected based on bot_exchange setting.
     exchange = settings.bot_exchange
@@ -100,6 +105,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.critical("unsupported_exchange", exchange=exchange)
         sys.exit(1)
 
+    def _on_circuit_breaker_trip() -> None:
+        if _file_watcher is not None:
+            _file_watcher.stop_all()
+
     _file_watcher = FileWatcher(
         bus_manager=_bus_manager,
         exchange_client=exchange_client,
@@ -107,6 +116,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings=settings,
         questdb_http_addr=settings.questdb_http_addr,
         questdb_ilp_addr=settings.questdb_ilp_addr,
+        circuit_breaker=_circuit_breaker,
+        on_circuit_breaker_trip=_on_circuit_breaker_trip,
     )
 
     # Step 4c: initial scan — reconcile all strategies, register handles pre-start
@@ -155,13 +166,22 @@ def health() -> dict[str, object]:
     strategies: dict[str, str] = (
         _file_watcher.get_strategy_statuses() if _file_watcher is not None else {}
     )
+    cb_tripped = _circuit_breaker is not None and _circuit_breaker.is_tripped()
     all_running = not strategies or all(v == "running" for v in strategies.values())
-    ok = bus_alive and all_running
+    ok = bus_alive and all_running and not cb_tripped
     return {
         "status": "ok" if ok else "degraded",
         "bus_manager": "running" if bus_alive else "dead",
         "strategies": strategies,
+        "circuit_breaker_tripped": cb_tripped,
     }
+
+
+@app.post("/stop-all")
+def stop_all() -> dict[str, str]:
+    if _file_watcher is not None:
+        _file_watcher.stop_all()
+    return {"status": "stopped"}
 
 
 @app.get("/metrics")

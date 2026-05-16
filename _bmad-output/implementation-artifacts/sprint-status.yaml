@@ -243,10 +243,10 @@ development_status:
   epic-22-retrospective: optional
 
   # ─── Epic 23: Strategy Improvements ──────────────────────────────────────────
-  epic-23: in-progress
-  23-1-position-flip-and-exchange-fallback: ready-for-dev
-  23-2-basetrategy-tf-routing-and-ofi-size-validation: ready-for-dev
-  epic-23-retrospective: backlog
+  epic-23: done
+  23-1-position-flip-and-exchange-fallback: done
+  23-2-basetrategy-tf-routing-and-ofi-size-validation: done
+  epic-23-retrospective: done
 
   # ─── Epic 24: Risk Guardrails ─────────────────────────────────────────────────
   epic-24: in-progress
