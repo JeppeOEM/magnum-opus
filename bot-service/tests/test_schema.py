@@ -1,11 +1,64 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 from bot_service.persistence.schema import SchemaApplyError, apply_schema
+
+
+# ── L1: mock-based DDL coverage ───────────────────────────────────────────────
+
+def _mock_ok_response() -> MagicMock:
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"ddl": "OK"}
+    return resp
+
+
+@pytest.mark.l1
+def test_apply_schema_sends_ddl_for_all_five_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    queried_tables: list[str] = []
+
+    def _fake_get(url: str, *, params: dict, **kwargs: object) -> MagicMock:
+        query = params.get("query", "")
+        for table in ("order_events", "order_alerts", "strategy_snapshots",
+                      "backtest_runs", "backtest_equity"):
+            if table in query:
+                queried_tables.append(table)
+        return _mock_ok_response()
+
+    with patch("bot_service.persistence.schema.httpx.Client") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _fake_get
+        mock_cls.return_value = mock_client
+        apply_schema("http://localhost:9000")
+
+    for table in ("order_events", "order_alerts", "strategy_snapshots",
+                  "backtest_runs", "backtest_equity"):
+        assert table in queried_tables, f"DDL not sent for {table}"
+
+
+@pytest.mark.l1
+def test_apply_schema_raises_on_questdb_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_get(url: str, *, params: dict, **kwargs: object) -> MagicMock:
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"error": "table already exists with different schema"}
+        return resp
+
+    with patch("bot_service.persistence.schema.httpx.Client") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get.side_effect = _fake_get
+        mock_cls.return_value = mock_client
+        with pytest.raises(SchemaApplyError):
+            apply_schema("http://localhost:9000")
 
 # Skip the entire module gracefully when testcontainers or Docker is unavailable.
 testcontainers = pytest.importorskip("testcontainers", reason="testcontainers not installed")

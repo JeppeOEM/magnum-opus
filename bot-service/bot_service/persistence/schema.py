@@ -53,9 +53,55 @@ CREATE TABLE IF NOT EXISTS order_alerts (
 ) TIMESTAMP(ts) PARTITION BY DAY WAL;
 """
 
+_DDL_STRATEGY_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS strategy_snapshots (
+    strategy_name   SYMBOL CAPACITY 64,
+    hash            SYMBOL CAPACITY 256,
+    code            STRING,
+    first_seen      TIMESTAMP
+) TIMESTAMP(first_seen) PARTITION BY MONTH WAL;
+"""
+
+_DDL_BACKTEST_RUNS = """
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    run_id              SYMBOL CAPACITY 1024,
+    strategy_name       SYMBOL CAPACITY 64,
+    hash                SYMBOL CAPACITY 256,
+    symbol              SYMBOL CAPACITY 64,
+    tf                  SYMBOL CAPACITY 16,
+    exchange            SYMBOL CAPACITY 32,
+    start_date          SYMBOL CAPACITY 32,
+    end_date            SYMBOL CAPACITY 32,
+    initial_capital     DOUBLE,
+    final_value         DOUBLE,
+    total_return_pct    DOUBLE,
+    sharpe_ratio        DOUBLE,
+    max_drawdown_pct    DOUBLE,
+    n_trades            INT,
+    win_rate_pct        DOUBLE,
+    avg_pnl_per_trade   DOUBLE,
+    total_fees_usd      DOUBLE,
+    passes_fee_gate     BOOLEAN,
+    run_at              TIMESTAMP
+) TIMESTAMP(run_at) PARTITION BY MONTH WAL;
+"""
+
+_DDL_BACKTEST_EQUITY = """
+CREATE TABLE IF NOT EXISTS backtest_equity (
+    run_id          SYMBOL CAPACITY 1024,
+    strategy_name   SYMBOL CAPACITY 64,
+    bar_ts          TIMESTAMP,
+    portfolio_value DOUBLE,
+    run_at          TIMESTAMP
+) TIMESTAMP(bar_ts) PARTITION BY MONTH WAL;
+"""
+
 _DDLS: list[tuple[str, str]] = [
     ("order_events", _DDL_ORDER_EVENTS),
     ("order_alerts", _DDL_ORDER_ALERTS),
+    ("strategy_snapshots", _DDL_STRATEGY_SNAPSHOTS),
+    ("backtest_runs", _DDL_BACKTEST_RUNS),
+    ("backtest_equity", _DDL_BACKTEST_EQUITY),
 ]
 
 

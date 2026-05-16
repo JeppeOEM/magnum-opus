@@ -262,6 +262,15 @@ development_status:
   25-3-backtest-pnl-computation: ready-for-dev
   epic-25-retrospective: backlog
 
+  # ─── Epic 27: Backtest Dashboard & Strategy Versioning ───────────────────────
+  epic-27: in-progress
+  27-1-backtest-questdb-schema: ready-for-dev
+  27-2-equity-observer-and-runner: ready-for-dev
+  27-3-multi-tf-feeds-and-cli: ready-for-dev
+  27-4-bot-service-backtest-api: ready-for-dev
+  27-5-dashboard-backtest-page: ready-for-dev
+  epic-27-retrospective: backlog
+
   # ─── Epic 26: Live Trading Hardening ─────────────────────────────────────────
   epic-26: in-progress
   26-1-pubsub-reconnect-and-stop-unblocking: ready-for-dev
