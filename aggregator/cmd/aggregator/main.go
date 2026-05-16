@@ -124,7 +124,7 @@ func main() {
 			slog.Error("aggregator: kucoin connect failed", "err", err)
 			os.Exit(1)
 		}
-		if err := kucoinAdapter.Subscribe(cfg.Symbols.KuCoin, []exchange.FeedType{exchange.FeedTypeOrderBook}); err != nil {
+		if err := kucoinAdapter.Subscribe(cfg.Symbols.KuCoin, []exchange.FeedType{exchange.FeedTypeOrderBook, exchange.FeedTypeTrade}); err != nil {
 			slog.Error("aggregator: kucoin subscribe failed", "err", err, "symbols", cfg.Symbols.KuCoin)
 			os.Exit(1)
 		}
@@ -139,7 +139,7 @@ func main() {
 			slog.Error("aggregator: bybit connect failed", "err", err)
 			os.Exit(1)
 		}
-		if err := bybitAdapter.Subscribe(cfg.Symbols.Bybit, []exchange.FeedType{exchange.FeedTypeOrderBook}); err != nil {
+		if err := bybitAdapter.Subscribe(cfg.Symbols.Bybit, []exchange.FeedType{exchange.FeedTypeOrderBook, exchange.FeedTypeTrade}); err != nil {
 			slog.Error("aggregator: bybit subscribe failed", "err", err, "symbols", cfg.Symbols.Bybit)
 			os.Exit(1)
 		}

@@ -169,7 +169,25 @@ func (w *Worker) loop(ctx context.Context) {
 }
 
 func (w *Worker) handleTick(ctx context.Context, tick exchange.Tick) {
-	// While buffering, only feed seq numbers — no IO yet (AC1)
+	// Trade ticks bypass the OB state machine and gap detection — they have their own
+	// sequence space. Dropped during buffering (gap marker covers the window); written
+	// directly to Redis+QuestDB once the book is live.
+	if tick.Type == exchange.EventTypeTrade {
+		if w.recon.State() != reconnect.StateBuffering {
+			if w.metrics != nil {
+				w.metrics.TicksTotal.WithLabelValues(w.exch, string(w.sym)).Inc()
+			}
+			if err := w.stream.Write(ctx, tick); err != nil && ctx.Err() == nil {
+				slog.Error("coordinator: stream.Write failed", "err", err)
+			}
+			if err := w.ilp.Write(ctx, tick); err != nil && ctx.Err() == nil {
+				slog.Error("coordinator: ilp.Write failed", "err", err)
+			}
+		}
+		return
+	}
+
+	// While buffering, only feed OB seq numbers — no IO yet (AC1)
 	if w.recon.State() == reconnect.StateBuffering {
 		w.recon.Feed(tick.Seq)
 		return
