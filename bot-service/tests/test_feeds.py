@@ -10,6 +10,8 @@ import pytest
 from bot_service.backtest.feeds import (
     InsufficientHistoryError,
     QuestDBFeed,
+    _TF_TABLE,
+    _fetch_snapshot,
     _fetch_snapshot_1s,
     _replace_gap_rows,
 )
@@ -197,7 +199,7 @@ def test_no_gap_rows_unchanged() -> None:
 @pytest.mark.l1
 def test_questdbfeed_raises_on_empty_data() -> None:
     with patch(
-        "bot_service.backtest.feeds._fetch_snapshot_1s",
+        "bot_service.backtest.feeds._fetch_snapshot",
         return_value=pd.DataFrame(),
     ):
         with pytest.raises(InsufficientHistoryError):
@@ -207,7 +209,7 @@ def test_questdbfeed_raises_on_empty_data() -> None:
 @pytest.mark.l1
 def test_questdbfeed_has_close_line() -> None:
     df = _full_df()
-    with patch("bot_service.backtest.feeds._fetch_snapshot_1s", return_value=df):
+    with patch("bot_service.backtest.feeds._fetch_snapshot", return_value=df):
         feed = QuestDBFeed(_ADDR, "kucoin", "BTCUSDT", _START, _END)
     assert hasattr(feed, "close")
     assert hasattr(feed, "lines")
@@ -218,7 +220,7 @@ def test_questdbfeed_cerebro_runs() -> None:
     import backtrader as bt  # type: ignore[import]
 
     df = _full_df(10)
-    with patch("bot_service.backtest.feeds._fetch_snapshot_1s", return_value=df):
+    with patch("bot_service.backtest.feeds._fetch_snapshot", return_value=df):
         feed = QuestDBFeed(_ADDR, "kucoin", "BTCUSDT", _START, _END)
 
     cerebro = bt.Cerebro()
@@ -241,3 +243,89 @@ def test_fetch_raises_on_questdb_error_response() -> None:
     with patch("bot_service.backtest.feeds.httpx.get", return_value=mock_resp):
         with pytest.raises(RuntimeError, match="QuestDB error"):
             _fetch_snapshot_1s(_ADDR, "kucoin", "BTCUSDT", _START, _END)
+
+
+# ── TF → table routing ────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("tf,expected_table", [
+    ("1s",  "snapshot_1s"),
+    ("1m",  "snapshot_1m"),
+    ("5m",  "snapshot_1m"),
+    ("15m", "snapshot_15m"),
+    ("4h",  "snapshot_15m"),
+    ("unknown", "snapshot_1s"),
+])
+@pytest.mark.l1
+def test_tf_table_mapping(tf: str, expected_table: str) -> None:
+    assert _TF_TABLE.get(tf, "snapshot_1s") == expected_table
+
+
+@pytest.mark.parametrize("tf,expected_table", [
+    ("1s",  "snapshot_1s"),
+    ("1m",  "snapshot_1m"),
+    ("15m", "snapshot_15m"),
+])
+@pytest.mark.l1
+def test_questdbfeed_queries_correct_table_for_tf(
+    tf: str, expected_table: str
+) -> None:
+    """QuestDBFeed passes the correct table name to _fetch_snapshot."""
+    queried: list[str] = []
+
+    def _spy_fetch(addr: str, table: str, exchange: str, symbol: str,
+                   start: object, end: object, **kw: object) -> object:
+        queried.append(table)
+        return _full_df(5)
+
+    with patch("bot_service.backtest.feeds._fetch_snapshot", side_effect=_spy_fetch):
+        QuestDBFeed(_ADDR, "kucoin", "BTCUSDT", _START, _END, tf=tf)
+
+    assert queried == [expected_table]
+
+
+@pytest.mark.l1
+def test_questdbfeed_unknown_tf_falls_back_to_snapshot_1s() -> None:
+    queried: list[str] = []
+
+    def _spy_fetch(addr: str, table: str, exchange: str, symbol: str,
+                   start: object, end: object, **kw: object) -> object:
+        queried.append(table)
+        return _full_df(5)
+
+    with patch("bot_service.backtest.feeds._fetch_snapshot", side_effect=_spy_fetch):
+        QuestDBFeed(_ADDR, "kucoin", "BTCUSDT", _START, _END, tf="3d")
+
+    assert queried == ["snapshot_1s"]
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+@pytest.mark.l1
+def test_cli_help_exits_zero(tmp_path: object) -> None:
+    from bot_service.backtest.cli import main
+    import pytest as _pytest
+    with _pytest.raises(SystemExit) as exc_info:
+        main(["--help"])
+    assert exc_info.value.code == 0
+
+
+@pytest.mark.l1
+def test_cli_missing_required_arg_exits_nonzero() -> None:
+    from bot_service.backtest.cli import main
+    import pytest as _pytest
+    with _pytest.raises(SystemExit) as exc_info:
+        main(["--symbol", "BTCUSDT"])  # missing --strategy and --start and --end
+    assert exc_info.value.code != 0
+
+
+@pytest.mark.l1
+def test_cli_strategy_not_found_returns_1(tmp_path: "Path") -> None:
+    from bot_service.backtest.cli import main
+    result = main([
+        "--strategy", "NonExistent",
+        "--symbol", "BTCUSDT",
+        "--start", "2026-01-01",
+        "--end", "2026-02-01",
+        "--strategies-dir", str(tmp_path),
+    ])
+    assert result == 1
