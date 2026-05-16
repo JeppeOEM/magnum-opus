@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 import time
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -161,6 +162,62 @@ def test_new_gap_resets_clean_bar_count() -> None:
     for ts in [6000, 7000, 8000]:
         s.on_bar(_bar("BTC", ts=ts))
     assert s._signal_invalid.get("BTC") is False
+
+
+# ── TF → table routing ───────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("tf,expected_table", [
+    ("1s", "snapshot_1s"),
+    ("1m", "snapshot_1m"),
+    ("5m", "snapshot_1m"),
+    ("15m", "snapshot_15m"),
+    ("4h", "snapshot_15m"),
+    ("unknown_tf", "snapshot_1s"),
+])
+@pytest.mark.l1
+def test_tf_routes_to_correct_table(
+    tf: str, expected_table: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queries: list[str] = []
+
+    def _mock_get(url: str, *, params: dict, timeout: float) -> MagicMock:
+        queries.append(params["query"])
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"dataset": [], "columns": []}
+        return resp
+
+    monkeypatch.setattr("bot_service.strategy.base.httpx.get", _mock_get)
+    s = _make_strategy()
+    s._query_questdb("BTCUSDT", tf, 10)
+    assert f"FROM {expected_table}" in queries[0]
+    assert f"tf='{tf}'" in queries[0]
+
+
+# ── max_position_pct validation ───────────────────────────────────────────────
+
+@pytest.mark.l1
+def test_max_position_pct_above_1_raises() -> None:
+    class _OverAllocStrategy(_StubStrategy):
+        @property
+        def max_position_pct(self) -> float:
+            return 1.01
+
+    from bot_service.config import Settings
+    with pytest.raises(ValueError, match="max_position_pct"):
+        _OverAllocStrategy("over", Settings())
+
+
+@pytest.mark.l1
+def test_max_position_pct_zero_raises() -> None:
+    class _ZeroStrategy(_StubStrategy):
+        @property
+        def max_position_pct(self) -> float:
+            return 0.0
+
+    from bot_service.config import Settings
+    with pytest.raises(ValueError, match="max_position_pct"):
+        _ZeroStrategy("zero", Settings())
 
 
 # ---- subscribe() timeout ----

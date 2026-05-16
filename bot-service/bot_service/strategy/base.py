@@ -29,6 +29,17 @@ log = structlog.get_logger()
 _HEARTBEAT_POST_INTERVAL_S = 5.0
 _HEARTBEAT_ACK_TIMEOUT_S = 10.0
 
+_TF_TABLE: dict[str, str] = {
+    "1s": "snapshot_1s",
+    "1m": "snapshot_1m",
+    "5m": "snapshot_1m",
+    "15m": "snapshot_15m",
+    "1h": "snapshot_15m",
+    "4h": "snapshot_15m",
+    "1d": "snapshot_15m",
+    "1w": "snapshot_15m",
+}
+
 _HISTORY_COLUMNS: list[str] = [
     "ts", "open", "high", "low", "close",
     "volume", "quote_volume", "trade_count", "is_complete", "has_gap",
@@ -121,6 +132,10 @@ class BaseStrategy(ABC):
         # Prevents concurrent emergency-close threads for the same symbol (thread explosion guard)
         self._emergency_close_lock = threading.Lock()
         self._emergency_close_in_flight: set[str] = set()
+        if not (0 < self.max_position_pct <= 1.0):
+            raise ValueError(
+                f"max_position_pct must be in (0, 1]; got {self.max_position_pct}"
+            )
         mode = self.orderbook_mode
         if mode not in self._VALID_OB_MODES:
             raise ValueError(
@@ -259,9 +274,10 @@ class BaseStrategy(ABC):
         return df
 
     def _query_questdb(self, symbol: str, tf: str, n_bars: int) -> pd.DataFrame | None:
+        table = _TF_TABLE.get(tf, "snapshot_1s")
         query = (
             f"SELECT ts,open,high,low,close,volume,quote_volume,trade_count,"
-            f"is_complete,has_gap FROM snapshot_1s "
+            f"is_complete,has_gap FROM {table} "
             f"WHERE symbol='{symbol}' AND tf='{tf}' "
             f"ORDER BY ts DESC LIMIT {n_bars}"
         )
