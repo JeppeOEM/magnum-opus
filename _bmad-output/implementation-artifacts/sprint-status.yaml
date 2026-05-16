@@ -250,9 +250,9 @@ development_status:
 
   # ─── Epic 24: Risk Guardrails ─────────────────────────────────────────────────
   epic-24: in-progress
-  24-1-emergency-stop-endpoint: ready-for-dev
-  24-2-daily-loss-limit-circuit-breaker: ready-for-dev
-  24-3-position-size-hard-limit: ready-for-dev
+  24-1-emergency-stop-endpoint: done
+  24-2-daily-loss-limit-circuit-breaker: done
+  24-3-position-size-hard-limit: done
   epic-24-retrospective: backlog
 
   # ─── Epic 25: Realized P&L Tracking ──────────────────────────────────────────
