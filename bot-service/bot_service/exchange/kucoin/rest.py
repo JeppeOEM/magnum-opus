@@ -189,9 +189,10 @@ class KuCoinRESTClient:
 
     async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled]:
         """Return all fills since since_ms, fetching multiple pages if needed (max 50/page)."""
+        _MAX_PAGES = 100
         fills: list[OrderFilled] = []
         page = 1
-        while True:
+        while page <= _MAX_PAGES:
             params: dict[str, str] = {
                 "startAt": str(since_ms),
                 "pageSize": "50",
@@ -215,7 +216,7 @@ class KuCoinRESTClient:
                         ts_exchange=int(item.get("createdAt", 0)),
                     )
                 )
-            total_pages = int(result.get("totalPage", 1))
+            total_pages = int(float(result.get("totalPage") or 1))
             if page >= total_pages or not items:
                 break
             page += 1

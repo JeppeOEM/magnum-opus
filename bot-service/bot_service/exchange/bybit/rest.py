@@ -175,9 +175,10 @@ class BybitRESTClient:
 
     async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled]:
         """Return all fills since since_ms, fetching multiple pages via cursor (max 50/page)."""
+        _MAX_PAGES = 100
         fills: list[OrderFilled] = []
         cursor: str | None = None
-        while True:
+        for _ in range(_MAX_PAGES):
             params: dict[str, str] = {
                 "category": "spot",
                 "orderStatus": "Filled",
@@ -205,7 +206,7 @@ class BybitRESTClient:
                         ts_exchange=int(item.get("updatedTime", 0)),
                     )
                 )
-            cursor = result.get("nextPageCursor") or None
+            cursor = (result.get("nextPageCursor") or "").strip() or None
             if not cursor or not result.get("list"):
                 break
         return fills

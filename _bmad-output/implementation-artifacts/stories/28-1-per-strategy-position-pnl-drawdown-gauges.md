@@ -60,3 +60,9 @@ Check `OrderQueueWorker.__init__` signature and add `strategy_name: str` if abse
 ## Files
 - `bot-service/bot_service/strategy/order_worker.py`
 - `bot-service/tests/test_order_worker.py` (extend)
+
+### Review Findings
+
+- [x] [Review][Patch] Drawdown=1.0 spec AC scenario not covered by tests — added `test_drawdown_equals_one_when_all_gains_lost` [`tests/test_order_worker.py`]
+- [x] [Review][Defer] Gauge state reset on worker restart discards `_cumulative_pnl`/`_peak_pnl` — architectural limitation; restore_position only restores qty/avg_price, not P&L history. Pre-existing design constraint.
+- [x] [Review][Defer] `fill.fill_price` used as mark price for unrealized P&L — deliberate approximation; true mark-to-market would require a live price feed.

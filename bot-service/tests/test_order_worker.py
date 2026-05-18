@@ -994,3 +994,47 @@ async def test_drawdown_nonzero_after_loss() -> None:
 
     # peak=4000, cumulative=4000+(-2000)=2000 → drawdown=(4000-2000)/4000=0.5
     mock_dd.assert_called_once_with("test-strat", pytest.approx(0.5))
+
+
+@pytest.mark.l1
+async def test_drawdown_equals_one_when_all_gains_lost() -> None:
+    """Drawdown=1.0 when cumulative P&L returns to 0 from a prior peak (spec AC: dd=1.0 case)."""
+    worker = _make_worker()
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    # First trade: buy at 50000, sell at 54000 → realized_pnl=4000, peak=4000
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    req1 = OrderRequest(
+        strategy="test-strat", exchange="bybit", symbol="BTCUSDT",
+        side="sell", order_type="limit", order_role="exit", size=1.0, limit_price=54_000.0,
+    )
+    placed1 = _placed("oid-dd1")
+    worker.open_orders["oid-dd1"] = (req1, placed1)
+    fill1 = OrderFilled(
+        order_id="oid-dd1", exchange="bybit", symbol="BTCUSDT",
+        side="sell", fill_size=1.0, fill_price=54_000.0, fee=0.0, ts_exchange=0,
+    )
+    with patch("bot_service.strategy.order_worker.set_position_size"), \
+         patch("bot_service.strategy.order_worker.set_unrealized_pnl"), \
+         patch("bot_service.strategy.order_worker.set_drawdown"):
+        await worker.handle_fill(fill1)
+
+    # Second trade: buy at 50000, sell at 46000 → realized_pnl=-4000 → cumulative=0, peak=4000 → dd=1.0
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    req2 = OrderRequest(
+        strategy="test-strat", exchange="bybit", symbol="BTCUSDT",
+        side="sell", order_type="limit", order_role="exit", size=1.0, limit_price=46_000.0,
+    )
+    placed2 = _placed("oid-dd2")
+    worker.open_orders["oid-dd2"] = (req2, placed2)
+    fill2 = OrderFilled(
+        order_id="oid-dd2", exchange="bybit", symbol="BTCUSDT",
+        side="sell", fill_size=1.0, fill_price=46_000.0, fee=0.0, ts_exchange=0,
+    )
+    with patch("bot_service.strategy.order_worker.set_position_size"), \
+         patch("bot_service.strategy.order_worker.set_unrealized_pnl"), \
+         patch("bot_service.strategy.order_worker.set_drawdown") as mock_dd:
+        await worker.handle_fill(fill2)
+
+    # peak=4000, cumulative=0 → drawdown=(4000-0)/4000=1.0
+    mock_dd.assert_called_once_with("test-strat", pytest.approx(1.0))

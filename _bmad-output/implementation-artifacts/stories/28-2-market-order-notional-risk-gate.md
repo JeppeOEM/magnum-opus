@@ -50,3 +50,8 @@ If `ref_price == 0.0` (no prior fill and market order), the projected_notional r
 ## Files
 - `bot-service/bot_service/strategy/order_worker.py`
 - `bot-service/tests/test_order_worker.py` (extend)
+
+### Review Findings
+
+- [x] [Review][Defer] Implementation uses `portfolio_value_usd` (not `_last_fill_price`) for market order notional — pre-existing fix chose a different approach than the spec's `_last_fill_price` proposal; behavior is correct and tested. Spec's `market_order_no_ref_price` WARN log not applicable to this approach.
+- [x] [Review][Defer] No `market_order_no_ref_price` WARN log — only relevant for `_last_fill_price` approach; not applicable to `portfolio_value_usd` implementation.

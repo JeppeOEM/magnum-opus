@@ -82,3 +82,12 @@ async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled
 - `bot-service/bot_service/exchange/kucoin/rest.py`
 - `bot-service/bot_service/exchange/bybit/rest.py`
 - `bot-service/tests/test_exchange_rest.py` (extend)
+
+### Review Findings
+
+- [x] [Review][Patch] KuCoin unbounded pagination loop — no max-page guard; added `_MAX_PAGES=100` bound [`kucoin/rest.py`]
+- [x] [Review][Patch] KuCoin `int(result.get("totalPage", 1))` crashes on `null` API response — changed to `int(float(result.get("totalPage") or 1))` [`kucoin/rest.py`]
+- [x] [Review][Patch] Bybit unbounded pagination loop — no max-page guard; changed to `for _ in range(_MAX_PAGES)` [`bybit/rest.py`]
+- [x] [Review][Patch] Bybit cursor whitespace not stripped — `.or None` doesn't catch `" "` cursor; changed to `(... or "").strip() or None` [`bybit/rest.py`]
+- [x] [Review][Defer] Bybit `PartiallyFilled` orders silently discarded — pre-existing behaviour, no change in this epic
+- [x] [Review][Defer] KuCoin futures endpoint (`api-futures.kucoin.com`) for spot fills — pre-existing, out of scope

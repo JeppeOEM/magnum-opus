@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of epic-28 stories (2026-05-18)
+
+- **D-28-1: Gauge P&L state not persisted across restarts** (`order_worker.py`) — `_cumulative_pnl`/`_peak_pnl` reset to 0 when worker restarts; `restore_position` only restores qty/avg_price. Drawdown gauge under-reports after a restart that follows a profitable period. Fix requires persisting cumulative P&L to QuestDB order_events.
+- **D-28-2: Unrealized P&L uses last fill price as mark** (`order_worker.py`) — `unrealized = pos_qty * (fill_price - avg_price)` is correct at fill time but stale between fills. True mark-to-market requires a live mid-price feed. Acceptable approximation for current use.
+- **D-28-3: Bybit `PartiallyFilled` orders silently discarded** (`bybit/rest.py`) — per-item `orderStatus != "Filled"` guard drops partial fills; partial fills from large orders are not reconciled. Pre-existing behaviour; fix if partial-fill tracking becomes a requirement.
+- **D-28-4: KuCoin REST client targets futures endpoint** (`kucoin/rest.py`) — `_BASE_URL = "https://api-futures.kucoin.com"`; `/api/v1/fills` on this domain returns futures fills, not spot fills. Pre-existing; fix if spot trading via KuCoin REST is used.
+- **D-28-5: Market order notional uses `portfolio_value_usd` instead of last fill price** (`order_worker.py`) — spec proposed `_last_fill_price` as ref price for market orders; implementation uses portfolio value (different but correct behaviour). No `market_order_no_ref_price` WARN log emitted. Defer spec alignment.
+
 ## Deferred from: code review of epic-26 stories (2026-05-18)
 
 - **D-26-1: KuCoin `get_recent_fills` no pagination** (`kucoin/rest.py`) — `/api/v1/fills` returns at most 50 results per page; fills on page 2+ are silently dropped during a long WS outage with > 50 fills. Add cursor-based pagination loop when fill volume warrants it.
