@@ -174,28 +174,38 @@ class BybitRESTClient:
         return orders
 
     async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled]:
-        params: dict[str, str] = {
-            "category": "spot",
-            "orderStatus": "Filled",
-            "startTime": str(since_ms),
-        }
-        if symbol:
-            params["symbol"] = symbol
-        result = await self._request("GET", "/v5/order/history", params=params)
+        """Return all fills since since_ms, fetching multiple pages via cursor (max 50/page)."""
         fills: list[OrderFilled] = []
-        for item in (result or {}).get("list", []):
-            if item.get("orderStatus") != "Filled":
-                continue
-            fills.append(
-                OrderFilled(
-                    order_id=str(item.get("orderId", "")),
-                    exchange="bybit",
-                    symbol=str(item.get("symbol", "")),
-                    side=str(item.get("side", "")).lower(),
-                    fill_price=float(item.get("avgPrice", 0)),
-                    fill_size=float(item.get("cumExecQty", 0)),
-                    fee=float(item.get("cumExecFee", 0)),
-                    ts_exchange=int(item.get("updatedTime", 0)),
+        cursor: str | None = None
+        while True:
+            params: dict[str, str] = {
+                "category": "spot",
+                "orderStatus": "Filled",
+                "startTime": str(since_ms),
+                "limit": "50",
+            }
+            if symbol:
+                params["symbol"] = symbol
+            if cursor:
+                params["cursor"] = cursor
+            result = await self._request("GET", "/v5/order/history", params=params)
+            result = result or {}
+            for item in result.get("list", []):
+                if item.get("orderStatus") != "Filled":
+                    continue
+                fills.append(
+                    OrderFilled(
+                        order_id=str(item.get("orderId", "")),
+                        exchange="bybit",
+                        symbol=str(item.get("symbol", "")),
+                        side=str(item.get("side", "")).lower(),
+                        fill_price=float(item.get("avgPrice", 0)),
+                        fill_size=float(item.get("cumExecQty", 0)),
+                        fee=float(item.get("cumExecFee", 0)),
+                        ts_exchange=int(item.get("updatedTime", 0)),
+                    )
                 )
-            )
+            cursor = result.get("nextPageCursor") or None
+            if not cursor or not result.get("list"):
+                break
         return fills

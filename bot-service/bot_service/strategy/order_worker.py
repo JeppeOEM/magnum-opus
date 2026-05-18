@@ -17,6 +17,9 @@ from bot_service.metrics.prometheus import (
     inc_order_rejected,
     inc_risk_gate_block,
     observe_order_execution_latency_ms,
+    set_drawdown,
+    set_position_size,
+    set_unrealized_pnl,
 )
 from bot_service.strategy.circuit_breaker import DailyLossCircuitBreaker
 
@@ -66,6 +69,9 @@ class OrderQueueWorker:
         # dedup for fill events arriving from multiple paths; bounded to avoid memory leak
         self._seen_fill_ids: set[str] = set()
         self._seen_fill_ids_order: deque[str] = deque(maxlen=10_000)
+        # cumulative P&L tracking for drawdown gauge
+        self._cumulative_pnl: float = 0.0
+        self._peak_pnl: float = 0.0
 
     # ---- Public interface ------------------------------------------------
 
@@ -160,6 +166,26 @@ class OrderQueueWorker:
                 self._trip_fired = True
                 if self._on_circuit_breaker_trip is not None:
                     self._on_circuit_breaker_trip()
+
+        # Update per-strategy Prometheus gauges
+        pos_qty = self._position_qty.get(fill.symbol, 0.0)
+        avg_price = self._position_avg_price.get(fill.symbol, 0.0)
+        unrealized = (
+            pos_qty * (float(fill.fill_price) - avg_price)
+            if pos_qty > 0 and avg_price > 0
+            else 0.0
+        )
+        set_position_size(self._strategy_name, fill.symbol, pos_qty)
+        set_unrealized_pnl(self._strategy_name, fill.symbol, unrealized)
+        self._cumulative_pnl += realized_pnl
+        if self._cumulative_pnl > self._peak_pnl:
+            self._peak_pnl = self._cumulative_pnl
+        drawdown = (
+            (self._peak_pnl - self._cumulative_pnl) / self._peak_pnl
+            if self._peak_pnl > 0
+            else 0.0
+        )
+        set_drawdown(self._strategy_name, drawdown)
 
     async def run(self, stop_event: asyncio.Event) -> None:
         """Consume queue until stop_event is set."""

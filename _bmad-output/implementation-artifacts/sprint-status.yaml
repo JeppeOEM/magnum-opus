@@ -279,3 +279,18 @@ development_status:
   26-4-exchange-timestamp-from-response: done
   26-5-bybit-auth-escalation-and-kucoin-public-token: done
   epic-26-retrospective: done
+
+  # ─── Epic 28: Bot Metrics & Risk Hardening ────────────────────────────────────
+  epic-28: done
+  28-1-per-strategy-position-pnl-drawdown-gauges: done
+  28-2-market-order-notional-risk-gate: done
+  28-3-rest-fills-pagination: done
+  28-4-consumer-lag-grafana-panel: done
+  epic-28-retrospective: optional
+
+  # ─── Epic 29: Backtest Suite Completion ──────────────────────────────────────
+  epic-29: in-progress
+  29-1-backtest-writer-tcp-connection-reuse: ready-for-dev
+  29-2-stress-test-gates-validation-report: ready-for-dev
+  29-3-validation-suite-rest-endpoint: ready-for-dev
+  epic-29-retrospective: optional

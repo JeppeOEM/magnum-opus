@@ -387,3 +387,126 @@ async def test_bybit_get_recent_fills_filters_non_filled(httpx_mock: HTTPXMock) 
     fills = await client.get_recent_fills(symbol="BTCUSDT", since_ms=0)
     assert len(fills) == 1
     assert fills[0].order_id == "b"
+
+
+# ---------------------------------------------------------------------------
+# Story 28-3: pagination for get_recent_fills
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+async def test_kucoin_get_recent_fills_paginates_multiple_pages(httpx_mock: HTTPXMock) -> None:
+    """When totalPage=2, both pages are fetched and merged."""
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "code": "200000",
+            "data": {
+                "items": [{"orderId": "f1", "symbol": "XBTUSDTM", "side": "buy",
+                           "price": "50000", "size": "0.001", "fee": "0.001", "createdAt": 1000}],
+                "totalPage": 2,
+                "currentPage": 1,
+            },
+        },
+    )
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "code": "200000",
+            "data": {
+                "items": [{"orderId": "f2", "symbol": "XBTUSDTM", "side": "sell",
+                           "price": "51000", "size": "0.001", "fee": "0.001", "createdAt": 2000}],
+                "totalPage": 2,
+                "currentPage": 2,
+            },
+        },
+    )
+    client = KuCoinRESTClient()
+    fills = await client.get_recent_fills(symbol="XBTUSDTM", since_ms=0)
+
+    assert len(fills) == 2
+    assert fills[0].order_id == "f1"
+    assert fills[1].order_id == "f2"
+    # Two HTTP requests made
+    assert len(httpx_mock.get_requests()) == 2
+    # Second request has currentPage=2
+    assert "currentPage=2" in str(httpx_mock.get_requests()[1].url)
+
+
+@pytest.mark.l1
+async def test_kucoin_get_recent_fills_single_page_no_extra_request(httpx_mock: HTTPXMock) -> None:
+    """Single page (totalPage=1) makes exactly one HTTP request."""
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "code": "200000",
+            "data": {
+                "items": [{"orderId": "f1", "symbol": "XBTUSDTM", "side": "buy",
+                           "price": "50000", "size": "0.001", "fee": "0", "createdAt": 1000}],
+                "totalPage": 1,
+                "currentPage": 1,
+            },
+        },
+    )
+    client = KuCoinRESTClient()
+    fills = await client.get_recent_fills(symbol="XBTUSDTM", since_ms=0)
+    assert len(fills) == 1
+    assert len(httpx_mock.get_requests()) == 1
+
+
+@pytest.mark.l1
+async def test_bybit_get_recent_fills_paginates_via_cursor(httpx_mock: HTTPXMock) -> None:
+    """When nextPageCursor is non-empty, subsequent page is fetched."""
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "retCode": 0,
+            "result": {
+                "list": [{"orderId": "b1", "symbol": "BTCUSDT", "side": "Buy",
+                          "orderStatus": "Filled", "cumExecQty": "0.001",
+                          "avgPrice": "50000", "cumExecFee": "0.001", "updatedTime": "1000"}],
+                "nextPageCursor": "cursor-abc",
+            },
+        },
+    )
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "retCode": 0,
+            "result": {
+                "list": [{"orderId": "b2", "symbol": "BTCUSDT", "side": "Sell",
+                          "orderStatus": "Filled", "cumExecQty": "0.001",
+                          "avgPrice": "51000", "cumExecFee": "0.001", "updatedTime": "2000"}],
+                "nextPageCursor": "",
+            },
+        },
+    )
+    client = BybitRESTClient()
+    fills = await client.get_recent_fills(symbol="BTCUSDT", since_ms=0)
+
+    assert len(fills) == 2
+    assert fills[0].order_id == "b1"
+    assert fills[1].order_id == "b2"
+    assert len(httpx_mock.get_requests()) == 2
+    assert "cursor=cursor-abc" in str(httpx_mock.get_requests()[1].url)
+
+
+@pytest.mark.l1
+async def test_bybit_get_recent_fills_no_cursor_stops_after_one_page(httpx_mock: HTTPXMock) -> None:
+    """Empty nextPageCursor → single page, one HTTP request."""
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "retCode": 0,
+            "result": {
+                "list": [{"orderId": "b1", "symbol": "BTCUSDT", "side": "Buy",
+                          "orderStatus": "Filled", "cumExecQty": "0.001",
+                          "avgPrice": "50000", "cumExecFee": "0", "updatedTime": "1000"}],
+                "nextPageCursor": "",
+            },
+        },
+    )
+    client = BybitRESTClient()
+    fills = await client.get_recent_fills(symbol="BTCUSDT", since_ms=0)
+    assert len(fills) == 1
+    assert len(httpx_mock.get_requests()) == 1

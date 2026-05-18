@@ -188,25 +188,37 @@ class KuCoinRESTClient:
         return orders
 
     async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled]:
-        params: dict[str, str] = {"startAt": str(since_ms)}
-        if symbol:
-            params["symbol"] = symbol
-        result = await self._request("GET", "/api/v1/fills", params=params)
-        items = (result or {}).get("items", [])
+        """Return all fills since since_ms, fetching multiple pages if needed (max 50/page)."""
         fills: list[OrderFilled] = []
-        for item in items:
-            fills.append(
-                OrderFilled(
-                    order_id=str(item.get("orderId", "")),
-                    exchange="kucoin",
-                    symbol=str(item.get("symbol", "")),
-                    side=str(item.get("side", "")),
-                    fill_price=float(item.get("price", 0)),
-                    fill_size=float(item.get("size", 0)),
-                    fee=float(item.get("fee", 0)),
-                    ts_exchange=int(item.get("createdAt", 0)),
+        page = 1
+        while True:
+            params: dict[str, str] = {
+                "startAt": str(since_ms),
+                "pageSize": "50",
+                "currentPage": str(page),
+            }
+            if symbol:
+                params["symbol"] = symbol
+            result = await self._request("GET", "/api/v1/fills", params=params)
+            result = result or {}
+            items = result.get("items", [])
+            for item in items:
+                fills.append(
+                    OrderFilled(
+                        order_id=str(item.get("orderId", "")),
+                        exchange="kucoin",
+                        symbol=str(item.get("symbol", "")),
+                        side=str(item.get("side", "")),
+                        fill_price=float(item.get("price", 0)),
+                        fill_size=float(item.get("size", 0)),
+                        fee=float(item.get("fee", 0)),
+                        ts_exchange=int(item.get("createdAt", 0)),
+                    )
                 )
-            )
+            total_pages = int(result.get("totalPage", 1))
+            if page >= total_pages or not items:
+                break
+            page += 1
         return fills
 
     async def get_private_ws_token(self) -> tuple[str, str]:

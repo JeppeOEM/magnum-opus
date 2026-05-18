@@ -281,7 +281,7 @@ Do NOT commit `.env` to git. The file is in `.gitignore`.
    ```bash
    docker compose logs bot | grep "bus_timeout\|heartbeat_timeout"
    ```
-2. Check Redis consumer lag for that strategy:
+2. Check Redis consumer lag for that strategy in the Grafana **Bot Service** dashboard under "Consumer Lag (Redis entries behind) by Strategy", or via:
    ```bash
    curl -s http://localhost:8090/metrics | grep bot_consumer_lag
    ```

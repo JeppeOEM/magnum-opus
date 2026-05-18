@@ -283,6 +283,52 @@ async def test_risk_gate_allows_order_within_limit() -> None:
     assert client.place_order.call_count == 1
 
 
+@pytest.mark.l1
+async def test_risk_gate_blocks_market_order_when_notional_exceeds_limit() -> None:
+    """Market order with no limit_price uses portfolio_value_usd as price reference.
+
+    portfolio=$100, max_position_pct=0.01 → max_allowed=$1.
+    Market order size=0.05 → notional=0.05*100=$5 > $1 → blocked.
+    """
+    client = MagicMock()
+    client.place_order = AsyncMock(return_value=_placed("oid-1"))
+    worker = _make_worker(max_position_pct=0.01, portfolio_value_usd=100.0, exchange_client=client)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    market_order = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="buy",
+        order_type="market",
+        order_role="entry",
+        size=0.05,  # 5% of $100 = $5 > $1 limit
+    )
+    await worker._process(market_order)
+    assert client.place_order.call_count == 0
+
+
+@pytest.mark.l1
+async def test_risk_gate_allows_market_order_within_limit() -> None:
+    """Market order notional (size * portfolio) within limit is allowed."""
+    client = MagicMock()
+    client.place_order = AsyncMock(return_value=_placed("oid-2"))
+    worker = _make_worker(max_position_pct=0.10, portfolio_value_usd=10_000.0, exchange_client=client)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    market_order = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="buy",
+        order_type="market",
+        order_role="entry",
+        size=0.05,  # 5% of $10,000 = $500 < $1,000 limit
+    )
+    await worker._process(market_order)
+    assert client.place_order.call_count == 1
+
+
 # ---------------------------------------------------------------------------
 # T4: QuestDB writes for all outcomes (AC2)
 # ---------------------------------------------------------------------------
@@ -838,3 +884,113 @@ async def test_circuit_breaker_writes_correct_pnl_to_order_events() -> None:
     assert written_fields[0]["realized_pnl"] == pytest.approx(2_000.0)
     # circuit breaker also received the correct value
     assert cb.daily_pnl == pytest.approx(2_000.0)
+
+
+# ---------------------------------------------------------------------------
+# Story 28-1: Per-strategy position/P&L/drawdown Prometheus gauges
+# ---------------------------------------------------------------------------
+
+@pytest.mark.l1
+async def test_gauges_called_after_buy_fill() -> None:
+    """set_position_size, set_unrealized_pnl called after a buy fill."""
+    worker = _make_worker()
+
+    req = _entry_req(side="buy", size=1.0, limit_price=50_000.0)
+    placed = _placed("oid-buy-g")
+    worker.open_orders["oid-buy-g"] = (req, placed)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-buy-g",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="buy",
+        fill_size=1.0,
+        fill_price=50_000.0,
+        fee=0.0,
+        ts_exchange=0,
+    )
+
+    with patch("bot_service.strategy.order_worker.set_position_size") as mock_pos, \
+         patch("bot_service.strategy.order_worker.set_unrealized_pnl") as mock_upnl, \
+         patch("bot_service.strategy.order_worker.set_drawdown") as mock_dd:
+        await worker.handle_fill(fill)
+
+    # After buy: position qty=1.0, unrealized=0 (fill_price == avg_price), drawdown=0 (no pnl)
+    mock_pos.assert_called_once_with("test-strat", "BTCUSDT", 1.0)
+    mock_upnl.assert_called_once_with("test-strat", "BTCUSDT", 0.0)
+    mock_dd.assert_called_once_with("test-strat", 0.0)
+
+
+@pytest.mark.l1
+async def test_gauges_called_after_sell_fill_with_profit() -> None:
+    """After profitable sell: position_size=0, drawdown=0 (at peak)."""
+    worker = _make_worker()
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+
+    req = OrderRequest(
+        strategy="test-strat", exchange="bybit", symbol="BTCUSDT",
+        side="sell", order_type="limit", order_role="exit", size=1.0, limit_price=54_000.0,
+    )
+    placed = _placed("oid-sell-g")
+    worker.open_orders["oid-sell-g"] = (req, placed)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-sell-g", exchange="bybit", symbol="BTCUSDT",
+        side="sell", fill_size=1.0, fill_price=54_000.0, fee=0.0, ts_exchange=0,
+    )
+
+    with patch("bot_service.strategy.order_worker.set_position_size") as mock_pos, \
+         patch("bot_service.strategy.order_worker.set_unrealized_pnl") as mock_upnl, \
+         patch("bot_service.strategy.order_worker.set_drawdown") as mock_dd:
+        await worker.handle_fill(fill)
+
+    # qty=0 after sell, cumulative_pnl=4000=peak → drawdown=0
+    mock_pos.assert_called_once_with("test-strat", "BTCUSDT", 0.0)
+    mock_upnl.assert_called_once_with("test-strat", "BTCUSDT", 0.0)
+    mock_dd.assert_called_once_with("test-strat", 0.0)
+
+
+@pytest.mark.l1
+async def test_drawdown_nonzero_after_loss() -> None:
+    """Drawdown gauge is >0 when cumulative P&L is below peak."""
+    worker = _make_worker()
+
+    # First trade: buy then sell at profit → peak=4000
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    req1 = OrderRequest(
+        strategy="test-strat", exchange="bybit", symbol="BTCUSDT",
+        side="sell", order_type="limit", order_role="exit", size=1.0, limit_price=54_000.0,
+    )
+    placed1 = _placed("oid-s1")
+    worker.open_orders["oid-s1"] = (req1, placed1)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+    fill1 = OrderFilled(
+        order_id="oid-s1", exchange="bybit", symbol="BTCUSDT",
+        side="sell", fill_size=1.0, fill_price=54_000.0, fee=0.0, ts_exchange=0,
+    )
+    with patch("bot_service.strategy.order_worker.set_position_size"), \
+         patch("bot_service.strategy.order_worker.set_unrealized_pnl"), \
+         patch("bot_service.strategy.order_worker.set_drawdown"):
+        await worker.handle_fill(fill1)
+
+    # Second trade: buy then sell at loss → cumulative=4000-2000=2000, peak=4000 → dd=0.5
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    req2 = OrderRequest(
+        strategy="test-strat", exchange="bybit", symbol="BTCUSDT",
+        side="sell", order_type="limit", order_role="exit", size=1.0, limit_price=48_000.0,
+    )
+    placed2 = _placed("oid-s2")
+    worker.open_orders["oid-s2"] = (req2, placed2)
+    fill2 = OrderFilled(
+        order_id="oid-s2", exchange="bybit", symbol="BTCUSDT",
+        side="sell", fill_size=1.0, fill_price=48_000.0, fee=0.0, ts_exchange=0,
+    )
+    with patch("bot_service.strategy.order_worker.set_position_size"), \
+         patch("bot_service.strategy.order_worker.set_unrealized_pnl"), \
+         patch("bot_service.strategy.order_worker.set_drawdown") as mock_dd:
+        await worker.handle_fill(fill2)
+
+    # peak=4000, cumulative=4000+(-2000)=2000 → drawdown=(4000-2000)/4000=0.5
+    mock_dd.assert_called_once_with("test-strat", pytest.approx(0.5))
