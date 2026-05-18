@@ -93,6 +93,8 @@ class KuCoinPrivateFeed:
                     if fill.order_id not in self._seen_fill_ids:
                         self._seen_fill_ids.add(fill.order_id)
                         await on_fill(fill)
+                        if fill.ts_exchange > self._last_fill_ts_ms:
+                            self._last_fill_ts_ms = fill.ts_exchange
                     else:
                         inc_fill_dedup(self.exchange)
             except ExchangeRESTError as exc:

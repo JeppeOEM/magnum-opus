@@ -126,6 +126,8 @@ class BybitPrivateFeed:
                     if fill.order_id not in self._seen_fill_ids:
                         self._seen_fill_ids.add(fill.order_id)
                         await on_fill(fill)
+                        if fill.ts_exchange > self._last_fill_ts_ms:
+                            self._last_fill_ts_ms = fill.ts_exchange
                     else:
                         inc_fill_dedup(self.exchange)
             except ExchangeRESTError as exc:
@@ -194,7 +196,8 @@ class BybitPrivateFeed:
                         "bybit_ws_auth_max_failures",
                         failures=self._auth_failure_count,
                     )
-                    raise RuntimeError(f"Bybit WS auth failed {self._auth_failure_count} times")
+                    self._auth_failure_count = 0  # reset so recovery is possible after operator fixes credentials
+                    raise RuntimeError(f"Bybit WS auth failed {_MAX_AUTH_FAILURES} times")
                 raise ExchangeRESTError(f"Bybit WS auth failed: {str(auth_resp)[:200]}")
             self._auth_failure_count = 0
             self._last_msg_ts = time.monotonic()

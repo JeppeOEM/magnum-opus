@@ -363,6 +363,7 @@ class BusManager:
             ps = r.pubsub()
             try:
                 ps.psubscribe("orderbook:*", "candles1s:*")
+                backoff = 1.0  # connection established — reset before polling
                 while not self._stop_event.is_set():
                     raw_msg = ps.get_message(ignore_subscribe_messages=True, timeout=1.0)
                     if raw_msg is None:
@@ -372,7 +373,6 @@ class BusManager:
                     channel_raw = raw_msg["channel"]
                     channel: str = channel_raw.decode() if isinstance(channel_raw, bytes) else channel_raw
                     self._dispatch_pubsub(channel, raw_msg["data"])
-                backoff = 1.0
             except Exception as exc:
                 if self._stop_event.is_set():
                     return

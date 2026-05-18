@@ -452,7 +452,8 @@ async def test_bybit_auth_failure_escalates_at_max_failures() -> None:
         with pytest.raises(RuntimeError, match=f"Bybit WS auth failed {_MAX_AUTH_FAILURES} times"):
             await feed._connect_once(mock_rest, AsyncMock(), stop, 10.0)
 
-    assert feed._auth_failure_count == _MAX_AUTH_FAILURES
+    # Counter is reset to 0 on escalation so recovery is possible after credentials are fixed
+    assert feed._auth_failure_count == 0
 
 
 @pytest.mark.l1

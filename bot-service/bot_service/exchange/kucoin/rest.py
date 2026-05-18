@@ -212,6 +212,9 @@ class KuCoinRESTClient:
     async def get_private_ws_token(self) -> tuple[str, str]:
         """Return (endpoint, token) for the private WebSocket connection."""
         data = await self._request("POST", "/api/v1/bullet-private", json_body={})
+        servers = data.get("instanceServers", [])
+        if not servers:
+            raise ExchangeRESTError("KuCoin bullet-private returned no instanceServers")
         token = str(data["token"])
-        endpoint = str(data["instanceServers"][0]["endpoint"])
+        endpoint = str(servers[0]["endpoint"])
         return endpoint, token

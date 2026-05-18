@@ -37,7 +37,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-16
+last_updated: 2026-05-18
 # updated: 17-3 done; 9 review patches applied (shutdown timeout, pubsub reconnect, uint16 bounds, parseLevels warn, WritePump ctx, lastSnap eviction, unknown opcode warn, empty symbol guard, ws message type check)
 # updated: epic-16 done; retrospective done; review patches applied to 16-1, 16-2, 16-3
 # updated: epic-17 added (live frontend & orderbook fanout — 5 stories, brainstormed 2026-05-10)
@@ -272,10 +272,10 @@ development_status:
   epic-27-retrospective: done
 
   # ─── Epic 26: Live Trading Hardening ─────────────────────────────────────────
-  epic-26: in-progress
-  26-1-pubsub-reconnect-and-stop-unblocking: ready-for-dev
-  26-2-deprovision-pubsub-on-crash-and-stop: ready-for-dev
-  26-3-rest-fallback-fills-endpoint: ready-for-dev
-  26-4-exchange-timestamp-from-response: ready-for-dev
-  26-5-bybit-auth-escalation-and-kucoin-public-token: ready-for-dev
+  epic-26: done
+  26-1-pubsub-reconnect-and-stop-unblocking: done
+  26-2-deprovision-pubsub-on-crash-and-stop: done
+  26-3-rest-fallback-fills-endpoint: done
+  26-4-exchange-timestamp-from-response: done
+  26-5-bybit-auth-escalation-and-kucoin-public-token: done
   epic-26-retrospective: backlog

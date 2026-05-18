@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of epic-26 stories (2026-05-18)
+
+- **D-26-1: KuCoin `get_recent_fills` no pagination** (`kucoin/rest.py`) — `/api/v1/fills` returns at most 50 results per page; fills on page 2+ are silently dropped during a long WS outage with > 50 fills. Add cursor-based pagination loop when fill volume warrants it.
+- **D-26-2: Bybit `get_recent_fills` no pagination** (`bybit/rest.py`) — `/v5/order/history` returns at most 50 results per page with no cursor consumption; fills beyond the first page are silently dropped during high-volume periods. Add `cursor`-based pagination when fill volume warrants it.
+- **D-26-3: `_seen_fill_ids` grows without bound** (`kucoin/ws_private.py`, `bybit/ws_private.py`) — pre-existing set that accumulates every `order_id` since startup with no eviction. Low risk at current fill rates; revisit if memory footprint becomes observable.
+
 ## Deferred from: code review of 20-1-liquidity-overlay-absorption-markers (2026-05-12)
 
 - ~~**D-20-1-1: Single-row df produces zero-width POC line**~~ — **Fixed 2026-05-12**: `liquidity_overlay` now returns early when `len(df) < 2`.
