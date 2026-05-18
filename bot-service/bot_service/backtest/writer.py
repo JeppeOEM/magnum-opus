@@ -31,7 +31,7 @@ class _CostBasisTracker:
             self._qty[symbol] = new_qty
             return 0.0
         closed = min(qty, cur_qty)
-        realized = closed * (price - cur_avg) if cur_avg > 0 else 0.0
+        realized = closed * (price - cur_avg) if cur_qty > 0 else 0.0
         self._qty[symbol] = max(0.0, cur_qty - closed)
         if self._qty[symbol] == 0.0:
             self._avg[symbol] = 0.0

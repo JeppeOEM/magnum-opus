@@ -81,7 +81,7 @@ class OrderQueueWorker:
         )
 
     def restore_position(self, symbol: str, qty: float, avg_price: float) -> None:
-        """Restore cost-basis state from reconciliation. No-op stub until D-13-1 is revisited."""
+        """Restore cost-basis state from crash-recovery reconciliation (Epic 13 / D-13-1)."""
         self._position_qty[symbol] = qty
         self._position_avg_price[symbol] = avg_price
 
@@ -185,7 +185,7 @@ class OrderQueueWorker:
             return 0.0
         # sell: closes long position
         closed = min(qty, cur_qty)
-        realized = closed * (price - cur_avg) if cur_avg > 0 else 0.0
+        realized = closed * (price - cur_avg) if cur_qty > 0 else 0.0
         self._position_qty[symbol] = max(0.0, cur_qty - closed)
         if self._position_qty[symbol] == 0.0:
             self._position_avg_price[symbol] = 0.0

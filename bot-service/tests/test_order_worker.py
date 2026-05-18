@@ -731,3 +731,110 @@ async def test_circuit_breaker_receives_realized_pnl() -> None:
     # realized_pnl = -2000; exceeds limit_usd=1000
     assert cb.is_tripped()
     assert trip_called == [True]
+
+
+# ---------------------------------------------------------------------------
+# T11: restore_position — Story 25-1 (P4 patch)
+# ---------------------------------------------------------------------------
+
+
+def test_restore_position_sets_state() -> None:
+    w = _make_worker()
+    w.restore_position("BTCUSDT", qty=2.0, avg_price=51_000.0)
+    assert w._position_qty["BTCUSDT"] == 2.0
+    assert w._position_avg_price["BTCUSDT"] == 51_000.0
+
+
+def test_restore_position_then_sell_uses_restored_avg() -> None:
+    w = _make_worker()
+    w.restore_position("BTCUSDT", qty=1.0, avg_price=50_000.0)
+    pnl = w._update_position("BTCUSDT", "sell", 1.0, 53_000.0)
+    assert pnl == pytest.approx(3_000.0)
+    assert w._position_qty["BTCUSDT"] == 0.0
+
+
+@pytest.mark.l1
+async def test_handle_fill_loss_close_writes_negative_pnl() -> None:
+    """Sell fill at a loss writes realized_pnl < 0 to order_events (AC 25-2)."""
+    worker = _make_worker()
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+
+    req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        order_type="limit",
+        order_role="exit",
+        size=1.0,
+        limit_price=48_000.0,
+    )
+    placed = _placed("oid-loss")
+    worker.open_orders["oid-loss"] = (req, placed)
+
+    written_fields: list[dict] = []
+
+    async def capture(**kwargs):  # type: ignore[misc]
+        written_fields.append(kwargs)
+
+    worker._write_order_event = capture  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-loss",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        fill_size=1.0,
+        fill_price=48_000.0,
+        fee=0.0,
+        ts_exchange=0,
+    )
+    await worker.handle_fill(fill)
+
+    assert len(written_fields) == 1
+    assert written_fields[0]["realized_pnl"] == pytest.approx(-2_000.0)
+    assert written_fields[0]["realized_pnl"] < 0
+
+
+@pytest.mark.l1
+async def test_circuit_breaker_writes_correct_pnl_to_order_events() -> None:
+    """Circuit breaker integration: the exact realized_pnl value must be written (P5 patch)."""
+    cb = DailyLossCircuitBreaker(limit_usd=5_000.0)  # high limit — won't trip
+    worker = _make_worker(circuit_breaker=cb)
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+
+    req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        order_type="limit",
+        order_role="exit",
+        size=1.0,
+        limit_price=52_000.0,
+    )
+    placed = _placed("oid-pnl-check")
+    worker.open_orders["oid-pnl-check"] = (req, placed)
+
+    written_fields: list[dict] = []
+
+    async def capture(**kwargs):  # type: ignore[misc]
+        written_fields.append(kwargs)
+
+    worker._write_order_event = capture  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-pnl-check",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        fill_size=1.0,
+        fill_price=52_000.0,
+        fee=0.0,
+        ts_exchange=0,
+    )
+    await worker.handle_fill(fill)
+    # realized_pnl = (52000 - 50000) * 1.0 = 2000
+    assert written_fields[0]["realized_pnl"] == pytest.approx(2_000.0)
+    # circuit breaker also received the correct value
+    assert cb.daily_pnl == pytest.approx(2_000.0)

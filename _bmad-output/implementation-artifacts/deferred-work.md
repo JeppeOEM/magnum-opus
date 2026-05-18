@@ -295,3 +295,16 @@
 
 - **D-17-3-1: InjectType int64 precision via map[string]any round-trip** (`gateway/internal/codec/codec.go:66-73`) — JSON decode into `map[string]any` converts int64 fields (e.g. ts_ns) to float64, losing ~128ns precision on re-encode. No practical impact for 1s candle display; use direct JSON byte injection if precision matters in future.
 - **D-17-3-2: No protocol version byte in binary frame header** (`gateway/internal/codec/codec.go`) — Binary frames have no version field; breaking protocol changes will silently corrupt clients. Premature for v1 single-consumer deployment; add version byte when second consumer is introduced.
+
+## Deferred from: code review (Epic 27 — Backtest Infrastructure) (2026-05-16)
+
+- **D-27-1: Redundant `/strategies` HTTP call on every strategy selection** (`dashboard/callbacks_backtest.py:34-35`) — `on_strategy_select` calls `fetch_strategies()` and scans the full list to find the selected strategy's code, instead of caching the result from `load_strategy_options`. For a large number of strategies this is an unnecessary round-trip per selection. Fix: store the strategies list in a `dcc.Store` component populated by `load_strategy_options` and read from it in `on_strategy_select`.
+- **D-27-2: Polling stops permanently on transient network error mid-run** (`dashboard/callbacks_backtest.py:101`) — `on_poll` returns `no_update` without disabling the interval when `poll_run_status` raises an exception (e.g. bot-service briefly unreachable). The interval keeps firing, but if the `run_id` Store was cleared on the exception path the subsequent polls will all raise 404. Fix: distinguish transient errors (keep interval, show "retrying…" in status div) from terminal states (done/failed) that should disable the interval.
+
+## Deferred from: code review of Epic 25 — realized P&L tracking (2026-05-18)
+
+- **D-25-1: Short-sell or sell-before-buy silently returns 0 PnL** — `_update_position` and `_CostBasisTracker.record` return 0 when `cur_qty == 0`. By design for long-only production; no short-position tracking planned. Add a log warning if short-selling support is ever added.
+- **D-25-2: Oversell (sell qty > open position) discards excess silently** — `closed = min(qty, cur_qty)` absorbs the over-sell without a warning. By design for long-only; the order-tracking layer (`handle_fill` open_orders check) prevents this in normal operation.
+- **D-25-3: Float precision drift in running weighted average** — repeated partial buy fills accumulate floating-point error in `(cur_avg * cur_qty + price * qty) / new_qty`. Low practical risk for trading quantities; would require `Decimal` to fully address.
+- **D-25-4: `_CostBasisTracker` and `_update_position` are intentional duplicates** — backtest package is kept self-contained (no cross-service imports); duplication is by design per story spec.
+- **D-25-5: Slippage formula not side-adjusted** — `(fill_price - limit_price) * fill_size` is the spec-defined formula; positive means above-limit for both buys and sells. Consistent with spec; no action unless downstream consumers require sign-adjusted slippage.
