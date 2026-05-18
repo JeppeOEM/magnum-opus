@@ -58,9 +58,12 @@ class ValidationReport:
     drawdown_ok: bool
     degradation_ok: bool
     monte_carlo_ok: bool
+    stress_drawdown_ok: bool
+    worst_stress_drawdown: float
     min_sharpe: float
     max_drawdown_threshold: float
     max_degradation: float
+    stress_max_drawdown_threshold: float
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self), default=str)
@@ -238,9 +241,18 @@ def generate_validation_report(
     min_sharpe: float = 1.0,
     max_drawdown_threshold: float = 0.15,
     max_degradation: float = 0.30,
+    stress_max_drawdown_threshold: float = 0.30,
 ) -> ValidationReport:
     fee_gate_ran = fee_gate is not None
     fee_gate_passed: bool | None = fee_gate.passes if fee_gate is not None else None
+
+    # Stress test drawdown gate — worst window must not exceed threshold
+    worst_stress_dd = (
+        max((w.max_drawdown for w in stress.windows), default=0.0)
+        if stress is not None
+        else 0.0
+    )
+    stress_drawdown_ok = worst_stress_dd <= stress_max_drawdown_threshold
 
     if fee_gate_ran and not fee_gate_passed:
         return ValidationReport(
@@ -248,7 +260,7 @@ def generate_validation_report(
             fee_gate_ran=True,
             fee_gate_passed=False,
             walk_forward_ran=False,
-            stress_test_ran=False,
+            stress_test_ran=stress is not None,
             monte_carlo_ran=False,
             mean_sharpe=0.0,
             mean_drawdown=0.0,
@@ -258,9 +270,12 @@ def generate_validation_report(
             drawdown_ok=False,
             degradation_ok=False,
             monte_carlo_ok=False,
+            stress_drawdown_ok=stress_drawdown_ok,
+            worst_stress_drawdown=worst_stress_dd,
             min_sharpe=min_sharpe,
             max_drawdown_threshold=max_drawdown_threshold,
             max_degradation=max_degradation,
+            stress_max_drawdown_threshold=stress_max_drawdown_threshold,
         )
 
     mean_sharpe = walk_forward.mean_sharpe if walk_forward else 0.0
@@ -274,7 +289,7 @@ def generate_validation_report(
     monte_carlo_ok = mc_pct5 > 0.0
 
     return ValidationReport(
-        passes=all([sharpe_ok, drawdown_ok, degradation_ok, monte_carlo_ok]),
+        passes=all([sharpe_ok, drawdown_ok, degradation_ok, monte_carlo_ok, stress_drawdown_ok]),
         fee_gate_ran=fee_gate_ran,
         fee_gate_passed=fee_gate_passed,
         walk_forward_ran=walk_forward is not None,
@@ -288,7 +303,10 @@ def generate_validation_report(
         drawdown_ok=drawdown_ok,
         degradation_ok=degradation_ok,
         monte_carlo_ok=monte_carlo_ok,
+        stress_drawdown_ok=stress_drawdown_ok,
+        worst_stress_drawdown=worst_stress_dd,
         min_sharpe=min_sharpe,
         max_drawdown_threshold=max_drawdown_threshold,
         max_degradation=max_degradation,
+        stress_max_drawdown_threshold=stress_max_drawdown_threshold,
     )

@@ -156,9 +156,12 @@ def test_validation_report_json_roundtrip() -> None:
         drawdown_ok=True,
         degradation_ok=True,
         monte_carlo_ok=True,
+        stress_drawdown_ok=True,
+        worst_stress_drawdown=0.0,
         min_sharpe=1.0,
         max_drawdown_threshold=0.15,
         max_degradation=0.30,
+        stress_max_drawdown_threshold=0.30,
     )
     json_str = report.to_json()
     data = json.loads(json_str)
@@ -166,3 +169,69 @@ def test_validation_report_json_roundtrip() -> None:
     assert data["mean_sharpe"] == pytest.approx(1.5)
     assert data["fee_gate_passed"] is None
     assert data["monte_carlo_5th_pct"] == pytest.approx(5.0)
+    assert data["stress_drawdown_ok"] is True
+    assert data["worst_stress_drawdown"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Story 29-2: stress test drawdown gates ValidationReport.passes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+def test_stress_drawdown_exceeds_threshold_fails_passes() -> None:
+    """Worst stress window drawdown above threshold → passes=False, stress_drawdown_ok=False."""
+    from bot_service.backtest.validation import StressTestReport, StressWindowResult
+
+    wf = _make_walk_forward(sharpe=2.0, drawdown=0.05, degradation=0.10)
+    stress = StressTestReport(windows=(
+        StressWindowResult(name="luna", start="2022-05-01", end="2022-05-31",
+                           sharpe=0.5, max_drawdown=0.60),  # exceeds 0.30
+    ))
+    report = generate_validation_report(
+        walk_forward=wf,  # type: ignore[arg-type]
+        stress=stress,
+        monte_carlo_pct5=10.0,
+        fee_gate=None,
+        stress_max_drawdown_threshold=0.30,
+    )
+    assert report.passes is False
+    assert report.stress_drawdown_ok is False
+    assert report.worst_stress_drawdown == pytest.approx(0.60)
+
+
+@pytest.mark.l1
+def test_stress_drawdown_under_threshold_does_not_fail() -> None:
+    """Worst stress window drawdown below threshold → stress_drawdown_ok=True."""
+    from bot_service.backtest.validation import StressTestReport, StressWindowResult
+
+    wf = _make_walk_forward(sharpe=2.0, drawdown=0.05, degradation=0.10)
+    stress = StressTestReport(windows=(
+        StressWindowResult(name="luna", start="2022-05-01", end="2022-05-31",
+                           sharpe=0.5, max_drawdown=0.20),  # under 0.30
+    ))
+    report = generate_validation_report(
+        walk_forward=wf,  # type: ignore[arg-type]
+        stress=stress,
+        monte_carlo_pct5=10.0,
+        fee_gate=None,
+        min_sharpe=0.5,  # lower threshold so walk-forward passes
+        stress_max_drawdown_threshold=0.30,
+    )
+    assert report.stress_drawdown_ok is True
+    assert report.worst_stress_drawdown == pytest.approx(0.20)
+
+
+@pytest.mark.l1
+def test_no_stress_run_does_not_fail_passes() -> None:
+    """When stress=None, stress_drawdown_ok=True (not penalised for not running)."""
+    wf = _make_walk_forward(sharpe=2.0, drawdown=0.05, degradation=0.10)
+    report = generate_validation_report(
+        walk_forward=wf,  # type: ignore[arg-type]
+        stress=None,
+        monte_carlo_pct5=10.0,
+        fee_gate=None,
+        min_sharpe=0.5,
+    )
+    assert report.stress_drawdown_ok is True
+    assert report.worst_stress_drawdown == pytest.approx(0.0)

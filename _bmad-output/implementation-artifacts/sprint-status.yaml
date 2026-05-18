@@ -289,8 +289,8 @@ development_status:
   epic-28-retrospective: optional
 
   # ─── Epic 29: Backtest Suite Completion ──────────────────────────────────────
-  epic-29: in-progress
-  29-1-backtest-writer-tcp-connection-reuse: ready-for-dev
-  29-2-stress-test-gates-validation-report: ready-for-dev
-  29-3-validation-suite-rest-endpoint: ready-for-dev
+  epic-29: done
+  29-1-backtest-writer-tcp-connection-reuse: done
+  29-2-stress-test-gates-validation-report: done
+  29-3-validation-suite-rest-endpoint: done
   epic-29-retrospective: optional

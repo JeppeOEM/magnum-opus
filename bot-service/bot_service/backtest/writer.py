@@ -64,6 +64,34 @@ class BacktestResultWriter:
         self._symbol = symbol
         self._fee_currency = fee_currency
         self._tracker = _CostBasisTracker()
+        self._sender: Sender | None = None
+
+    def open(self) -> None:
+        """Open the QuestDB ILP TCP connection. No-op if already open."""
+        if self._sender is not None:
+            return
+        host, port_str = self._questdb_ilp_addr.split(":")
+        self._sender = Sender.from_conf(f"tcp::addr={host}:{port_str};")
+        self._sender.establish()
+
+    def close(self) -> None:
+        """Flush and close the QuestDB ILP TCP connection. Safe to call multiple times."""
+        if self._sender is None:
+            return
+        try:
+            self._sender.flush()
+            self._sender.close()
+        except Exception as exc:
+            log.warning("backtest_ilp_close_failed", error=str(exc))
+        finally:
+            self._sender = None
+
+    def __enter__(self) -> BacktestResultWriter:
+        self.open()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def write_fill(self, order: Any, position_size_after: float) -> None:
         created_dt = bt.num2date(order.created.dt)
@@ -122,8 +150,16 @@ class BacktestResultWriter:
         })
 
     def _sync_ilp_write(self, fields: dict[str, Any]) -> None:
-        """Fire-and-forget ILP write to order_events. Logs CRITICAL on failure."""
-        host, port_str = self._questdb_ilp_addr.split(":")
+        """Fire-and-forget ILP write to order_events using the shared sender.
+
+        Logs CRITICAL on failure. If sender is not open, logs CRITICAL and returns.
+        """
+        if self._sender is None:
+            log.critical(
+                "backtest_ilp_write_without_open",
+                strategy=fields.get("strategy", ""),
+            )
+            return
 
         # Use backtest event time as designated timestamp so time-range Grafana queries work
         ts_exchange_us = int(fields.get("ts_exchange", 0))
@@ -164,9 +200,8 @@ class BacktestResultWriter:
             "ts_exchange": int(fields.get("ts_exchange", 0)),
         }
         try:
-            with Sender.from_conf(f"tcp::addr={host}:{port_str};") as sender:
-                sender.row("order_events", symbols=symbols, columns=columns, at=ts_at)
-                sender.flush()
+            self._sender.row("order_events", symbols=symbols, columns=columns, at=ts_at)
+            self._sender.flush()
         except Exception as exc:
             log.critical(
                 "backtest_ilp_write_failed",
@@ -184,6 +219,7 @@ def run_backtest_and_persist(
 ) -> list[Any]:
     """Run backtest and write each completed order to QuestDB via writer.
 
+    Opens the writer's TCP connection if not already open; closes it on exit.
     Exceptions from strategy.next() are logged CRITICAL with last_bar_ts then re-raised.
     Rows already written remain in QuestDB with no rollback.
     """
@@ -207,13 +243,14 @@ def run_backtest_and_persist(
     if commission_info is not None:
         cerebro.broker.addcommissioninfo(commission_info)
 
-    try:
-        return cerebro.run()  # type: ignore[no-any-return]
-    except Exception as exc:
-        log.critical(
-            "backtest_run_failed",
-            strategy=writer._strategy_name,
-            last_bar_ts=last_bar_ts[0],
-            error=str(exc),
-        )
-        raise
+    with writer:
+        try:
+            return cerebro.run()  # type: ignore[no-any-return]
+        except Exception as exc:
+            log.critical(
+                "backtest_run_failed",
+                strategy=writer._strategy_name,
+                last_bar_ts=last_bar_ts[0],
+                error=str(exc),
+            )
+            raise

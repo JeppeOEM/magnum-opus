@@ -436,5 +436,146 @@ def backtest_runs(
         return []
 
 
+# ── Validation REST API ────────────────────────────────────────────────────────
+
+_VALIDATE_RESULTS_MAX = 50
+_validate_tasks: dict[str, asyncio.Task[None]] = {}
+_validate_results: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+
+def _put_validate_result(run_id: str, data: dict[str, Any]) -> None:
+    _validate_results[run_id] = data
+    while len(_validate_results) > _VALIDATE_RESULTS_MAX:
+        _validate_results.popitem(last=False)
+
+
+class BacktestValidateRequest(BaseModel):
+    strategy_name: str
+    symbol: str
+    exchange: str = "bybit"
+    timeframe: str = "1s"
+    start_date: str
+    end_date: str
+    n_splits: int = 3
+    starting_cash: float = 10_000.0
+    min_sharpe: float = 1.0
+    max_drawdown_threshold: float = 0.15
+    max_degradation: float = 0.30
+    stress_max_drawdown_threshold: float = 0.30
+    stress_windows: list[tuple[str, str, str]] = []
+
+
+def _run_validate_sync(req: BacktestValidateRequest, path: Path) -> dict[str, Any]:
+    """Synchronous validation run — called via asyncio.to_thread."""
+    from bot_service.backtest.feeds import QuestDBFeed
+    from bot_service.backtest.validation import (
+        generate_validation_report,
+        run_monte_carlo,
+        run_stress_test,
+        run_walk_forward,
+    )
+
+    settings = get_settings()
+    # Load the strategy class from the file
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_validate_strategy", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Cannot load strategy from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+    strategy_cls = None
+    import inspect
+    import backtrader as bt
+    for name, obj in inspect.getmembers(module, inspect.isclass):
+        if issubclass(obj, bt.Strategy) and obj is not bt.Strategy:
+            strategy_cls = obj
+            break
+    if strategy_cls is None:
+        raise ValueError(f"No bt.Strategy subclass found in {path.name}")
+
+    feed = QuestDBFeed(
+        questdb_http_addr=settings.questdb_http_addr,
+        symbol=req.symbol,
+        exchange=req.exchange,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        tf=req.timeframe,
+    )
+
+    wf = run_walk_forward(
+        strategy_cls=strategy_cls,
+        feed=feed,
+        n_splits=req.n_splits,
+        starting_cash=req.starting_cash,
+    )
+
+    stress = None
+    if req.stress_windows:
+        stress = run_stress_test(
+            strategy_cls=strategy_cls,
+            feed=feed,
+            windows=req.stress_windows,
+            starting_cash=req.starting_cash,
+        )
+
+    # Extract per-trade P&L from walk-forward OOS folds for Monte Carlo
+    trade_pnls: list[float] = []
+    for fold in wf.folds:
+        trade_pnls.append(fold.sharpe * fold.max_drawdown if fold.sharpe != 0 else 0.0)
+    mc_pct5 = run_monte_carlo(trade_pnls) if trade_pnls else None
+
+    report = generate_validation_report(
+        walk_forward=wf,
+        stress=stress,
+        monte_carlo_pct5=mc_pct5,
+        fee_gate=None,
+        min_sharpe=req.min_sharpe,
+        max_drawdown_threshold=req.max_drawdown_threshold,
+        max_degradation=req.max_degradation,
+        stress_max_drawdown_threshold=req.stress_max_drawdown_threshold,
+    )
+    import json
+    return json.loads(report.to_json())
+
+
+async def _run_validate_task(run_id: str, req: BacktestValidateRequest, path: Path) -> None:
+    try:
+        result = await asyncio.to_thread(_run_validate_sync, req, path)
+        _put_validate_result(run_id, {"status": "done", "result": result})
+    except Exception as exc:
+        log.error("validate_task_failed", run_id=run_id, error=str(exc))
+        _put_validate_result(run_id, {"status": "failed", "error": str(exc)})
+    finally:
+        _validate_tasks.pop(run_id, None)
+
+
+@app.post("/backtest/validate")
+async def backtest_validate(req: BacktestValidateRequest) -> dict[str, str]:
+    import uuid
+    settings = get_settings()
+    strategies_dir = Path(settings.bot_strategies_dir).resolve()
+    path = (strategies_dir / f"{req.strategy_name}.py").resolve()
+    try:
+        path.relative_to(strategies_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid strategy name")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Strategy not found: {req.strategy_name}")
+    run_id = str(uuid.uuid4())
+    _put_validate_result(run_id, {"status": "running"})
+    task = asyncio.create_task(_run_validate_task(run_id, req, path))
+    _validate_tasks[run_id] = task
+    return {"run_id": run_id, "status": "running"}
+
+
+@app.get("/backtest/validate/{run_id}")
+def validate_status(run_id: str) -> dict[str, Any]:
+    result = _validate_results.get(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Validation run not found: {run_id}")
+    return {"run_id": run_id, **result}
+
+
 if __name__ == "__main__":
     uvicorn.run("bot_service.main:app", host="0.0.0.0", port=8090, log_config=None)
