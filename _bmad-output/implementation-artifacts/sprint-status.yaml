@@ -286,11 +286,11 @@ development_status:
   28-2-market-order-notional-risk-gate: done
   28-3-rest-fills-pagination: done
   28-4-consumer-lag-grafana-panel: done
-  epic-28-retrospective: optional
+  epic-28-retrospective: done
 
   # ─── Epic 29: Backtest Suite Completion ──────────────────────────────────────
   epic-29: done
   29-1-backtest-writer-tcp-connection-reuse: done
   29-2-stress-test-gates-validation-report: done
   29-3-validation-suite-rest-endpoint: done
-  epic-29-retrospective: optional
+  epic-29-retrospective: done
