@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -417,3 +417,103 @@ async def test_bybit_fallback_activates_on_silence(monkeypatch: pytest.MonkeyPat
     await asyncio.wait_for(task, timeout=2.0)
 
     assert ("bybit", True) in gauge_values
+
+
+# ---------------------------------------------------------------------------
+# Story 26-5: Bybit auth failure escalation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+async def test_bybit_auth_failure_escalates_at_max_failures() -> None:
+    """After _MAX_AUTH_FAILURES consecutive failures, RuntimeError is raised and CRITICAL logged."""
+    import bot_service.exchange.bybit.ws_private as bybit_ws
+    from bot_service.exchange.bybit.ws_private import _MAX_AUTH_FAILURES
+
+    feed = BybitPrivateFeed()
+
+    mock_rest = MagicMock()
+    stop = asyncio.Event()
+
+    # Build a mock websocket that always returns auth failure
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=False)
+    mock_ws.send = AsyncMock()
+    mock_ws.recv = AsyncMock(return_value='{"success": false, "retMsg": "invalid key"}')
+
+    with patch.object(bybit_ws.websockets, "connect", return_value=mock_ws):
+        # Call _connect_once until RuntimeError is raised (at _MAX_AUTH_FAILURES)
+        for i in range(_MAX_AUTH_FAILURES - 1):
+            from bot_service.exchange import ExchangeRESTError
+            with pytest.raises(ExchangeRESTError):
+                await feed._connect_once(mock_rest, AsyncMock(), stop, 10.0)
+
+        with pytest.raises(RuntimeError, match=f"Bybit WS auth failed {_MAX_AUTH_FAILURES} times"):
+            await feed._connect_once(mock_rest, AsyncMock(), stop, 10.0)
+
+    assert feed._auth_failure_count == _MAX_AUTH_FAILURES
+
+
+@pytest.mark.l1
+async def test_bybit_auth_failure_count_resets_on_success() -> None:
+    """A successful auth resets the failure counter to zero."""
+    import bot_service.exchange.bybit.ws_private as bybit_ws
+    from bot_service.exchange.bybit.ws_private import _MAX_AUTH_FAILURES
+
+    feed = BybitPrivateFeed()
+    feed._auth_failure_count = _MAX_AUTH_FAILURES - 1  # one below escalation
+
+    mock_rest = MagicMock()
+    stop = asyncio.Event()
+    stop.set()  # stop immediately after auth success
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=False)
+    mock_ws.send = AsyncMock()
+    mock_ws.recv = AsyncMock(return_value='{"success": true}')
+    # Properly mock async iteration: ws is its own iterator; __anext__ stops immediately
+    mock_ws.__aiter__ = MagicMock(return_value=mock_ws)
+    mock_ws.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+
+    with patch.object(bybit_ws.websockets, "connect", return_value=mock_ws):
+        await feed._connect_once(mock_rest, AsyncMock(), stop, 10.0)
+
+    assert feed._auth_failure_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Story 26-5: KuCoin token via public method
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+async def test_kucoin_ws_private_uses_public_token_method() -> None:
+    """_connect_once must call rest_client.get_private_ws_token(), not _request directly."""
+    from bot_service.exchange.kucoin.ws_private import KuCoinPrivateFeed
+    import bot_service.exchange.kucoin.ws_private as kucoin_ws
+
+    feed = KuCoinPrivateFeed()
+    mock_rest = AsyncMock()
+    mock_rest.get_private_ws_token = AsyncMock(
+        return_value=("wss://ws-api.kucoin.com/endpoint", "test-token-123")
+    )
+
+    stop = asyncio.Event()
+    stop.set()  # stop immediately
+
+    mock_ws = AsyncMock()
+    mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+    mock_ws.__aexit__ = AsyncMock(return_value=False)
+    mock_ws.recv = AsyncMock(return_value='{"type": "welcome"}')
+    mock_ws.send = AsyncMock()
+    mock_ws.__aiter__ = MagicMock(return_value=mock_ws)
+    mock_ws.__anext__ = AsyncMock(side_effect=StopAsyncIteration)
+
+    with patch.object(kucoin_ws.websockets, "connect", return_value=mock_ws):
+        await feed._connect_once(mock_rest, AsyncMock(), stop, 10.0)
+
+    mock_rest.get_private_ws_token.assert_called_once()
+    # Verify _request is NOT called directly (public method was used)
+    assert not hasattr(mock_rest, "_request") or not mock_rest._request.called

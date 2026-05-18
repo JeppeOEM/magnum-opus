@@ -428,6 +428,7 @@ class FileWatcher:
             inc_strategy_restart(class_name)
             set_strategy_backoff_seconds(class_name, backoff_s)
 
+            self._bus_manager.deprovision_pubsub(class_name)
             self._bus_manager.dynamic_deregister(class_name)
 
             await asyncio.sleep(backoff_s)

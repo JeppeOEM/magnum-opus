@@ -27,6 +27,7 @@ _REST_POLL_INTERVAL_S = 2.0
 _LIVENESS_CHECK_INTERVAL_S = 1.0
 
 _FILL_STATUSES = frozenset({"Filled", "PartiallyFilled"})
+_MAX_AUTH_FAILURES = 5
 
 
 class BybitPrivateFeed:
@@ -44,6 +45,8 @@ class BybitPrivateFeed:
     def __init__(self, exchange: str = "bybit") -> None:
         self.exchange = exchange
         self._last_msg_ts = time.monotonic()
+        self._last_fill_ts_ms: int = 0
+        self._auth_failure_count: int = 0
         self._seen_fill_ids = set()
         self._fallback_active = False
 
@@ -104,6 +107,8 @@ class BybitPrivateFeed:
             return
         self._seen_fill_ids.add(fill.order_id)
         await on_fill(fill)
+        if fill.ts_exchange > 0:
+            self._last_fill_ts_ms = fill.ts_exchange
 
     async def _run_rest_fallback(
         self,
@@ -111,25 +116,15 @@ class BybitPrivateFeed:
         on_fill: Callable[[OrderFilled], Awaitable[None]],
         stop_event: asyncio.Event,
     ) -> None:
-        """Poll open orders every 2s; apply fills in ts_placed order; dedup against WS."""
+        """Poll fills endpoint every 2s; apply fills in ts_exchange order; dedup against WS."""
         while not stop_event.is_set() and self._fallback_active:
             try:
-                orders = await rest_client.get_open_orders(symbol="")
-                filled = [o for o in orders if o.status in {"filled", "partially_filled"}]
-                filled.sort(key=lambda o: o.ts_placed)
-                for order in filled:
-                    if order.order_id not in self._seen_fill_ids:
-                        self._seen_fill_ids.add(order.order_id)
-                        fill = OrderFilled(
-                            order_id=order.order_id,
-                            exchange=self.exchange,
-                            symbol=order.symbol,
-                            side=order.side,
-                            fill_price=order.limit_price or 0.0,
-                            fill_size=order.size,
-                            fee=0.0,
-                            ts_exchange=order.ts_placed,
-                        )
+                since_ms = self._last_fill_ts_ms if self._last_fill_ts_ms > 0 else int(time.time() * 1000) - 1_800_000
+                fills = await rest_client.get_recent_fills(symbol="", since_ms=since_ms)
+                fills.sort(key=lambda f: f.ts_exchange)
+                for fill in fills:
+                    if fill.order_id not in self._seen_fill_ids:
+                        self._seen_fill_ids.add(fill.order_id)
                         await on_fill(fill)
                     else:
                         inc_fill_dedup(self.exchange)
@@ -193,7 +188,15 @@ class BybitPrivateFeed:
             raw = await ws.recv()
             auth_resp = json.loads(raw)
             if not auth_resp.get("success"):
+                self._auth_failure_count += 1
+                if self._auth_failure_count >= _MAX_AUTH_FAILURES:
+                    log.critical(
+                        "bybit_ws_auth_max_failures",
+                        failures=self._auth_failure_count,
+                    )
+                    raise RuntimeError(f"Bybit WS auth failed {self._auth_failure_count} times")
                 raise ExchangeRESTError(f"Bybit WS auth failed: {str(auth_resp)[:200]}")
+            self._auth_failure_count = 0
             self._last_msg_ts = time.monotonic()
 
             # Subscribe to order updates

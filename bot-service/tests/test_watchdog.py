@@ -303,3 +303,61 @@ async def test_handle_crash_import_failure_does_not_restart(tmp_path: Path) -> N
     assert "GoneStrat" not in fw._loaded
     # _pending_restart must be cleaned up even on failure
     assert "GoneStrat" not in fw._pending_restart
+
+
+# ---------------------------------------------------------------------------
+# Story 26-2: deprovision_pubsub called in crash path
+# ---------------------------------------------------------------------------
+
+
+async def test_handle_crash_calls_deprovision_pubsub_before_deregister(tmp_path: Path) -> None:
+    """_handle_crash must call deprovision_pubsub before dynamic_deregister (26-2)."""
+    fw = _make_file_watcher(tmp_path)
+    strat_file = tmp_path / "s.py"
+    strat_file.write_text(_minimal_strategy_src("PubSubStrat"))
+
+    handle, stop_event = _make_dead_handle("PubSubStrat")
+    fw._loaded["PubSubStrat"] = (strat_file, handle, stop_event, 0.0)
+
+    call_order: list[str] = []
+
+    fw._bus_manager.deprovision_pubsub.side_effect = lambda n: call_order.append(f"deprovision:{n}")
+    fw._bus_manager.dynamic_deregister.side_effect = lambda n: call_order.append(f"deregister:{n}")
+
+    with patch("bot_service.strategy.registry.asyncio.sleep", new_callable=AsyncMock), \
+         patch("bot_service.strategy.registry.reset_strategy_gauges"), \
+         patch("bot_service.strategy.registry.inc_strategy_restart"), \
+         patch("bot_service.strategy.registry.set_strategy_backoff_seconds"), \
+         patch("bot_service.strategy.registry.run_startup_reconciliation",
+               new_callable=AsyncMock), \
+         patch("bot_service.strategy.registry._import_strategy_class", return_value=None):
+        await fw._handle_crash("PubSubStrat")
+
+    assert "deprovision:PubSubStrat" in call_order
+    assert "deregister:PubSubStrat" in call_order
+    assert call_order.index("deprovision:PubSubStrat") < call_order.index("deregister:PubSubStrat")
+
+
+def test_stop_all_calls_deprovision_pubsub(tmp_path: Path) -> None:
+    """stop_all must call deprovision_pubsub for every loaded strategy (26-2)."""
+    fw = _make_file_watcher(tmp_path)
+    strat_file = tmp_path / "s.py"
+    strat_file.write_text(_minimal_strategy_src("StopAllStrat"))
+
+    loop = asyncio.new_event_loop()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    ready = threading.Event()
+    stop_event = threading.Event()
+    t = threading.Thread(target=lambda: None, daemon=True)
+    t.start()
+    t.join()
+    handle = StrategyHandle(name="StopAllStrat", thread=t, loop=loop, queue=queue, ready_event=ready)
+    fw._loaded["StopAllStrat"] = (strat_file, handle, stop_event, 0.0)
+
+    deprovisioned: list[str] = []
+    fw._bus_manager.deprovision_pubsub.side_effect = lambda n: deprovisioned.append(n)
+
+    fw.stop_all()
+
+    assert "StopAllStrat" in deprovisioned
+    loop.close()

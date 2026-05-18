@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 import structlog
 
+from bot_service.bus.event_types import OrderFilled
 from bot_service.config import get_settings
 from bot_service.exchange import (
     ExchangeRESTError,
@@ -157,6 +158,8 @@ class KuCoinRESTClient:
             order_id=data["orderId"],
             client_order_id=req.client_order_id,
             status="placed",
+            # ts_exchange uses local clock: KuCoin POST /api/v1/orders does not return createdAt.
+            # Fill timestamps (ts_exchange on OrderFilled) come from the WS feed or fills endpoint.
             ts_exchange=int(time.time() * 1000),
         )
 
@@ -183,3 +186,32 @@ class KuCoinRESTClient:
                 )
             )
         return orders
+
+    async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled]:
+        params: dict[str, str] = {"startAt": str(since_ms)}
+        if symbol:
+            params["symbol"] = symbol
+        result = await self._request("GET", "/api/v1/fills", params=params)
+        items = (result or {}).get("items", [])
+        fills: list[OrderFilled] = []
+        for item in items:
+            fills.append(
+                OrderFilled(
+                    order_id=str(item.get("orderId", "")),
+                    exchange="kucoin",
+                    symbol=str(item.get("symbol", "")),
+                    side=str(item.get("side", "")),
+                    fill_price=float(item.get("price", 0)),
+                    fill_size=float(item.get("size", 0)),
+                    fee=float(item.get("fee", 0)),
+                    ts_exchange=int(item.get("createdAt", 0)),
+                )
+            )
+        return fills
+
+    async def get_private_ws_token(self) -> tuple[str, str]:
+        """Return (endpoint, token) for the private WebSocket connection."""
+        data = await self._request("POST", "/api/v1/bullet-private", json_body={})
+        token = str(data["token"])
+        endpoint = str(data["instanceServers"][0]["endpoint"])
+        return endpoint, token

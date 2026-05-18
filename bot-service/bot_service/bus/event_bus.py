@@ -165,6 +165,7 @@ class BusManager:
         if self._pubsub_thread is not None:
             self._pubsub_thread.join(timeout=5.0)
 
+
     def is_alive(self) -> bool:
         """Return True if the bus-manager thread is still running."""
         return self._thread is not None and self._thread.is_alive()
@@ -355,26 +356,38 @@ class BusManager:
     # ------------------------------------------------------------------
 
     def _run_pubsub(self) -> None:
-        """Subscribe to orderbook:* and candles1s:* Redis pub/sub patterns and dispatch."""
-        settings = get_settings()
-        r: redis.Redis[bytes] = redis.from_url(settings.redis_url)
-        ps = r.pubsub()
-        try:
-            ps.psubscribe("orderbook:*", "candles1s:*")
-            for raw_msg in ps.listen():
+        """Subscribe to orderbook:* and candles1s:* with exponential-backoff reconnect."""
+        backoff = 1.0
+        while not self._stop_event.is_set():
+            r: redis.Redis[bytes] = redis.from_url(get_settings().redis_url)
+            ps = r.pubsub()
+            try:
+                ps.psubscribe("orderbook:*", "candles1s:*")
+                while not self._stop_event.is_set():
+                    raw_msg = ps.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    if raw_msg is None:
+                        continue
+                    if raw_msg["type"] != "pmessage":
+                        continue
+                    channel_raw = raw_msg["channel"]
+                    channel: str = channel_raw.decode() if isinstance(channel_raw, bytes) else channel_raw
+                    self._dispatch_pubsub(channel, raw_msg["data"])
+                backoff = 1.0
+            except Exception as exc:
                 if self._stop_event.is_set():
-                    break
-                if raw_msg["type"] != "pmessage":
-                    continue
-                channel_raw = raw_msg["channel"]
-                channel: str = channel_raw.decode() if isinstance(channel_raw, bytes) else channel_raw
-                self._dispatch_pubsub(channel, raw_msg["data"])
-        except Exception as exc:
-            if not self._stop_event.is_set():
+                    return
                 log.error("pubsub_thread_error", error=str(exc))
-        finally:
-            ps.close()
-            r.close()
+                self._stop_event.wait(timeout=min(backoff, 30.0))
+                backoff = min(backoff * 2, 30.0)
+            finally:
+                try:
+                    ps.close()
+                except Exception:
+                    pass
+                try:
+                    r.close()
+                except Exception:
+                    pass
 
     def _dispatch_pubsub(self, channel: str, raw: bytes | str) -> None:
         """JSON-decode raw pub/sub data and route to registered callbacks."""

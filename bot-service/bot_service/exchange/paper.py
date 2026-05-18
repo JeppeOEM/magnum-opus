@@ -60,6 +60,10 @@ class PaperExchangeClient:
         """Return empty list — paper client tracks no external state."""
         return []
 
+    async def get_recent_fills(self, symbol: str, since_ms: int) -> list[Any]:
+        """Return empty list — paper client tracks no external fill state."""
+        return []
+
     # ---- Fill simulation ------------------------------------------------
 
     async def _simulate_fill(self, req: OrderRequest, placed: PlacedOrder) -> None:

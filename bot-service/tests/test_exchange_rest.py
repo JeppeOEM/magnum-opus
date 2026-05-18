@@ -259,3 +259,131 @@ async def test_bybit_no_credential_in_error_on_4xx(
         await client._request("GET", "/v5/order/realtime", params={"category": "spot", "symbol": "BTCUSDT"})
 
     assert raw_secret not in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Story 26-3: get_recent_fills — KuCoin
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+async def test_kucoin_get_recent_fills_calls_correct_endpoint(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "code": "200000",
+            "data": {
+                "items": [
+                    {
+                        "orderId": "fill-001",
+                        "symbol": "XBTUSDTM",
+                        "side": "buy",
+                        "price": "30000.5",
+                        "size": "0.001",
+                        "fee": "0.0015",
+                        "createdAt": 1685000000000,
+                    }
+                ]
+            },
+        },
+    )
+
+    client = KuCoinRESTClient()
+    fills = await client.get_recent_fills(symbol="XBTUSDTM", since_ms=1684000000000)
+
+    assert len(fills) == 1
+    assert fills[0].order_id == "fill-001"
+    assert fills[0].exchange == "kucoin"
+    assert fills[0].symbol == "XBTUSDTM"
+    assert fills[0].side == "buy"
+    assert fills[0].fill_price == pytest.approx(30000.5)
+    assert fills[0].fill_size == pytest.approx(0.001)
+    assert fills[0].ts_exchange == 1685000000000
+
+    req = httpx_mock.get_requests()[0]
+    assert "/api/v1/fills" in str(req.url)
+    assert "startAt=1684000000000" in str(req.url)
+    assert "symbol=XBTUSDTM" in str(req.url)
+
+
+@pytest.mark.l1
+async def test_kucoin_get_recent_fills_empty_response(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        status_code=200,
+        json={"code": "200000", "data": {"items": []}},
+    )
+    client = KuCoinRESTClient()
+    fills = await client.get_recent_fills(symbol="BTCUSDT", since_ms=0)
+    assert fills == []
+
+
+# ---------------------------------------------------------------------------
+# Story 26-3: get_recent_fills — Bybit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+async def test_bybit_get_recent_fills_calls_correct_endpoint(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {
+                "list": [
+                    {
+                        "orderId": "bybit-fill-001",
+                        "symbol": "BTCUSDT",
+                        "side": "Buy",
+                        "orderStatus": "Filled",
+                        "cumExecQty": "0.001",
+                        "avgPrice": "30000.0",
+                        "cumExecFee": "0.003",
+                        "updatedTime": "1685000000000",
+                    }
+                ]
+            },
+        },
+    )
+
+    client = BybitRESTClient()
+    fills = await client.get_recent_fills(symbol="BTCUSDT", since_ms=1684000000000)
+
+    assert len(fills) == 1
+    assert fills[0].order_id == "bybit-fill-001"
+    assert fills[0].exchange == "bybit"
+    assert fills[0].symbol == "BTCUSDT"
+    assert fills[0].side == "buy"
+    assert fills[0].fill_price == pytest.approx(30000.0)
+    assert fills[0].fill_size == pytest.approx(0.001)
+    assert fills[0].ts_exchange == 1685000000000
+
+    req = httpx_mock.get_requests()[0]
+    assert "/v5/order/history" in str(req.url)
+    assert "startTime=1684000000000" in str(req.url)
+    assert "symbol=BTCUSDT" in str(req.url)
+    assert "orderStatus=Filled" in str(req.url)
+
+
+@pytest.mark.l1
+async def test_bybit_get_recent_fills_filters_non_filled(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        status_code=200,
+        json={
+            "retCode": 0,
+            "result": {
+                "list": [
+                    {"orderId": "a", "symbol": "BTCUSDT", "side": "Buy",
+                     "orderStatus": "Cancelled", "cumExecQty": "0", "avgPrice": "0",
+                     "cumExecFee": "0", "updatedTime": "0"},
+                    {"orderId": "b", "symbol": "BTCUSDT", "side": "Buy",
+                     "orderStatus": "Filled", "cumExecQty": "0.001", "avgPrice": "30000",
+                     "cumExecFee": "0.001", "updatedTime": "1685000000000"},
+                ]
+            },
+        },
+    )
+    client = BybitRESTClient()
+    fills = await client.get_recent_fills(symbol="BTCUSDT", since_ms=0)
+    assert len(fills) == 1
+    assert fills[0].order_id == "b"

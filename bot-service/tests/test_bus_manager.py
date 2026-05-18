@@ -13,7 +13,7 @@ import threading
 import time
 from collections.abc import Generator
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import fakeredis
 import pytest
@@ -479,3 +479,71 @@ def test_persistent_failure_sends_sigterm(
     loop.call_soon_threadsafe(loop.stop)
     handle.thread.join(timeout=2.0)
     loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Story 26-1: pubsub reconnect loop and stop unblocking
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.l1
+def test_pubsub_thread_stops_within_2s_after_stop() -> None:
+    """After stop(), pubsub thread exits within 2s even with no messages (AC: stop unblocking)."""
+    mock_r = MagicMock()
+    mock_ps = MagicMock()
+    mock_r.pubsub.return_value = mock_ps
+    mock_ps.get_message.return_value = None  # simulate silence
+
+    class _FakeSettings:
+        redis_url: str = "redis://localhost:6379"
+        bot_consumer_group: str = "bot-service"
+        bot_queue_max_depth: int = 100
+        bot_subscribe_timeout_s: int = 5
+
+    with (
+        patch("bot_service.bus.event_bus.redis.from_url", return_value=mock_r),
+        patch("bot_service.bus.event_bus.get_settings", return_value=_FakeSettings()),
+    ):
+        manager = BusManager()
+        manager.start()
+        time.sleep(0.05)
+        manager.stop()
+
+    assert not manager._pubsub_thread.is_alive()
+
+
+@pytest.mark.l1
+def test_pubsub_reconnects_after_redis_error() -> None:
+    """A Redis error causes reconnect, not permanent exit (AC: reconnect on error)."""
+    call_count = 0
+    reconnected = threading.Event()
+
+    def _make_redis(url: str, **kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        mock_r = MagicMock()
+        mock_ps = MagicMock()
+        mock_r.pubsub.return_value = mock_ps
+        if call_count == 1:
+            mock_ps.psubscribe.side_effect = Exception("connection refused")
+        else:
+            reconnected.set()
+            mock_ps.get_message.return_value = None
+        return mock_r
+
+    class _FakeSettings:
+        redis_url: str = "redis://localhost:6379"
+        bot_consumer_group: str = "bot-service"
+        bot_queue_max_depth: int = 100
+        bot_subscribe_timeout_s: int = 5
+
+    with (
+        patch("bot_service.bus.event_bus.redis.from_url", side_effect=_make_redis),
+        patch("bot_service.bus.event_bus.get_settings", return_value=_FakeSettings()),
+    ):
+        manager = BusManager()
+        manager.start()
+        reconnected.wait(timeout=3.0)
+        manager.stop()
+
+    assert reconnected.is_set(), "pubsub thread did not reconnect after error"

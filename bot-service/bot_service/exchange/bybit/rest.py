@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 import structlog
 
+from bot_service.bus.event_types import OrderFilled
 from bot_service.config import get_settings
 from bot_service.exchange import (
     ExchangeRESTError,
@@ -140,6 +141,8 @@ class BybitRESTClient:
             order_id=data["orderId"],
             client_order_id=req.client_order_id,
             status="placed",
+            # ts_exchange uses local clock: Bybit POST /v5/order/create does not return createdTime.
+            # Fill timestamps (ts_exchange on OrderFilled) come from the WS feed or fills endpoint.
             ts_exchange=int(time.time() * 1000),
         )
 
@@ -169,3 +172,30 @@ class BybitRESTClient:
                 )
             )
         return orders
+
+    async def get_recent_fills(self, symbol: str, since_ms: int) -> list[OrderFilled]:
+        params: dict[str, str] = {
+            "category": "spot",
+            "orderStatus": "Filled",
+            "startTime": str(since_ms),
+        }
+        if symbol:
+            params["symbol"] = symbol
+        result = await self._request("GET", "/v5/order/history", params=params)
+        fills: list[OrderFilled] = []
+        for item in (result or {}).get("list", []):
+            if item.get("orderStatus") != "Filled":
+                continue
+            fills.append(
+                OrderFilled(
+                    order_id=str(item.get("orderId", "")),
+                    exchange="bybit",
+                    symbol=str(item.get("symbol", "")),
+                    side=str(item.get("side", "")).lower(),
+                    fill_price=float(item.get("avgPrice", 0)),
+                    fill_size=float(item.get("cumExecQty", 0)),
+                    fee=float(item.get("cumExecFee", 0)),
+                    ts_exchange=int(item.get("updatedTime", 0)),
+                )
+            )
+        return fills

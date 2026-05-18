@@ -90,7 +90,7 @@
 ## Deferred from: code review of 12-1-exchange-auth-and-httpx-rest-client (2026-05-10)
 
 - **D1: Bybit `category` hardcoded to `"spot"`** (`bot_service/exchange/bybit/rest.py`) — `place_order`, `cancel_order`, `get_open_orders` all use `"spot"`; futures/inverse support requires adding `market_type` field to `OrderRequest` and threading it through. Deferred until story 12-5 or when futures support is explicitly planned.
-- **D2: `ts_exchange` from local clock** (`kucoin/rest.py`, `bybit/rest.py`) — `PlacedOrder.ts_exchange` is populated with `int(time.time() * 1000)` instead of the timestamp returned in the exchange's response body. Requires parsing `createdAt` / `createdTime` from place-order response.
+- ~~**D2: `ts_exchange` from local clock** (`kucoin/rest.py`, `bybit/rest.py`)~~ — **Resolved in Story 26-4**: neither KuCoin POST /api/v1/orders nor Bybit POST /v5/order/create returns the creation timestamp. Local clock is the only option; documented with clarifying comments in both `place_order` methods. Fill timestamps on `OrderFilled` come from the WS feed or fills endpoint.
 - **D3: `AsyncClient` allocated per retry** (`kucoin/rest.py`, `bybit/rest.py`) — `async with httpx.AsyncClient()` inside the retry loop creates a new client (with new TLS handshake) on each 5xx retry instead of reusing an existing one. Low priority — retries are rare and low-frequency.
 - **D4: `cancel_order` `symbol` param unused in KuCoin** (`kucoin/rest.py`) — KuCoin DELETE `/api/v1/orders/{id}` does not require `symbol`; the parameter is accepted for `ExchangeClient` protocol compatibility but goes unused (`# noqa: ARG002`). Document in ExchangeClient protocol docstring.
 

@@ -40,19 +40,13 @@ class KuCoinPrivateFeed:
     def __init__(self, exchange: str = "kucoin") -> None:
         self.exchange = exchange
         self._last_msg_ts = time.monotonic()
+        self._last_fill_ts_ms: int = 0
         self._seen_fill_ids = set()
         self._fallback_active = False
 
     def _is_silent(self, timeout_s: float) -> bool:
         """Return True if no message has been received within timeout_s seconds."""
         return time.monotonic() - self._last_msg_ts > timeout_s
-
-    async def _get_ws_token(self, rest_client: KuCoinRESTClient) -> tuple[str, str]:
-        """Return (endpoint_url, token) for the private WebSocket."""
-        data: dict[str, Any] = await rest_client._request("POST", "/api/v1/bullet-private", json_body={})
-        token: str = data["token"]
-        endpoint: str = data["instanceServers"][0]["endpoint"]
-        return endpoint, token
 
     def _parse_fill(self, data: dict[str, Any]) -> OrderFilled | None:
         """Parse a KuCoin order-change message into an OrderFilled; None if not a fill."""
@@ -80,6 +74,8 @@ class KuCoinPrivateFeed:
             return
         self._seen_fill_ids.add(fill.order_id)
         await on_fill(fill)
+        if fill.ts_exchange > 0:
+            self._last_fill_ts_ms = fill.ts_exchange
 
     async def _run_rest_fallback(
         self,
@@ -87,25 +83,15 @@ class KuCoinPrivateFeed:
         on_fill: Callable[[OrderFilled], Awaitable[None]],
         stop_event: asyncio.Event,
     ) -> None:
-        """Poll open orders every 2s; apply fills in ts_placed order; dedup against WS."""
+        """Poll fills endpoint every 2s; apply fills in ts_exchange order; dedup against WS."""
         while not stop_event.is_set() and self._fallback_active:
             try:
-                orders = await rest_client.get_open_orders(symbol="")
-                filled = [o for o in orders if o.status in {"filled", "partially_filled"}]
-                filled.sort(key=lambda o: o.ts_placed)
-                for order in filled:
-                    if order.order_id not in self._seen_fill_ids:
-                        self._seen_fill_ids.add(order.order_id)
-                        fill = OrderFilled(
-                            order_id=order.order_id,
-                            exchange=self.exchange,
-                            symbol=order.symbol,
-                            side=order.side,
-                            fill_price=order.limit_price or 0.0,
-                            fill_size=order.size,
-                            fee=0.0,
-                            ts_exchange=order.ts_placed,
-                        )
+                since_ms = self._last_fill_ts_ms if self._last_fill_ts_ms > 0 else int(time.time() * 1000) - 1_800_000
+                fills = await rest_client.get_recent_fills(symbol="", since_ms=since_ms)
+                fills.sort(key=lambda f: f.ts_exchange)
+                for fill in fills:
+                    if fill.order_id not in self._seen_fill_ids:
+                        self._seen_fill_ids.add(fill.order_id)
                         await on_fill(fill)
                     else:
                         inc_fill_dedup(self.exchange)
@@ -163,7 +149,7 @@ class KuCoinPrivateFeed:
         timeout_s: float,
     ) -> None:
         """One WebSocket session: get token, connect, subscribe, recv loop."""
-        endpoint, token = await self._get_ws_token(rest_client)
+        endpoint, token = await rest_client.get_private_ws_token()
         connect_id = str(uuid.uuid4()).replace("-", "")
         url = f"{endpoint}?token={token}&connectId={connect_id}"
 
