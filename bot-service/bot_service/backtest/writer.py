@@ -70,7 +70,8 @@ class BacktestResultWriter:
         """Open the QuestDB ILP TCP connection. No-op if already open."""
         if self._sender is not None:
             return
-        host, port_str = self._questdb_ilp_addr.split(":")
+        host, _, port_str = self._questdb_ilp_addr.partition(":")
+        port_str = port_str or "9009"
         self._sender = Sender.from_conf(f"tcp::addr={host}:{port_str};")
         self._sender.establish()
 

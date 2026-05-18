@@ -75,3 +75,11 @@ Add a `_TradeListAnalyzer(bt.Analyzer)` that accumulates per-trade net P&L value
 - `bot-service/bot_service/main.py`
 - `bot-service/bot_service/backtest/validation.py` (add `_TradeListAnalyzer`)
 - `bot-service/tests/test_validation.py` (extend)
+
+### Review Findings
+
+- [x] [Review][Patch] Monte Carlo proxy `fold.sharpe * fold.max_drawdown` is dimensionless/wrong — added `oos_pnl: float` to `FoldResult`; `_run_validate_sync` now uses `fold.oos_pnl` (fold-level net P&L in base currency) [`main.py`, `validation.py`]
+- [x] [Review][Patch] No unit tests for `/backtest/validate` endpoint — added 5 tests: run_id, 404, status, path traversal, done-result [`tests/test_main.py`]
+- [x] [Review][Defer] `_TradeListAnalyzer` not implemented — per-trade P&L still uses fold-level OOS P&L proxy (3 values for default n_splits=3); true per-trade distribution requires adding bt.Analyzer to walk-forward internals
+- [x] [Review][Defer] No timeout on `asyncio.to_thread` validation task — pre-existing pattern from `/backtest/run`; fix if long-running validations become an operational concern
+- [x] [Review][Defer] `_validate_results` eviction silently returns 404 for evicted in-flight run_id — pre-existing pattern from `_backtest_results`

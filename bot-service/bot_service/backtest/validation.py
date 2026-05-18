@@ -18,6 +18,7 @@ class FoldResult:
     sharpe: float
     max_drawdown: float
     pnl_degradation: float
+    oos_pnl: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ def run_walk_forward(
                 sharpe=oos_sharpe,
                 max_drawdown=oos_dd,
                 pnl_degradation=degradation,
+                oos_pnl=oos_pnl,
             )
         )
     folds_tuple = tuple(fold_results)

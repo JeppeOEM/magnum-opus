@@ -519,10 +519,8 @@ def _run_validate_sync(req: BacktestValidateRequest, path: Path) -> dict[str, An
             starting_cash=req.starting_cash,
         )
 
-    # Extract per-trade P&L from walk-forward OOS folds for Monte Carlo
-    trade_pnls: list[float] = []
-    for fold in wf.folds:
-        trade_pnls.append(fold.sharpe * fold.max_drawdown if fold.sharpe != 0 else 0.0)
+    # Use OOS fold P&L values as Monte Carlo input (fold-level net P&L in base currency)
+    trade_pnls: list[float] = [fold.oos_pnl for fold in wf.folds]
     mc_pct5 = run_monte_carlo(trade_pnls) if trade_pnls else None
 
     report = generate_validation_report(

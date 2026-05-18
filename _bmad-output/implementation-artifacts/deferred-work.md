@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of epic-29 stories (2026-05-18)
+
+- **D-29-1: `_TradeListAnalyzer` not implemented** (`validation.py`) — per-trade P&L for Monte Carlo is approximated by fold-level OOS net P&L (3 values for default `n_splits=3`). True per-trade distribution requires adding a `bt.Analyzer` subclass to `_run_cerebro_full` with `collect_trades=True` mode. Fix when Monte Carlo statistical significance becomes a product requirement.
+- **D-29-2: No timeout on `asyncio.to_thread` validation task** (`main.py`) — `_run_validate_sync` can run unbounded for large date ranges. Pre-existing pattern from `/backtest/run`. Add timeout/cancellation when long-running validations become an operational concern.
+- **D-29-3: `_validate_results` eviction returns 404 for slow runs** (`main.py`) — same design as `_backtest_results` (50-entry cap). Oldest evicted run returns 404 indistinguishable from unknown run_id. Pre-existing pattern.
+- **D-29-4: Double flush in `BacktestResultWriter.close()`** (`writer.py`) — `close()` calls `flush()` before `close()` even though `_sync_ilp_write` flushes after every row. Redundant but harmless; consistent with fire-and-forget contract.
+
 ## Deferred from: code review of epic-28 stories (2026-05-18)
 
 - **D-28-1: Gauge P&L state not persisted across restarts** (`order_worker.py`) — `_cumulative_pnl`/`_peak_pnl` reset to 0 when worker restarts; `restore_position` only restores qty/avg_price. Drawdown gauge under-reports after a restart that follows a profitable period. Fix requires persisting cumulative P&L to QuestDB order_events.

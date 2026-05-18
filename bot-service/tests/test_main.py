@@ -22,6 +22,8 @@ def reset_singletons() -> None:
     main_module._circuit_breaker = None
     main_module._backtest_tasks.clear()
     main_module._backtest_results.clear()
+    main_module._validate_tasks.clear()
+    main_module._validate_results.clear()
 
 
 def _client(alive: bool, strategy_statuses: dict[str, str] | None = None) -> TestClient:
@@ -363,3 +365,77 @@ def test_backtest_runs_filters_by_strategy_name(monkeypatch: pytest.MonkeyPatch)
         client = TestClient(app, raise_server_exceptions=False)
         client.get("/backtest/runs?strategy_name=OFIBot")
     assert "OFIBot" in captured[0]
+
+
+# ── /backtest/validate ────────────────────────────────────────────────────────
+
+
+@pytest.mark.l1
+def test_backtest_validate_returns_run_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /backtest/validate returns run_id + status=running immediately."""
+    (tmp_path / "MyStrat.py").write_text("x = 1\n")
+    monkeypatch.setenv("BOT_STRATEGIES_DIR", str(tmp_path))
+    with patch("bot_service.main.asyncio.create_task") as mock_task:
+        mock_task.return_value = MagicMock()
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/backtest/validate", json={
+            "strategy_name": "MyStrat",
+            "symbol": "BTCUSDT",
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-01",
+        })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "running"
+    assert "run_id" in data
+    assert len(data["run_id"]) == 36
+
+
+@pytest.mark.l1
+def test_backtest_validate_404_on_missing_strategy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /backtest/validate returns 404 when strategy file does not exist."""
+    monkeypatch.setenv("BOT_STRATEGIES_DIR", str(tmp_path))
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post("/backtest/validate", json={
+        "strategy_name": "NoSuchStrat",
+        "symbol": "BTCUSDT",
+        "start_date": "2026-01-01",
+        "end_date": "2026-02-01",
+    })
+    assert resp.status_code == 404
+
+
+@pytest.mark.l1
+def test_backtest_validate_status_returns_done_result() -> None:
+    """GET /backtest/validate/{run_id} returns result when done."""
+    run_id = "val-run-abc"
+    main_module._validate_results[run_id] = {"status": "done", "result": {"passes": True}}
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get(f"/backtest/validate/{run_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["run_id"] == run_id
+    assert data["status"] == "done"
+    assert data["result"]["passes"] is True
+
+
+@pytest.mark.l1
+def test_backtest_validate_status_404_on_unknown_id() -> None:
+    """GET /backtest/validate/{run_id} returns 404 for unknown run_id."""
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/backtest/validate/does-not-exist")
+    assert resp.status_code == 404
+
+
+@pytest.mark.l1
+def test_backtest_validate_path_traversal_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /backtest/validate rejects strategy_name containing path traversal."""
+    monkeypatch.setenv("BOT_STRATEGIES_DIR", str(tmp_path))
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post("/backtest/validate", json={
+        "strategy_name": "../etc/passwd",
+        "symbol": "BTCUSDT",
+        "start_date": "2026-01-01",
+        "end_date": "2026-02-01",
+    })
+    assert resp.status_code in (400, 404)

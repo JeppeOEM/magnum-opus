@@ -75,3 +75,8 @@ If the caller already opened the writer (already in `with` block), this would do
 ## Files
 - `bot-service/bot_service/backtest/writer.py`
 - `bot-service/tests/backtest/test_writer.py` (extend)
+
+### Review Findings
+
+- [x] [Review][Patch] `open()` uses `split(":")` — crashes on port-free address; changed to `partition(":")` with fallback port `"9009"` [`writer.py`]
+- [x] [Review][Defer] Double flush in `close()` after per-row `flush()` failure — semantically redundant but harmless; fire-and-forget contract accepted
