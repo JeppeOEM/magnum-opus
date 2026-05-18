@@ -260,7 +260,7 @@ development_status:
   25-1-cost-basis-tracking: done
   25-2-realized-pnl-on-fills: done
   25-3-backtest-pnl-computation: done
-  epic-25-retrospective: backlog
+  epic-25-retrospective: done
 
   # ─── Epic 27: Backtest Dashboard & Strategy Versioning ───────────────────────
   epic-27: done
@@ -278,4 +278,4 @@ development_status:
   26-3-rest-fallback-fills-endpoint: done
   26-4-exchange-timestamp-from-response: done
   26-5-bybit-auth-escalation-and-kucoin-public-token: done
-  epic-26-retrospective: backlog
+  epic-26-retrospective: done
