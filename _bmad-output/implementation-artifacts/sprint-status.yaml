@@ -253,23 +253,23 @@ development_status:
   24-1-emergency-stop-endpoint: done
   24-2-daily-loss-limit-circuit-breaker: done
   24-3-position-size-hard-limit: done
-  epic-24-retrospective: backlog
+  epic-24-retrospective: done
 
   # ─── Epic 25: Realized P&L Tracking ──────────────────────────────────────────
-  epic-25: in-progress
-  25-1-cost-basis-tracking: ready-for-dev
-  25-2-realized-pnl-on-fills: ready-for-dev
-  25-3-backtest-pnl-computation: ready-for-dev
+  epic-25: done
+  25-1-cost-basis-tracking: done
+  25-2-realized-pnl-on-fills: done
+  25-3-backtest-pnl-computation: done
   epic-25-retrospective: backlog
 
   # ─── Epic 27: Backtest Dashboard & Strategy Versioning ───────────────────────
-  epic-27: in-progress
-  27-1-backtest-questdb-schema: ready-for-dev
-  27-2-equity-observer-and-runner: ready-for-dev
-  27-3-multi-tf-feeds-and-cli: ready-for-dev
-  27-4-bot-service-backtest-api: ready-for-dev
-  27-5-dashboard-backtest-page: ready-for-dev
-  epic-27-retrospective: backlog
+  epic-27: done
+  27-1-backtest-questdb-schema: done
+  27-2-equity-observer-and-runner: done
+  27-3-multi-tf-feeds-and-cli: done
+  27-4-bot-service-backtest-api: done
+  27-5-dashboard-backtest-page: done
+  epic-27-retrospective: done
 
   # ─── Epic 26: Live Trading Hardening ─────────────────────────────────────────
   epic-26: in-progress

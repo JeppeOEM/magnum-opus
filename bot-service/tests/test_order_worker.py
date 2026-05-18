@@ -545,3 +545,189 @@ async def test_restore_open_order_prevents_duplicate_entry() -> None:
     # Attempt to place same entry again — must be deduped
     await worker._process(req)
     assert client.place_order.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# T10: Cost-basis tracking — Story 25-1 + 25-2
+# ---------------------------------------------------------------------------
+
+
+def test_update_position_buy_opens() -> None:
+    w = _make_worker()
+    pnl = w._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    assert pnl == 0.0
+    assert w._position_qty["BTCUSDT"] == 1.0
+    assert w._position_avg_price["BTCUSDT"] == 50_000.0
+
+
+def test_update_position_buy_increases_avg() -> None:
+    w = _make_worker()
+    w._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    w._update_position("BTCUSDT", "buy", 1.0, 52_000.0)
+    assert w._position_qty["BTCUSDT"] == 2.0
+    assert w._position_avg_price["BTCUSDT"] == pytest.approx(51_000.0)
+
+
+def test_update_position_sell_profitable() -> None:
+    w = _make_worker()
+    w._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    w._update_position("BTCUSDT", "buy", 1.0, 52_000.0)
+    pnl = w._update_position("BTCUSDT", "sell", 1.0, 54_000.0)
+    assert pnl == pytest.approx(3_000.0)
+    assert w._position_qty["BTCUSDT"] == 1.0
+
+
+def test_update_position_sell_at_loss_clears() -> None:
+    w = _make_worker()
+    w._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+    w._update_position("BTCUSDT", "buy", 1.0, 52_000.0)
+    w._update_position("BTCUSDT", "sell", 1.0, 54_000.0)
+    pnl = w._update_position("BTCUSDT", "sell", 1.0, 48_000.0)
+    assert pnl == pytest.approx(-3_000.0)
+    assert w._position_qty["BTCUSDT"] == 0.0
+    assert w._position_avg_price["BTCUSDT"] == 0.0
+
+
+@pytest.mark.l1
+async def test_handle_fill_writes_realized_pnl() -> None:
+    """Sell fill after profitable buy writes non-zero realized_pnl."""
+    worker = _make_worker()
+
+    buy_req = _entry_req(side="buy", size=1.0, limit_price=50_000.0)
+    buy_placed = _placed("oid-buy")
+    worker.open_orders["oid-buy"] = (buy_req, buy_placed)
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+
+    sell_req = _exit_req(side="sell")
+    sell_req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        order_type="limit",
+        order_role="exit",
+        size=1.0,
+        limit_price=54_000.0,
+    )
+    sell_placed = _placed("oid-sell")
+    worker.open_orders["oid-sell"] = (sell_req, sell_placed)
+
+    written_fields: list[dict] = []
+
+    async def capture(**kwargs):  # type: ignore[misc]
+        written_fields.append(kwargs)
+
+    worker._write_order_event = capture  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-sell",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        fill_size=1.0,
+        fill_price=54_000.0,
+        fee=0.0,
+        ts_exchange=0,
+    )
+    await worker.handle_fill(fill)
+
+    assert len(written_fields) == 1
+    assert written_fields[0]["realized_pnl"] == pytest.approx(4_000.0)
+
+
+@pytest.mark.l1
+async def test_handle_fill_slippage_computed() -> None:
+    worker = _make_worker()
+    buy_req = _entry_req(side="buy", size=1.0, limit_price=50_000.0)
+    buy_placed = _placed("oid-b")
+    worker.open_orders["oid-b"] = (buy_req, buy_placed)
+
+    written_fields: list[dict] = []
+
+    async def capture(**kwargs):  # type: ignore[misc]
+        written_fields.append(kwargs)
+
+    worker._write_order_event = capture  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-b",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="buy",
+        fill_size=1.0,
+        fill_price=50_050.0,  # 50 pts of positive slippage on a buy
+        fee=0.0,
+        ts_exchange=0,
+    )
+    await worker.handle_fill(fill)
+    # slippage = (50050 - 50000) * 1.0 = 50.0
+    assert written_fields[0]["slippage"] == pytest.approx(50.0)
+
+
+@pytest.mark.l1
+async def test_handle_fill_opening_buy_pnl_zero() -> None:
+    worker = _make_worker()
+    req = _entry_req(side="buy", size=1.0, limit_price=50_000.0)
+    placed = _placed("oid-b2")
+    worker.open_orders["oid-b2"] = (req, placed)
+
+    written_fields: list[dict] = []
+
+    async def capture(**kwargs):  # type: ignore[misc]
+        written_fields.append(kwargs)
+
+    worker._write_order_event = capture  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-b2",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="buy",
+        fill_size=1.0,
+        fill_price=50_000.0,
+        fee=0.0,
+        ts_exchange=0,
+    )
+    await worker.handle_fill(fill)
+    assert written_fields[0]["realized_pnl"] == pytest.approx(0.0)
+
+
+@pytest.mark.l1
+async def test_circuit_breaker_receives_realized_pnl() -> None:
+    cb = DailyLossCircuitBreaker(limit_usd=1_000.0)
+    trip_called: list[bool] = []
+    worker = _make_worker(
+        circuit_breaker=cb,
+        on_circuit_breaker_trip=lambda: trip_called.append(True),
+    )
+    # Seed a position so the sell has P&L
+    worker._update_position("BTCUSDT", "buy", 1.0, 50_000.0)
+
+    req = OrderRequest(
+        strategy="test-strat",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        order_type="limit",
+        order_role="exit",
+        size=1.0,
+        limit_price=48_000.0,
+    )
+    placed = _placed("oid-cb")
+    worker.open_orders["oid-cb"] = (req, placed)
+    worker._write_order_event = AsyncMock()  # type: ignore[method-assign]
+
+    fill = OrderFilled(
+        order_id="oid-cb",
+        exchange="bybit",
+        symbol="BTCUSDT",
+        side="sell",
+        fill_size=1.0,
+        fill_price=48_000.0,
+        fee=0.0,
+        ts_exchange=0,
+    )
+    await worker.handle_fill(fill)
+    # realized_pnl = -2000; exceeds limit_usd=1000
+    assert cb.is_tripped()
+    assert trip_called == [True]

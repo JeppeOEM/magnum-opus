@@ -11,6 +11,33 @@ from questdb.ingress import Sender, TimestampNanos
 
 log = structlog.get_logger()
 
+
+class _CostBasisTracker:
+    """FIFO cost-basis tracker for backtest fills (same algorithm as order_worker)."""
+
+    def __init__(self) -> None:
+        self._qty: dict[str, float] = {}
+        self._avg: dict[str, float] = {}
+
+    def record(self, symbol: str, side: str, qty: float, price: float) -> float:
+        """Return realized_pnl for this fill (0 for opening fills)."""
+        cur_qty = self._qty.get(symbol, 0.0)
+        cur_avg = self._avg.get(symbol, 0.0)
+        if side == "buy":
+            new_qty = cur_qty + qty
+            self._avg[symbol] = (
+                (cur_avg * cur_qty + price * qty) / new_qty if new_qty else 0.0
+            )
+            self._qty[symbol] = new_qty
+            return 0.0
+        closed = min(qty, cur_qty)
+        realized = closed * (price - cur_avg) if cur_avg > 0 else 0.0
+        self._qty[symbol] = max(0.0, cur_qty - closed)
+        if self._qty[symbol] == 0.0:
+            self._avg[symbol] = 0.0
+        return realized
+
+
 _EXECTYPE_MAP = {
     bt.Order.Market: "market",
     bt.Order.Close: "market",
@@ -36,6 +63,7 @@ class BacktestResultWriter:
         self._exchange = exchange
         self._symbol = symbol
         self._fee_currency = fee_currency
+        self._tracker = _CostBasisTracker()
 
     def write_fill(self, order: Any, position_size_after: float) -> None:
         created_dt = bt.num2date(order.created.dt)
@@ -61,6 +89,9 @@ class BacktestResultWriter:
             limit_price = 0.0
             stop_price = 0.0
 
+        qty = abs(float(order.executed.size))
+        price = float(order.executed.price)
+        realized_pnl = self._tracker.record(self._symbol, side, qty, price)
         self._sync_ilp_write({
             "order_id": str(order.ref),
             "client_order_id": str(uuid.uuid4()),
@@ -75,12 +106,12 @@ class BacktestResultWriter:
             "stop_price": stop_price,
             "take_profit_price": 0.0,
             "requested_size": abs(float(order.created.size)),
-            "filled_size": abs(float(order.executed.size)),
+            "filled_size": qty,
             "remaining_size": 0.0,
-            "avg_fill_price": float(order.executed.price),
+            "avg_fill_price": price,
             "fee": abs(float(order.executed.comm)),
             "fee_currency": self._fee_currency,
-            "realized_pnl": 0.0,
+            "realized_pnl": realized_pnl,
             "slippage": 0.0,
             "position_size_after": float(position_size_after),
             "signal_type": "",

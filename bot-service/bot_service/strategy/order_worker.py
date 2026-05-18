@@ -60,6 +60,9 @@ class OrderQueueWorker:
         self.open_orders: dict[str, tuple[OrderRequest, PlacedOrder]] = {}
         # symbol → notional USD position size
         self._position_notional: dict[str, float] = {}
+        # cost-basis tracking (FIFO, long-only)
+        self._position_qty: dict[str, float] = {}
+        self._position_avg_price: dict[str, float] = {}
         # dedup for fill events arriving from multiple paths; bounded to avoid memory leak
         self._seen_fill_ids: set[str] = set()
         self._seen_fill_ids_order: deque[str] = deque(maxlen=10_000)
@@ -76,6 +79,11 @@ class OrderQueueWorker:
         self._position_notional[req.symbol] = (
             self._position_notional.get(req.symbol, 0.0) + self._order_notional(req)
         )
+
+    def restore_position(self, symbol: str, qty: float, avg_price: float) -> None:
+        """Restore cost-basis state from reconciliation. No-op stub until D-13-1 is revisited."""
+        self._position_qty[symbol] = qty
+        self._position_avg_price[symbol] = avg_price
 
     async def handle_fill(self, fill: OrderFilled) -> None:
         """Process a fill event (from WS feed or REST fallback)."""
@@ -107,7 +115,13 @@ class OrderQueueWorker:
         del self.open_orders[fill.order_id]
         inc_order_filled(self._strategy_name, fill.exchange, fill.symbol, fill.side)
 
-        realized_pnl = 0.0  # always 0.0 until Epic 25 adds cost-basis tracking
+        realized_pnl = self._update_position(
+            fill.symbol, fill.side, float(fill.fill_size), float(fill.fill_price)
+        )
+        if req.limit_price and float(req.limit_price) > 0:
+            slippage = (float(fill.fill_price) - float(req.limit_price)) * float(fill.fill_size)
+        else:
+            slippage = 0.0
         await self._write_order_event(
             order_id=fill.order_id,
             client_order_id=placed.client_order_id,
@@ -126,7 +140,7 @@ class OrderQueueWorker:
             avg_fill_price=float(fill.fill_price),
             fee=float(fill.fee),
             realized_pnl=realized_pnl,
-            slippage=0.0,
+            slippage=slippage,
             position_size_after=float(self._position_notional.get(fill.symbol, 0.0)),
             paper_trading=self._paper_trading,
             backtest=False,
@@ -155,6 +169,27 @@ class OrderQueueWorker:
             except asyncio.TimeoutError:
                 continue
             await self._process(req)
+
+    # ---- Cost-basis tracking --------------------------------------------
+
+    def _update_position(self, symbol: str, side: str, qty: float, price: float) -> float:
+        """Update FIFO cost basis and return realized_pnl for this fill (0 for opening fills)."""
+        cur_qty = self._position_qty.get(symbol, 0.0)
+        cur_avg = self._position_avg_price.get(symbol, 0.0)
+        if side == "buy":
+            new_qty = cur_qty + qty
+            self._position_avg_price[symbol] = (
+                (cur_avg * cur_qty + price * qty) / new_qty if new_qty else 0.0
+            )
+            self._position_qty[symbol] = new_qty
+            return 0.0
+        # sell: closes long position
+        closed = min(qty, cur_qty)
+        realized = closed * (price - cur_avg) if cur_avg > 0 else 0.0
+        self._position_qty[symbol] = max(0.0, cur_qty - closed)
+        if self._position_qty[symbol] == 0.0:
+            self._position_avg_price[symbol] = 0.0
+        return realized
 
     # ---- Internal processing --------------------------------------------
 
