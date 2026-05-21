@@ -30,6 +30,9 @@ up:
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
 	@printf   "  %-14s %s\n"  "prometheus"     "http://localhost:9090"
 	@printf   "  %-14s %s\n\n" "alertmanager"  "http://localhost:9093"
+	@{ until curl -sf http://localhost:8050/_dash-layout >/dev/null 2>&1; do sleep 2; done; \
+	   xdg-open http://localhost:8050 2>/dev/null || open http://localhost:8050 2>/dev/null; \
+	   printf "  \033[36m→\033[0m dashboard opened in browser\n"; } &
 	@set -o pipefail; \
 	if [ "$(VERBOSE)" = "1" ]; then \
 		docker compose --profile candle-$(or $(SLOT),blue) --profile bot --profile dashboard up --build; \
