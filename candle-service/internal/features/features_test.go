@@ -89,3 +89,33 @@ func TestEffectiveSpreadContrib(t *testing.T) {
 	// Trade exactly at mid → 0
 	assert.InDelta(t, 0.0, features.EffectiveSpreadContrib(100.0, 100.0), 1e-9)
 }
+
+// ── Microprice tests ────────────────────────────────────────────────────────
+
+func TestMicroprice_Normal(t *testing.T) {
+	// bestBid=100, bestAsk=101, bidL1=3, askL1=1
+	// microprice = (101×3 + 100×1) / 4 = 403/4 = 100.75
+	mp := features.Microprice(100, 101, 3, 1)
+	assert.InDelta(t, 100.75, mp, 1e-9)
+}
+
+func TestMicroprice_ZeroDepthFallsBackToMid(t *testing.T) {
+	mp := features.Microprice(100, 102, 0, 0)
+	assert.InDelta(t, 101.0, mp, 1e-9) // mid = (100+102)/2
+}
+
+func TestMicropriceMidDelta_PositiveWhenMicropriceAboveMid(t *testing.T) {
+	// microprice=100.75, mid=100.5 → delta = (100.75-100.5)/100.5 * 10000 ≈ 24.875 bps
+	delta := features.MicropriceMidDelta(100.75, 100.5)
+	assert.InDelta(t, 24.875, delta, 0.01)
+}
+
+func TestMicropriceMidDelta_ZeroMidReturnsZero(t *testing.T) {
+	assert.Equal(t, 0.0, features.MicropriceMidDelta(1.0, 0))
+}
+
+func TestMicropriceMidDelta_NegativeWhenMicropriceBelow(t *testing.T) {
+	// microprice=100.25, mid=100.5 → negative bps
+	delta := features.MicropriceMidDelta(100.25, 100.5)
+	assert.True(t, delta < 0)
+}

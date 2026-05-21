@@ -257,7 +257,8 @@ def test_rsi_confidence_capped_at_one() -> None:
 # ── funding_rate_arb_signal test ──────────────────────────────────────────────
 
 @pytest.mark.l1
-def test_funding_rate_arb_stub() -> None:
-    result = funding_rate_arb_signal(100.0)
-    assert result.action == "hold"
-    assert result.reason == "not_implemented"
+@pytest.mark.l1
+def test_funding_rate_arb_high_positive_rate_returns_sell() -> None:
+    result = funding_rate_arb_signal(0.002)
+    assert result.action == "sell"
+    assert result.reason == "high_positive_funding"

@@ -183,3 +183,36 @@ func TestComputeDepthSnapshot_1PctZeroWhenEmpty(t *testing.T) {
 	assert.InDelta(t, 0.0, d.DepthTo1PctBid, 1e-9)
 	assert.InDelta(t, 0.0, d.DepthTo1PctAsk, 1e-9)
 }
+
+// ── L3/L4/L5 depth extension tests ───────────────────────────────────────────
+
+func TestComputeDepthSnapshot_FiveLevel_L3L4L5(t *testing.T) {
+	// 5 bid levels of size 10 each: cumulative at each level should be 10,20,30,40,50
+	bids := makeBids("100", "10", "99", "10", "98", "10", "97", "10", "96", "10")
+	d := features.ComputeDepthSnapshot(bids, nil)
+	assert.InDelta(t, 10.0, d.BidL1, 1e-9)
+	assert.InDelta(t, 20.0, d.BidL2, 1e-9)
+	assert.InDelta(t, 30.0, d.BidL3, 1e-9)
+	assert.InDelta(t, 40.0, d.BidL4, 1e-9)
+	assert.InDelta(t, 50.0, d.BidL5, 1e-9)
+	assert.InDelta(t, 50.0, d.BidTop10, 1e-9, "< 10 levels → cap at total")
+	assert.InDelta(t, 50.0, d.BidTotal, 1e-9)
+}
+
+func TestComputeDepthSnapshot_TwoLevels_CapsL3L4L5(t *testing.T) {
+	// Only 2 levels: L3/L4/L5 should all cap to total
+	bids := makeBids("100", "5", "99", "5")
+	d := features.ComputeDepthSnapshot(bids, nil)
+	assert.InDelta(t, d.BidTotal, d.BidL3, 1e-9, "L3 caps at total for < 3 levels")
+	assert.InDelta(t, d.BidTotal, d.BidL4, 1e-9, "L4 caps at total for < 4 levels")
+	assert.InDelta(t, d.BidTotal, d.BidL5, 1e-9, "L5 caps at total for < 5 levels")
+}
+
+func TestComputeDepthSnapshot_L3L4L5_Set(t *testing.T) {
+	bids := makeBids("100", "1", "99", "2", "98", "3", "97", "4", "96", "5")
+	asks := makeBids("101", "1", "102", "2", "103", "3", "104", "4", "105", "5")
+	d := features.ComputeDepthSnapshot(bids, asks)
+	assert.InDelta(t, 6.0, d.BidL3, 1e-9, "1+2+3")
+	assert.InDelta(t, 10.0, d.BidL4, 1e-9, "1+2+3+4")
+	assert.InDelta(t, 15.0, d.BidL5, 1e-9, "1+2+3+4+5")
+}

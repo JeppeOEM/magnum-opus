@@ -1,0 +1,12 @@
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS bid_depth_l3_open  DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS ask_depth_l3_open  DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS bid_depth_l4_open  DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS ask_depth_l4_open  DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS bid_depth_l5_open  DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS ask_depth_l5_open  DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS bid_depth_l3_close DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS ask_depth_l3_close DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS bid_depth_l4_close DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS ask_depth_l4_close DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS bid_depth_l5_close DOUBLE;
+ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS ask_depth_l5_close DOUBLE;

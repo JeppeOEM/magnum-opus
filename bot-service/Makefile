@@ -1,4 +1,4 @@
-.PHONY: typecheck test-l1 test-l2 test-all
+.PHONY: typecheck test-l1 test-l2 test-all validate-check
 
 typecheck:
 	mypy --strict bot_service/
@@ -11,3 +11,6 @@ test-l2:
 
 test-all:
 	mypy --strict bot_service/ && pytest -m "l1 or l2" --tb=short
+
+validate-check:
+	python3 scripts/check_validations.py

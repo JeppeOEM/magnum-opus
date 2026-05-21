@@ -199,6 +199,14 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 	if bar.AskDepthL2Open != nil {
 		row = row.Float64Column("ask_depth_l2_open", *bar.AskDepthL2Open)
 	}
+	if bar.BidDepthL3Open != nil {
+		row = row.Float64Column("bid_depth_l3_open", *bar.BidDepthL3Open)
+		row = row.Float64Column("ask_depth_l3_open", *bar.AskDepthL3Open)
+		row = row.Float64Column("bid_depth_l4_open", *bar.BidDepthL4Open)
+		row = row.Float64Column("ask_depth_l4_open", *bar.AskDepthL4Open)
+		row = row.Float64Column("bid_depth_l5_open", *bar.BidDepthL5Open)
+		row = row.Float64Column("ask_depth_l5_open", *bar.AskDepthL5Open)
+	}
 	if bar.BidDepthTop10Open != nil {
 		row = row.Float64Column("bid_depth_top10_open", *bar.BidDepthTop10Open)
 	}
@@ -224,6 +232,14 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 	}
 	if bar.AskDepthL2Close != nil {
 		row = row.Float64Column("ask_depth_l2_close", *bar.AskDepthL2Close)
+	}
+	if bar.BidDepthL3Close != nil {
+		row = row.Float64Column("bid_depth_l3_close", *bar.BidDepthL3Close)
+		row = row.Float64Column("ask_depth_l3_close", *bar.AskDepthL3Close)
+		row = row.Float64Column("bid_depth_l4_close", *bar.BidDepthL4Close)
+		row = row.Float64Column("ask_depth_l4_close", *bar.AskDepthL4Close)
+		row = row.Float64Column("bid_depth_l5_close", *bar.BidDepthL5Close)
+		row = row.Float64Column("ask_depth_l5_close", *bar.AskDepthL5Close)
 	}
 	if bar.BidDepthTop10Close != nil {
 		row = row.Float64Column("bid_depth_top10_close", *bar.BidDepthTop10Close)
@@ -424,6 +440,27 @@ func (w *Writer) writeBar(ctx context.Context, bar accumulator.Bar) error {
 	}
 	if bar.OFIL1 != nil {
 		row = row.Float64Column("ofi_l1", *bar.OFIL1)
+	}
+	if bar.HawkesIntensity != nil {
+		row = row.Float64Column("hawkes_intensity", *bar.HawkesIntensity)
+	}
+	if bar.Microprice != nil {
+		row = row.Float64Column("microprice", *bar.Microprice)
+	}
+	if bar.MicropriceMidDelta != nil {
+		row = row.Float64Column("microprice_mid_delta", *bar.MicropriceMidDelta)
+	}
+	if bar.CancelBias != nil {
+		row = row.Float64Column("cancel_bias", *bar.CancelBias)
+	}
+	if bar.TradeAggressiveness != nil {
+		row = row.Float64Column("trade_aggressiveness", *bar.TradeAggressiveness)
+	}
+	if bar.BuyVwapDeviationBps != nil {
+		row = row.Float64Column("buy_vwap_deviation_bps", *bar.BuyVwapDeviationBps)
+	}
+	if bar.SellVwapDeviationBps != nil {
+		row = row.Float64Column("sell_vwap_deviation_bps", *bar.SellVwapDeviationBps)
 	}
 
 	// Quality — always written

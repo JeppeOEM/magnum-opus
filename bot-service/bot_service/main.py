@@ -22,6 +22,7 @@ from bot_service.bus.event_bus import BusManager
 from bot_service.config import get_settings, redact_credentials
 from bot_service.exchange import ExchangeClient
 from bot_service.exchange.bybit.rest import BybitRESTClient
+from bot_service.exchange.funding_poller import FundingRatePoller
 from bot_service.exchange.kucoin.rest import KuCoinRESTClient
 from bot_service.metrics.prometheus import get_registry
 from bot_service.persistence.schema import SchemaApplyError, apply_schema
@@ -45,6 +46,21 @@ def _put_result(run_id: str, data: dict[str, Any]) -> None:
     _backtest_results[run_id] = data
     while len(_backtest_results) > _BACKTEST_RESULTS_MAX:
         _backtest_results.popitem(last=False)
+
+
+def _parse_funding_symbols(raw: str) -> list[tuple[str, str]]:
+    """Parse "bybit:BTCUSDT,kucoin:XBTUSDM" → [("bybit", "BTCUSDT"), ("kucoin", "XBTUSDM")]."""
+    result = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        exchange, symbol = part.split(":", 1)
+        exchange, symbol = exchange.strip(), symbol.strip()
+        if not exchange or not symbol:
+            continue
+        result.append((exchange, symbol))
+    return result
 
 log = structlog.get_logger()
 
@@ -154,10 +170,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _watcher_task = asyncio.create_task(_file_watcher.run_loop())
     _watchdog_task = asyncio.create_task(_file_watcher.watch_loop())
 
+    # Step 4e: start funding rate poller (opt-in; disabled when symbols empty)
+    _poller_task: asyncio.Task[None] | None = None
+    _funding_symbols = _parse_funding_symbols(settings.bot_funding_symbols)
+    if _funding_symbols:
+        poller = FundingRatePoller(
+            redis_url=settings.redis_url,
+            symbols=_funding_symbols,
+            poll_interval_s=settings.bot_funding_poll_interval_s,
+        )
+        _poller_task = asyncio.create_task(poller.run())
+        log.info("funding_rate_poller_started", symbols=_funding_symbols)
+
     yield  # service is running
 
     # Teardown: stop background tasks, then all strategy threads
     log.info("bot_service_stopping")
+    if _poller_task is not None:
+        _poller_task.cancel()
+        try:
+            await _poller_task
+        except (asyncio.CancelledError, Exception):
+            pass
     _watcher_task.cancel()
     try:
         await _watcher_task

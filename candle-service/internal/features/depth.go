@@ -10,6 +10,9 @@ import (
 type DepthSnapshot struct {
 	BidL1, AskL1       float64
 	BidL2, AskL2       float64
+	BidL3, AskL3       float64
+	BidL4, AskL4       float64
+	BidL5, AskL5       float64
 	BidTop10, AskTop10 float64
 	BidTotal, AskTotal float64
 
@@ -42,8 +45,8 @@ func ComputeDepthSnapshot(bids, asks map[string]string) DepthSnapshot {
 	// Asks: best ask = lowest price first
 	sort.Slice(askLvl, func(i, j int) bool { return askLvl[i].price < askLvl[j].price })
 
-	d.BidL1, d.BidL2, d.BidTop10, d.BidTotal, d.WeightedBidPrice = accumDepth(bidLvl)
-	d.AskL1, d.AskL2, d.AskTop10, d.AskTotal, d.WeightedAskPrice = accumDepth(askLvl)
+	d.BidL1, d.BidL2, d.BidL3, d.BidL4, d.BidL5, d.BidTop10, d.BidTotal, d.WeightedBidPrice = accumDepth(bidLvl)
+	d.AskL1, d.AskL2, d.AskL3, d.AskL4, d.AskL5, d.AskTop10, d.AskTotal, d.WeightedAskPrice = accumDepth(askLvl)
 	d.HasBidVolume = d.BidTotal > 0
 	d.HasAskVolume = d.AskTotal > 0
 	if !d.HasBidVolume {
@@ -120,9 +123,9 @@ func parseLevels(m map[string]string) []priceLevel {
 	return levels
 }
 
-// accumDepth returns (l1, l2, top10, total, weightedPrice) for a sorted slice of levels.
+// accumDepth returns (l1, l2, l3, l4, l5, top10, total, weightedPrice) for a sorted slice of levels.
 // If fewer than N levels exist, lN caps at total (same behaviour as ob.TopNDepth).
-func accumDepth(levels []priceLevel) (l1, l2, top10, total, weighted float64) {
+func accumDepth(levels []priceLevel) (l1, l2, l3, l4, l5, top10, total, weighted float64) {
 	var priceVolumeSum float64
 	for i, lv := range levels {
 		total += lv.size
@@ -132,6 +135,12 @@ func accumDepth(levels []priceLevel) (l1, l2, top10, total, weighted float64) {
 			l1 = total
 		case 1:
 			l2 = total
+		case 2:
+			l3 = total
+		case 3:
+			l4 = total
+		case 4:
+			l5 = total
 		case 9:
 			top10 = total
 		}
@@ -140,6 +149,15 @@ func accumDepth(levels []priceLevel) (l1, l2, top10, total, weighted float64) {
 	n := len(levels)
 	if n < 2 {
 		l2 = total
+	}
+	if n < 3 {
+		l3 = total
+	}
+	if n < 4 {
+		l4 = total
+	}
+	if n < 5 {
+		l5 = total
 	}
 	if n < 10 {
 		top10 = total

@@ -1,5 +1,7 @@
 # Credentials — never commit
 .env
+.env.deploy
+.setup-state
 
 # OS
 .DS_Store

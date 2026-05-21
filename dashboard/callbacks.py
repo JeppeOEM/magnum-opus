@@ -12,6 +12,7 @@ import data
 from layout import _charts_page
 from layout_bots import bot_page_layout
 from layout_backtest import backtest_page_layout
+from layout_ml import ml_page_layout
 
 _QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
 
@@ -25,6 +26,8 @@ def render_page(pathname):
         return bot_page_layout
     if pathname == "/backtests":
         return backtest_page_layout
+    if pathname == "/ml":
+        return ml_page_layout
     return _charts_page
 
 
@@ -283,6 +286,12 @@ def update_cvd(candle_rows):
 def update_bidask(candle_rows):
     df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
     return charts.build_bidask_panel(df)
+
+
+@callback(Output("signals-graph", "figure"), Input("candle-store", "data"))
+def update_signals(candle_rows):
+    df = pd.DataFrame(candle_rows or [])
+    return charts.build_signals_panel(df)
 
 
 @callback(

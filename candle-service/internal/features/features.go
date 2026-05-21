@@ -24,6 +24,26 @@ func EffectiveSpreadContrib(tradePrice, midPrice float64) float64 {
 	return 2 * math.Abs(tradePrice-midPrice)
 }
 
+// Microprice computes the depth-weighted fair value price.
+// When total depth (bidL1+askL1) is zero, falls back to mid-price to avoid NaN.
+func Microprice(bestBid, bestAsk, bidL1, askL1 float64) float64 {
+	total := bidL1 + askL1
+	if total == 0 {
+		return MidPrice(bestBid, bestAsk)
+	}
+	return (bestAsk*bidL1 + bestBid*askL1) / total
+}
+
+// MicropriceMidDelta returns (microprice - mid) / mid × 10000 in basis points.
+// Positive = microprice above mid (book weighted toward upward pressure).
+// Returns 0 when mid is zero.
+func MicropriceMidDelta(microprice, mid float64) float64 {
+	if mid == 0 {
+		return 0
+	}
+	return (microprice - mid) / mid * 10000.0
+}
+
 // BestQuote holds the L2 OB best bid/ask at a point in time.
 type BestQuote struct {
 	BidPrice string

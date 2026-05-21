@@ -198,6 +198,39 @@ def build_vol_profile(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def _add_divergence_markers(
+    fig: go.Figure,
+    df: pd.DataFrame,
+    col: str,
+    symbol_up: str,
+    symbol_down: str,
+    color_up: str,
+    color_down: str,
+    name: str,
+) -> None:
+    if col not in df.columns or "cvd" not in df.columns:
+        return
+    vals = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+    bull = df[vals == 1]
+    bear = df[vals == -1]
+    if not bull.empty:
+        fig.add_trace(go.Scatter(
+            x=bull["ts"], y=bull["cvd"],
+            mode="markers",
+            marker=dict(symbol=symbol_up, size=10, color=color_up),
+            name=name + " bull",
+            showlegend=False,
+        ))
+    if not bear.empty:
+        fig.add_trace(go.Scatter(
+            x=bear["ts"], y=bear["cvd"],
+            mode="markers",
+            marker=dict(symbol=symbol_down, size=10, color=color_down),
+            name=name + " bear",
+            showlegend=False,
+        ))
+
+
 def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(**_DARK, uirevision="cvd", margin=dict(l=40, r=10, t=10, b=30))
@@ -240,6 +273,52 @@ def build_cvd_panel(df: pd.DataFrame) -> go.Figure:
             showlegend=False,
         )
     )
+    _add_divergence_markers(fig, df, "cvd_divergence",
+                            "triangle-up", "triangle-down",
+                            "#00E676", "#FF1744", "CVD-div")
+    _add_divergence_markers(fig, df, "footprint_delta_divergence",
+                            "diamond", "diamond",
+                            "#69F0AE", "#FF6D00", "FP-div")
+    return fig
+
+
+def build_signals_panel(df: pd.DataFrame) -> go.Figure:
+    _TRUE_VALS = {True, "true", "True", 1, "1"}
+    fig = go.Figure()
+    fig.update_layout(**_DARK, uirevision="signals",
+                      margin=dict(l=40, r=10, t=10, b=30), barmode="overlay")
+    if df.empty or "ts" not in df.columns or "imbalance_ratio" not in df.columns:
+        return fig
+    df = df.copy()
+    df["imbalance_ratio"] = pd.to_numeric(df["imbalance_ratio"], errors="coerce").fillna(0)
+    df = df.sort_values("ts")
+
+    pos = df["imbalance_ratio"].clip(lower=0)
+    neg = df["imbalance_ratio"].clip(upper=0)
+    fig.add_trace(go.Bar(x=df["ts"], y=pos, name="Buy imb",
+                         marker_color="#26A69A", showlegend=False))
+    fig.add_trace(go.Bar(x=df["ts"], y=neg, name="Sell imb",
+                         marker_color="#EF5350", showlegend=False))
+
+    if "unfinished_top" in df.columns:
+        ut = df[df["unfinished_top"].isin(_TRUE_VALS)]
+        if not ut.empty:
+            fig.add_trace(go.Scatter(
+                x=ut["ts"], y=[1.0] * len(ut), mode="markers",
+                marker=dict(symbol="triangle-down", size=8, color="#FF1744"),
+                name="Unfinished top", showlegend=False,
+            ))
+
+    if "unfinished_bottom" in df.columns:
+        ub = df[df["unfinished_bottom"].isin(_TRUE_VALS)]
+        if not ub.empty:
+            fig.add_trace(go.Scatter(
+                x=ub["ts"], y=[-1.0] * len(ub), mode="markers",
+                marker=dict(symbol="triangle-up", size=8, color="#00E676"),
+                name="Unfinished bottom", showlegend=False,
+            ))
+
+    fig.update_yaxes(range=[-1.1, 1.1], zeroline=True, zerolinecolor="#555")
     return fig
 
 

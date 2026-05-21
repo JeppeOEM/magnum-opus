@@ -294,3 +294,86 @@ development_status:
   29-2-stress-test-gates-validation-report: done
   29-3-validation-suite-rest-endpoint: done
   epic-29-retrospective: done
+
+  # ─── Epic 30: Gateway Docker-Compose Service ─────────────────────────────────
+  epic-30: done
+  30-1-gateway-docker-compose-service: done
+  epic-30-retrospective: optional
+
+  # ─── Epic 31: Dashboard Signal Panels ────────────────────────────────────────
+  epic-31: done
+  31-1-dashboard-divergence-markers: done
+  31-2-dashboard-signals-panel: done
+  epic-31-retrospective: optional
+
+  # ─── Epic 32: CI and Pre-Deploy Validation ───────────────────────────────────
+  epic-32: done
+  32-1-ci-candle-bot-gateway: done
+  32-2-pre-deploy-validation-gate: done
+  epic-32-retrospective: optional
+
+  # ─── Epic 33: Funding Rate Arb ───────────────────────────────────────────────
+  epic-33: done
+  33-1-funding-rate-poller: done
+  33-2-funding-rate-arb-bot: done
+  epic-33-retrospective: optional
+
+  # ─── Epic 34: Linode Deployment & Security Hardening ─────────────────────────
+  epic-34: in-progress
+  34-1-vps-bootstrap-script: done
+  34-2-per-service-deploy-scripts: ready-for-dev
+  34-3-tailscale-firewall-hardening: ready-for-dev
+  34-4-go-auth-proxy: ready-for-dev
+  34-5-telegram-alerting: ready-for-dev
+  34-6-deploy-safety: ready-for-dev
+  34-7-data-persistence: ready-for-dev
+  34-8-vps-reboot-ordering: ready-for-dev
+  34-9-exchange-native-sl-tp: ready-for-dev
+  34-10-internal-network-auth: ready-for-dev
+  34-11-tailscale-acl-policy: ready-for-dev
+  34-12-promtail-file-based-logging: ready-for-dev
+  34-13-hot-reload-integrity-check: ready-for-dev
+  34-14-full-setup-script: ready-for-dev
+  epic-34-retrospective: optional
+
+  # ─── Epic 35: Candle Service Microstructure Intelligence ──────────────────────
+  epic-35: backlog
+  35-1-hawkes-intensity-accumulator: done
+  35-2-microprice-and-microprice-mid-delta: done
+  35-3-cancel-bias-and-trade-aggressiveness: done
+  35-4-depth-l3-l4-l5-extension: done
+  35-5-regime-classifier-redis-publisher: done
+  35-6-buy-sell-vwap-deviation: done
+  epic-35-retrospective: optional
+
+  # ─── Epic 36: Data Collection Readiness ──────────────────────────────────────
+  epic-36: backlog
+  36-1-data-quality-monitoring-script: done
+  36-2-collection-readiness-gate: done
+  epic-36-retrospective: optional
+
+  # ─── Epic 37: ML Training Pipeline ───────────────────────────────────────────
+  epic-37: done
+  37-1-ml-service-scaffold: done
+  37-2-feature-store-assembler: done
+  37-3-label-generator: done
+  37-4-regime-clustering: done
+  37-5-model-training-xgboost-shap: done
+  37-6-model-registry: done
+  epic-37-retrospective: optional
+
+  # ─── Epic 38: ML Inference Pipeline ──────────────────────────────────────────
+  epic-38: done
+  38-1-inference-engine-core: done
+  38-2-live-signal-loop: done
+  38-3-stat-arb-spread-inference: done
+  epic-38-retrospective: optional
+
+  # ─── Epic 39: Dashboard ML Page ──────────────────────────────────────────────
+  epic-39: done
+  39-1-ml-page-scaffold: done
+  39-2-data-tab: done
+  39-3-clusters-tab: done
+  39-4-models-tab: done
+  39-5-live-tab: done
+  epic-39-retrospective: optional

@@ -12,7 +12,7 @@ from typing import Callable
 import structlog
 
 from bot_service.bus.event_bus import BusManager, StrategyHandle
-from bot_service.bus.event_types import BarClose, BusEvent, GapMarker
+from bot_service.bus.event_types import BarClose, BusEvent, FundingRate, GapMarker
 from bot_service.config import Settings
 from bot_service.exchange import ExchangeClient
 from bot_service.metrics.prometheus import (
@@ -63,6 +63,9 @@ async def run_strategy_event_loop(
             strategy.on_bar(event)
         elif isinstance(event, GapMarker):
             strategy.handle_gap(event)
+        elif isinstance(event, FundingRate):
+            strategy._last_event_ts = time.time()
+            strategy.handle_funding_rate(event)
         strategy.ack_heartbeat()
 
 
@@ -338,6 +341,7 @@ class FileWatcher:
             for symbol in strategy._managed_positions:
                 stream_keys.add(f"candles:close:{self._exchange}:{symbol}:1s")
                 stream_keys.add(f"candles:ob:{self._exchange}:{symbol}")
+            stream_keys.update(strategy._funding_stream_keys)
 
             try:
                 mtime = path.stat().st_mtime

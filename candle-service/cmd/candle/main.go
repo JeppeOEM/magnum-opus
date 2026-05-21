@@ -24,6 +24,7 @@ import (
 
 	"github.com/mrqdt/magnum-opus/candle-service/internal/accumulator"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/backoff"
+	"github.com/mrqdt/magnum-opus/candle-service/internal/regime"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/blockwindow"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/cascade"
 	"github.com/mrqdt/magnum-opus/candle-service/internal/config"
@@ -644,6 +645,35 @@ func main() {
 					"exchange", e.exchange, "symbol", e.symbol, "error", err)
 			}
 		}(e.c, e)
+	}
+
+	// Phase 4: regime classifier — one goroutine per symbol, runs in cmd/ per CLAUDE.md.
+	regimeCfg := regime.DefaultConfig()
+	regimeIntervalS := 60
+	if v := os.Getenv("CANDLE_REGIME_INTERVAL_S"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			regimeIntervalS = n
+		}
+	}
+	for _, e := range entries {
+		exchange, symbol := e.exchange, e.symbol
+		clf := regime.New(rdb, exchange, symbol, regimeCfg)
+		go func() {
+			ticker := time.NewTicker(time.Duration(regimeIntervalS) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					r := clf.Classify(ctx)
+					if err := clf.Publish(ctx, r); err != nil {
+						slog.WarnContext(ctx, "regime publish failed",
+							"exchange", exchange, "symbol", symbol, "error", err)
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	// promoted tracks whether POST /promote has been called.

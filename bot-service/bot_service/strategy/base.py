@@ -15,7 +15,7 @@ import pandas as pd
 import pandas_ta as ta  # noqa: F401  # registers df.ta accessor on all DataFrames
 import structlog
 
-from bot_service.bus.event_types import BarClose, GapMarker
+from bot_service.bus.event_types import BarClose, FundingRate, GapMarker
 from bot_service.config import Settings
 from bot_service.exchange import ExchangeClient, OrderRequest
 from bot_service.metrics.prometheus import (
@@ -132,6 +132,7 @@ class BaseStrategy(ABC):
         # Prevents concurrent emergency-close threads for the same symbol (thread explosion guard)
         self._emergency_close_lock = threading.Lock()
         self._emergency_close_in_flight: set[str] = set()
+        self._funding_stream_keys: set[str] = set()
         if not (0 < self.max_position_pct <= 1.0):
             raise ValueError(
                 f"max_position_pct must be in (0, 1]; got {self.max_position_pct}"
@@ -141,6 +142,15 @@ class BaseStrategy(ABC):
             raise ValueError(
                 f"Invalid orderbook_mode {mode!r}; must be one of {sorted(self._VALID_OB_MODES)}"
             )
+
+    # ---- Funding rate support ----
+
+    def register_funding_rate_handler(self, exchange: str, symbol: str) -> None:
+        """Declare interest in funding:{exchange}:{symbol} stream entries."""
+        self._funding_stream_keys.add(f"funding:{exchange}:{symbol}")
+
+    def handle_funding_rate(self, event: FundingRate) -> None:
+        """Called on each FundingRate event. Override in strategies that use funding rates."""
 
     # ---- Indicator computation hook ----
 

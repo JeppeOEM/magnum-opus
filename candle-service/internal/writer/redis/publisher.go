@@ -169,7 +169,9 @@ func obFields(bar accumulator.Bar) map[string]any {
 		"ask_depth_top10": floatOrEmpty(bar.AskDepthTop10Close),
 		"bid_depth_total": floatOrEmpty(bar.BidDepthTotalClose),
 		"ask_depth_total": floatOrEmpty(bar.AskDepthTotalClose),
-		"ofi":             floatOrEmpty(bar.OFI),
-		"ofi_l1":          floatOrEmpty(bar.OFIL1),
+		"ofi":                   floatOrEmpty(bar.OFI),
+		"ofi_l1":                floatOrEmpty(bar.OFIL1),
+		"microprice":            floatOrEmpty(bar.Microprice),
+		"microprice_mid_delta":  floatOrEmpty(bar.MicropriceMidDelta),
 	}
 }

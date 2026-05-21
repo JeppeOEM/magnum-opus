@@ -2,6 +2,7 @@ package accumulator_test
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -1574,4 +1575,159 @@ func TestAccumulator_Iceberg_FieldsSetOnBar(t *testing.T) {
 	require.NotNil(t, bar.IcebergAskDetected, "IcebergAskDetected must be non-nil when trades present")
 	assert.True(t, *bar.IcebergBidDetected, "bid depth unchanged and buy activity → iceberg bid")
 	assert.NotNil(t, bar.IcebergPrice, "IcebergPrice must be set when iceBid=true")
+}
+
+// ── Hawkes intensity tests ──────────────────────────────────────────────────
+
+func TestHawkesIntensity_FirstTick(t *testing.T) {
+	// single tick → intensity = α = 0.8 (no prior decay)
+	acc, _ := newAcc(t)
+	acc.Apply("100", "1", false, "buy", 1000, noQ, noQ)
+	bar := acc.CurrentBar(1000, false)
+	require.NotNil(t, bar.HawkesIntensity)
+	assert.InDelta(t, 0.8, *bar.HawkesIntensity, 1e-9)
+}
+
+func TestHawkesIntensity_DecayBetweenTicks(t *testing.T) {
+	// two ticks 100ms apart: intensity = 0.8*exp(-10*0.1) + 0.8
+	acc, _ := newAcc(t)
+	acc.Apply("100", "1", false, "buy", 1000, noQ, noQ)
+	acc.Apply("100", "1", false, "buy", 1100, noQ, noQ) // +100ms
+	bar := acc.CurrentBar(1100, false)
+	expected := 0.8*math.Exp(-10.0*0.1) + 0.8
+	assert.InDelta(t, expected, *bar.HawkesIntensity, 1e-9)
+}
+
+func TestHawkesIntensity_SurvivesBarReset(t *testing.T) {
+	// hawkesDecaySum and lastTickTsMs must NOT be zeroed in BarReset
+	acc, _ := newAcc(t)
+	acc.Apply("100", "1", false, "buy", 1000, noQ, noQ)
+	_ = acc.CurrentBar(1000, false)
+	acc.BarReset()
+	// next tick 500ms later — decay continues from pre-reset value
+	acc.Apply("100", "1", false, "buy", 1500, noQ, noQ)
+	bar := acc.CurrentBar(1500, false)
+	expected := 0.8*math.Exp(-10.0*0.5) + 0.8
+	assert.InDelta(t, expected, *bar.HawkesIntensity, 1e-6)
+}
+
+func TestHawkesIntensity_NilWhenNoTicks(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(1000, false)
+	assert.Nil(t, bar.HawkesIntensity)
+}
+
+// ── Cancel bias and trade aggressiveness tests ──────────────────────────────
+
+func TestCancelBias_SymmetricCancels(t *testing.T) {
+	acc, _ := newAcc(t)
+	// Add OB activity: arrivals set hasOBActivity=true; then cancel 3 each side
+	acc.IncrementOBAdd("buy", 1.0)
+	for i := 0; i < 3; i++ {
+		acc.IncrementOBCancel("buy")
+		acc.IncrementOBCancel("sell")
+	}
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.CancelBias)
+	// (3-3)/(3+3+1) = 0
+	assert.InDelta(t, 0.0, *bar.CancelBias, 1e-9)
+}
+
+func TestCancelBias_BidHeavy(t *testing.T) {
+	acc, _ := newAcc(t)
+	acc.IncrementOBAdd("buy", 1.0) // ensures hasOBActivity
+	for i := 0; i < 6; i++ {
+		acc.IncrementOBCancel("buy")
+	}
+	for i := 0; i < 2; i++ {
+		acc.IncrementOBCancel("sell")
+	}
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.CancelBias)
+	// (6-2)/(6+2+1) = 4/9
+	assert.InDelta(t, 4.0/9.0, *bar.CancelBias, 1e-9)
+}
+
+func TestCancelBias_NoCancels_Zero(t *testing.T) {
+	acc, _ := newAcc(t)
+	acc.IncrementOBAdd("buy", 1.0) // sets hasOBActivity without any cancels
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	require.NotNil(t, bar.CancelBias, "hasOBActivity=true → CancelBias must be non-nil")
+	// (0-0)/(0+0+1) = 0
+	assert.InDelta(t, 0.0, *bar.CancelBias, 1e-9)
+}
+
+func TestCancelBias_NilWhenNoOBActivity(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.CancelBias)
+}
+
+func TestTradeAggressiveness_NilWhenNoCloseDepth(t *testing.T) {
+	acc, _ := newAcc(t)
+	bar := acc.CurrentBar(epoch.UnixMilli(), false)
+	assert.Nil(t, bar.TradeAggressiveness)
+}
+
+// ── Buy/sell VWAP deviation tests ──────────────────────────────────────────
+
+// setupWithQuote returns an accumulator that has a valid close quote at mid=(bid+ask)/2.
+func setupWithQuote(t *testing.T, bid, ask string) *accumulator.Accumulator {
+	t.Helper()
+	acc, _ := newAcc(t)
+	q := bq(bid, "10", ask, "10")
+	acc.Apply("0", "0", false, "", 0, noQ, q) // OB tick establishes close quote
+	return acc
+}
+
+func TestBuyVwapDeviation_BuyTradesAboveMid(t *testing.T) {
+	// bid=99.5, ask=100.5 → mid=100; buy trade at 100.5 → positive bps
+	q := bq("99.5", "10", "100.5", "10")
+	acc := setupWithQuote(t, "99.5", "100.5")
+	acc.Apply("100.5", "2", true, "buy", 1000, q, q)
+	bar := acc.CurrentBar(1000, false)
+	require.NotNil(t, bar.BuyVwapDeviationBps)
+	assert.True(t, *bar.BuyVwapDeviationBps > 0, "buy at ask → positive deviation")
+}
+
+func TestSellVwapDeviation_SellTradesBelowMid(t *testing.T) {
+	// mid=100; sell trade at 99.5 → negative bps
+	q := bq("99.5", "10", "100.5", "10")
+	acc := setupWithQuote(t, "99.5", "100.5")
+	acc.Apply("99.5", "2", true, "sell", 1000, q, q)
+	bar := acc.CurrentBar(1000, false)
+	require.NotNil(t, bar.SellVwapDeviationBps)
+	assert.True(t, *bar.SellVwapDeviationBps < 0, "sell at bid → negative deviation")
+}
+
+func TestBuyVwapDeviation_NilWhenNoBuyTrades(t *testing.T) {
+	// only sell trade → BuyVwapDeviationBps nil, SellVwapDeviationBps non-nil
+	q := bq("99.5", "10", "100.5", "10")
+	acc := setupWithQuote(t, "99.5", "100.5")
+	acc.Apply("99.5", "1", true, "sell", 1000, q, q)
+	bar := acc.CurrentBar(1000, false)
+	assert.Nil(t, bar.BuyVwapDeviationBps)
+	assert.NotNil(t, bar.SellVwapDeviationBps)
+}
+
+func TestBuyVwapDeviation_NilWhenNoCloseQuote(t *testing.T) {
+	// trade with no OB quote (empty currQuote) → hasCloseQuote=false → both nil
+	acc, _ := newAcc(t)
+	acc.Apply("100", "1", true, "buy", 1000, noQ, noQ)
+	bar := acc.CurrentBar(1000, false)
+	assert.Nil(t, bar.BuyVwapDeviationBps)
+}
+
+func TestVwapDeviation_ResetAfterBarReset(t *testing.T) {
+	// buy trade in bar 1, then BarReset — bar 2 has no trades → both nil
+	q := bq("99.5", "10", "100.5", "10")
+	acc := setupWithQuote(t, "99.5", "100.5")
+	acc.Apply("100.5", "2", true, "buy", 1000, q, q)
+	_ = acc.CurrentBar(1000, false)
+	acc.BarReset()
+	// bar 2: still has close quote from SeedFromLastKnown perspective? No —
+	// hasCloseQuote is reset in BarReset(). So both should be nil.
+	bar := acc.CurrentBar(2000, false)
+	assert.Nil(t, bar.BuyVwapDeviationBps)
+	assert.Nil(t, bar.SellVwapDeviationBps)
 }

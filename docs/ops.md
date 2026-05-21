@@ -184,13 +184,9 @@ The bot service (`bot/`) runs strategy threads that consume Redis candle streams
 **Pre-deploy checklist** (run from `bot-service/` on the VM):
 
 1. Verify all active strategies are in paper mode: `grep -r "paper_trading" strategies/active/` — all must return `True`.
-2. Verify result files exist and pass for each strategy in `strategies/active/`:
+2. Verify result files exist and pass for all strategies:
    ```bash
-   for s in OFIBot MACrossBot; do
-     python3 -c "import json; d=json.load(open('_results/$s/fee_impact.json')); assert d['passes'], f'$s fee_impact FAILED'"
-     python3 -c "import json; d=json.load(open('_results/$s/validation_report.json')); assert d['passes'], f'$s validation FAILED'"
-     echo "$s: OK"
-   done
+   make validate-check
    ```
 3. Check current `/health` before touching anything:
    ```bash

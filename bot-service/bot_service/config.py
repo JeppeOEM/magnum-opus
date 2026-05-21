@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     bot_paper_latency_max_ms: int = 250
     bot_paper_slippage_bps: int = 5
 
+    # Funding rate poller
+    bot_funding_poll_interval_s: int = 60
+    bot_funding_symbols: str = ""  # comma-separated "exchange:symbol" pairs, e.g. "bybit:BTCUSDT,kucoin:XBTUSDM"
+
     # Logging
     log_level: str = "info"
 

@@ -58,6 +58,12 @@ type Bar struct {
 	AskDepthL1Open    *float64
 	BidDepthL2Open    *float64
 	AskDepthL2Open    *float64
+	BidDepthL3Open    *float64
+	AskDepthL3Open    *float64
+	BidDepthL4Open    *float64
+	AskDepthL4Open    *float64
+	BidDepthL5Open    *float64
+	AskDepthL5Open    *float64
 	BidDepthTop10Open *float64
 	AskDepthTop10Open *float64
 	BidDepthTotalOpen *float64
@@ -68,6 +74,12 @@ type Bar struct {
 	AskDepthL1Close    *float64
 	BidDepthL2Close    *float64
 	AskDepthL2Close    *float64
+	BidDepthL3Close    *float64
+	AskDepthL3Close    *float64
+	BidDepthL4Close    *float64
+	AskDepthL4Close    *float64
+	BidDepthL5Close    *float64
+	AskDepthL5Close    *float64
 	BidDepthTop10Close *float64
 	AskDepthTop10Close *float64
 	BidDepthTotalClose *float64
@@ -156,6 +168,21 @@ type Bar struct {
 	OFI   *float64
 	OFIL1 *float64
 
+	// Hawkes process intensity — nil if no ticks this bar
+	HawkesIntensity *float64
+
+	// Microprice — nil if no close OB quote or no close depth
+	Microprice         *float64 // depth-weighted fair value; in price units
+	MicropriceMidDelta *float64 // (microprice - mid) / mid × 10000; in basis points
+
+	// Cancel bias / trade aggressiveness — nil per conditions below
+	CancelBias          *float64 // nil if hasOBActivity=false
+	TradeAggressiveness *float64 // nil if hasCloseDepth=false
+
+	// Buy/sell VWAP deviation from mid (bps) — nil if no trades of that side or no close quote
+	BuyVwapDeviationBps  *float64
+	SellVwapDeviationBps *float64
+
 	// Quality
 	IsPartial bool
 	GapCount  int
@@ -190,9 +217,15 @@ type Accumulator struct {
 	hasTicks bool // set true on first Apply() call this bar
 
 	// trade flow
-	buyVolume   float64
-	buyCount    int
+	buyVolume    float64
+	buyCount     int
 	footprintMap map[string]features.FootprintCell
+
+	// Buy/sell VWAP accumulators — reset in BarReset
+	buyVwapNumer  float64
+	buyVwapDenom  float64
+	sellVwapNumer float64
+	sellVwapDenom float64
 
 	// lastKnown OB state — survives BarReset, cleared by Reset
 	lastKnownBid   float64
@@ -265,6 +298,10 @@ type Accumulator struct {
 	hasOBActivity    bool // set true on any IncrementOBAdd/Cancel/Modify call
 	hasQuoteActivity bool // set true once any tick with valid bid+ask is seen
 
+	// Hawkes process intensity — continuous across bars (not reset in BarReset)
+	hawkesDecaySum float64
+	lastTickTsMs   int64 // ms timestamp of last Apply() call (any tick)
+
 	// Trade microstructure — online O(1) sign autocorrelation
 	sumSigns         int
 	sumSignPairs     int
@@ -296,6 +333,16 @@ func New(exchange, symbol string, clk Clock) *Accumulator {
 // Trade ticks: update OHLCV, OFI, and OB quote tracking.
 func (a *Accumulator) Apply(price, size string, isTrade bool, side string, tsMs int64, prevQuote, currQuote features.BestQuote) {
 	a.hasTicks = true
+
+	// Hawkes intensity: O(1) exponential decay + jump
+	const hawkesAlpha = 0.8
+	const hawkesBeta = 10.0
+	if a.lastTickTsMs > 0 && tsMs > a.lastTickTsMs {
+		dt := float64(tsMs-a.lastTickTsMs) / 1000.0 // seconds
+		a.hawkesDecaySum *= math.Exp(-hawkesBeta * dt)
+	}
+	a.hawkesDecaySum += hawkesAlpha
+	a.lastTickTsMs = tsMs
 
 	// Update OFI for every tick (both trade and OB delta).
 	a.ofiSum += features.OFIDelta(prevQuote, currQuote)
@@ -465,6 +512,12 @@ func (a *Accumulator) Apply(price, size string, isTrade bool, side string, tsMs 
 	if side == "buy" {
 		a.buyVolume += s
 		a.buyCount++
+		// VWAP per side: reuse already-parsed p and s
+		a.buyVwapNumer += p * s
+		a.buyVwapDenom += s
+	} else {
+		a.sellVwapNumer += p * s
+		a.sellVwapDenom += s
 	}
 
 	// Footprint accumulation: per-price buy/sell volume within this bar.
@@ -574,6 +627,7 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 	if a.hasTicks {
 		bar.OFI = ptr(a.ofiSum)
 		bar.OFIL1 = ptr(a.ofiSum)
+		bar.HawkesIntensity = ptr(a.hawkesDecaySum)
 	}
 
 	if a.tradeCount > 0 {
@@ -651,6 +705,43 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 	if a.hasCloseQuote {
 		bar.BestBid = ptr(a.bestBid)
 		bar.BestAsk = ptr(a.bestAsk)
+		if a.hasCloseDepth {
+			mp := features.Microprice(a.bestBid, a.bestAsk, a.closeDepth.BidL1, a.closeDepth.AskL1)
+			mid := features.MidPrice(a.bestBid, a.bestAsk)
+			bar.Microprice = ptr(mp)
+			bar.MicropriceMidDelta = ptr(features.MicropriceMidDelta(mp, mid))
+		}
+	}
+
+	// Cancel bias — free from existing OB counters
+	if a.hasOBActivity {
+		total := float64(a.bidCancelCount + a.askCancelCount)
+		cb := (float64(a.bidCancelCount) - float64(a.askCancelCount)) / (total + 1.0)
+		bar.CancelBias = ptr(cb)
+	}
+
+	// Trade aggressiveness — volume pressure vs available bid liquidity
+	if a.hasCloseDepth {
+		if a.closeDepth.BidL1 > 0 {
+			bar.TradeAggressiveness = ptr(a.volumeSum / (a.closeDepth.BidL1 + 1e-9))
+		} else {
+			bar.TradeAggressiveness = ptr(0.0)
+		}
+	}
+
+	// Buy/sell VWAP deviation from mid (in bps)
+	if a.hasCloseQuote {
+		mid := features.MidPrice(a.bestBid, a.bestAsk)
+		if mid > 0 {
+			if a.buyVwapDenom > 0 {
+				buyVwap := a.buyVwapNumer / a.buyVwapDenom
+				bar.BuyVwapDeviationBps = ptr((buyVwap - mid) / mid * 10000.0)
+			}
+			if a.sellVwapDenom > 0 {
+				sellVwap := a.sellVwapNumer / a.sellVwapDenom
+				bar.SellVwapDeviationBps = ptr((sellVwap - mid) / mid * 10000.0)
+			}
+		}
 	}
 
 	if a.hasMidOpen {
@@ -675,6 +766,12 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		bar.AskDepthL1Open = ptr(a.openDepth.AskL1)
 		bar.BidDepthL2Open = ptr(a.openDepth.BidL2)
 		bar.AskDepthL2Open = ptr(a.openDepth.AskL2)
+		bar.BidDepthL3Open = ptr(a.openDepth.BidL3)
+		bar.AskDepthL3Open = ptr(a.openDepth.AskL3)
+		bar.BidDepthL4Open = ptr(a.openDepth.BidL4)
+		bar.AskDepthL4Open = ptr(a.openDepth.AskL4)
+		bar.BidDepthL5Open = ptr(a.openDepth.BidL5)
+		bar.AskDepthL5Open = ptr(a.openDepth.AskL5)
 		bar.BidDepthTop10Open = ptr(a.openDepth.BidTop10)
 		bar.AskDepthTop10Open = ptr(a.openDepth.AskTop10)
 		bar.BidDepthTotalOpen = ptr(a.openDepth.BidTotal)
@@ -685,6 +782,12 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		bar.AskDepthL1Close = ptr(a.closeDepth.AskL1)
 		bar.BidDepthL2Close = ptr(a.closeDepth.BidL2)
 		bar.AskDepthL2Close = ptr(a.closeDepth.AskL2)
+		bar.BidDepthL3Close = ptr(a.closeDepth.BidL3)
+		bar.AskDepthL3Close = ptr(a.closeDepth.AskL3)
+		bar.BidDepthL4Close = ptr(a.closeDepth.BidL4)
+		bar.AskDepthL4Close = ptr(a.closeDepth.AskL4)
+		bar.BidDepthL5Close = ptr(a.closeDepth.BidL5)
+		bar.AskDepthL5Close = ptr(a.closeDepth.AskL5)
 		bar.BidDepthTop10Close = ptr(a.closeDepth.BidTop10)
 		bar.AskDepthTop10Close = ptr(a.closeDepth.AskTop10)
 		bar.BidDepthTotalClose = ptr(a.closeDepth.BidTotal)
@@ -834,6 +937,10 @@ func (a *Accumulator) BarReset() {
 	a.effectiveSpreadCount = 0
 	a.buyVolume = 0
 	a.buyCount = 0
+	a.buyVwapNumer = 0
+	a.buyVwapDenom = 0
+	a.sellVwapNumer = 0
+	a.sellVwapDenom = 0
 	a.gapCount = 0
 	a.openDepth = features.DepthSnapshot{}
 	a.closeDepth = features.DepthSnapshot{}

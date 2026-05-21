@@ -1,5 +1,79 @@
 # Deferred Work
 
+## Deferred from: code review of story 34-1 (2026-05-21)
+
+- **D-34-1-1: Partial `/swapfile` from aborted previous run** (`bootstrap-vps.sh`) — if `fallocate` succeeds but `mkswap`/`swapon` fails, the file exists without swap signature. Re-run hits `elif [ -f "${SWAP_FILE}" ]` and calls `swapon` on a corrupt file, aborting. Operator must manually `rm /swapfile` and re-run. Fix: delete the file and recreate if `swapon` fails.
+
+- **D-34-1-2: SSH hardening applied without verifying authorized_keys is populated** (`bootstrap-vps.sh`) — Step 5 disables `PasswordAuthentication` regardless of whether `authorized_keys` has any key. The prominent warning is printed, but nothing prevents an operator ignoring it. Design limitation of a non-interactive script; the warning is the best mitigation available.
+
+- **D-34-1-3: No git commit pinning for bootstrap clone** (`bootstrap-vps.sh`) — `git clone <repo>` without `--branch` or commit SHA clones whatever `main` is at run time. A compromised or accidentally force-pushed `main` bootstraps an untrusted payload as root. Accept for now; pin to a release tag when production hardening is required.
+
+- **D-34-1-4: Makefile `VPS` unquoted in `ssh` command** (`Makefile`) — `ssh $(VPS) 'bash -s'` is vulnerable to SSH option injection if `VPS` contains spaces. Should be `ssh "$(VPS)" 'bash -s'`. Low practical risk since VPS is always `user@IP` in practice.
+
+- **D-34-1-5: Docker install uses apt-source method vs spec's `get.docker.com`** (`bootstrap-vps.sh`) — Spec says "official Docker install script (get.docker.com)". Implementation uses the manual GPG + sources.list method, which is more auditable and avoids the curl-pipe-bash pattern. Functionally equivalent.
+
+- **D-34-1-6: Makefile missing `VPS ?= deploy@$(VPS_HOST)`** (`Makefile`) — Spec shows this as a declared variable for alternative VPS targeting. Not added because `VPS` is already loaded from `.env.deploy`. Low priority.
+
+- **D-34-1-7: ANSI escape codes emitted to non-TTY stdout** (`bootstrap-vps.sh`) — All helper functions use raw escape codes with no `[ -t 1 ]` TTY guard. Pollutes log files when output is redirected. Consistent with sibling scripts (`setup-vps.sh`, `vps-deploy.sh`).
+
+- **D-34-1-8: `create_env_stub` missing `mkdir -p` guard** (`bootstrap-vps.sh`) — If the cloned branch does not contain a `bot-service/` or `candle-service/` directory, `touch` fails and `set -e` aborts. Low risk with normal clones.
+
+## Deferred from: Epic 34 brainstorming session — security gaps (2026-05-20)
+
+- ~~**D-34-1: Redis has no password on internal Docker network**~~ — **Promoted to story 34-10** (internal-network-auth).
+
+- ~~**D-34-2: QuestDB HTTP API has no authentication**~~ — **Promoted to story 34-10** (internal-network-auth).
+
+- ~~**D-34-3: Tailscale ACLs not configured — all enrolled devices are fully trusted**~~ — **Promoted to story 34-11** (tailscale-acl-policy).
+
+- ~~**D-34-4: QuestDB default memory configuration may exceed available RAM on small Linodes**~~ — **Promoted to story 34-10** (internal-network-auth, QuestDB tuning table in docs/ops.md).
+
+- ~~**D-34-5: Strategy hot-reload has no file integrity / hash check**~~ — **Promoted to story 34-13** (hot-reload-integrity-check).
+
+- ~~**D-34-6: Promtail mounts Docker socket — highest-privilege container**~~ — **Promoted to story 34-12** (promtail-file-based-logging).
+
+## Deferred from: design discussion — exchange-native SL/TP and dynamic exit layer (2026-05-20)
+
+- ~~**D-SL-1: No exchange-native stop-loss / take-profit placed at entry**~~ — **Promoted to story 34-9** (exchange-native-sl-tp).
+
+- ~~**D-SL-2: No two-layer dynamic exit for high-frequency recalculation strategies**~~ — **Promoted to story 34-9** (exchange-native-sl-tp).
+
+- ~~**D-SL-3: No standard `check_exit_conditions()` hook in BaseStrategy**~~ — **Promoted to story 34-9** (exchange-native-sl-tp).
+
+## Deferred from: code review of story 33-2 (2026-05-18)
+
+- **D-33-4: Race between thread spawn and `_funding_stream_keys` collection in `_load_new`** (`registry.py`) — `_create_handle_and_thread` spawns a thread that calls `subscribe()` asynchronously; `_load_new` reads `_funding_stream_keys` immediately after thread creation before `subscribe()` runs. For `FundingRateArbBot` (no HTTP call in `subscribe()`), the key is very likely absent when BusManager reads it. Fix: call `subscribe()` synchronously before spawning the thread, or collect keys from the class definition rather than the instance post-init.
+- **D-33-5: No position guard before placing entry orders** (`funding_rate_arb_bot.py`) — `handle_funding_rate` posts a new entry order on every above-threshold funding event without checking for an existing open position. In paper mode this is acceptable; in live mode would cause unlimited stacking. Fix: check `_managed_positions` (or equivalent) before posting entry.
+- **D-33-6: `confidence` always 1.0 when rate is above threshold** (`funding_rate_arb.py`) — `min(rate / threshold, 1.0)` caps at 1.0 for any rate ≥ threshold; the confidence range [0.0, 1.0] compresses all above-threshold rates to exactly 1.0. Acceptable for v1; add graduated confidence (e.g. log scale) when confidence is used for position sizing.
+- **D-33-7: Hot-reload cannot add new stream keys after BusManager.start()** (`registry.py` / `event_bus.py`) — `BusManager.add_stream()` raises `RuntimeError` after `start()`. A strategy added via hot-reload that uses a new funding stream key will log `strategy_stream_keys_not_subscribed` and silently receive no events on that key. Pre-existing architectural limitation; fix requires dynamic XREADGROUP consumer group management.
+
+## Deferred from: code review of story 33-1 (2026-05-18)
+
+- **D-33-1: `bot_funding_poll_interval_s=0` spin-loop** (`config.py`) — add `Field(default=60, ge=1)` to prevent zero/negative values causing hot loop against exchange APIs.
+- **D-33-2: KuCoin `next_funding_ts` staleness** (`funding_poller.py`) — `timePoint + granularity` may yield an expired timestamp if response is from CDN cache. Validate that result is ≥ `time.time() * 1000` before publishing; warn and skip otherwise.
+- **D-33-3: No log warning on malformed symbol entry** (`main.py`) — `_parse_funding_symbols` silently drops entries without `:`. Add `log.warning("funding_poller_invalid_symbol", ...)` on skip.
+
+## Deferred from: code review of story 32-2 (2026-05-18)
+
+- **D-32-3: Partial report silently passes** (`check_validations.py`) — strategy dir with only `fee_impact.json` and no `validation_report.json` (or vice versa) passes whichever gate exists. Enforce both-or-none if per-strategy completeness becomes a requirement.
+- **D-32-4: `checked == 0` doesn't detect dirs with no JSON files** (`check_validations.py`) — a `_results/NewBot/` dir with no JSON files is silently skipped; total count never becomes 0 so the warning doesn't fire. Add per-strategy cross-check if silent skip detection is required.
+- **D-32-5: Stale `_results/` files missing new `stress_drawdown_ok` field** — on-disk reports written before epic-29 don't contain the stress gate outcome. Regenerate by re-running backtests.
+- **D-32-6: Script not executable** (`scripts/check_validations.py`) — shebang present but `chmod +x` not set; Makefile invokes via `python3` so low impact. Run `chmod +x` if direct invocation is needed.
+
+## Deferred from: code review of story 32-1 (2026-05-18)
+
+- **D-32-1: Candle-service L2 test timeout** (`candle-service/Makefile`) — add `-timeout 2m` to `test-l2` target to prevent CI hangs on deadlocked mock state machines.
+- **D-32-2: Bot-service mypy strict-mode CI gate** (`ci.yml`) — run `mypy --strict bot_service/` after verifying existing codebase passes; do not add to CI blind.
+
+## Deferred from: code review of story 30-1 (2026-05-18)
+
+- **D-30-1: Gateway healthcheck not wired** (`docker-compose.yml`) — distroless runtime has no wget/curl; same pattern as aggregator. Bundle a static health-check binary or switch to alpine runtime if compose-level liveness detection is required.
+- **D-30-2: Memory limit 64m not load-benchmarked** (`docker-compose.yml`) — increase if OOM kills appear under concurrent subscriber load.
+- **D-30-3: distroless tag not pinned to digest** (`gateway/Dockerfile`) — matches aggregator pattern; pin when reproducible builds become a hard requirement.
+- **D-30-4: runSubscriber 1s shutdown delay** (`gateway/cmd/gateway/main.go`) — pre-existing; negligible for normal ops.
+- **D-30-5: WS frame symLen overflow path** (`gateway/cmd/gateway/main.go`) — pre-existing; add max-frame-size config if external clients send malformed payloads.
+- **D-30-6: hub.Route() silent drop on full channel** (`gateway/internal/hub/`) — pre-existing; add drop counter metric if silent data loss becomes observable.
+
 ## Deferred from: code review of epic-29 stories (2026-05-18)
 
 - **D-29-1: `_TradeListAnalyzer` not implemented** (`validation.py`) — per-trade P&L for Monte Carlo is approximated by fold-level OOS net P&L (3 values for default `n_splits=3`). True per-trade distribution requires adding a `bt.Analyzer` subclass to `_run_cerebro_full` with `collect_trades=True` mode. Fix when Monte Carlo statistical significance becomes a product requirement.
