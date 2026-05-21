@@ -1,0 +1,31 @@
+[project]
+name = "ml-service"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.136.1",
+    "uvicorn[standard]>=0.47.0",
+    "pydantic-settings>=2.14.1",
+    "structlog>=25.5.0",
+    "httpx>=0.28.1",
+    "duckdb>=1.5.3",
+    "pandas>=3.0.3",
+    "pyarrow>=24.0.0",
+    "scikit-learn>=1.8.0",
+    "xgboost>=3.2.0",
+    "hdbscan>=0.8.43",
+    "shap>=0.51.0",
+    "scipy>=1.17.1",
+    "statsmodels>=0.14.6",
+    "redis[hiredis]>=7.4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0.3", "pytest-asyncio>=1.1.0", "httpx>=0.28.1"]
+
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

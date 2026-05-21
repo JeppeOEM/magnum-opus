@@ -99,7 +99,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.6.3-alpine
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -117,7 +117,7 @@ services:
     restart: unless-stopped
 
   questdb:
-    image: questdb/questdb:latest
+    image: questdb/questdb:9.3.5
     ports:
       - "9000:9000"
       - "9009:9009"
@@ -164,6 +164,24 @@ services:
           memory: 2g
     restart: unless-stopped
 
+  gateway:
+    build:
+      context: ./gateway
+    environment:
+      REDIS_ADDR: redis:6379
+      GATEWAY_ADDR: ":8083"
+    ports:
+      - "8083:8083"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.5"
+    restart: unless-stopped
+
   dashboard:
     profiles: [dashboard]
     build:
@@ -171,6 +189,7 @@ services:
     environment:
       QUESTDB_HTTP_ADDR: http://questdb:9000
       REDIS_URL: redis://redis:6379
+      ML_SERVICE_URL: http://ml-service:8000
     ports:
       - "8050:8050"
     depends_on:
@@ -185,7 +204,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:v2.51.0
+    image: prom/prometheus:v3.11.1
     volumes:
       - ./monitoring/prometheus:/etc/prometheus:ro
       - prometheus-data:/prometheus
@@ -199,7 +218,7 @@ services:
     restart: unless-stopped
 
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.32.1
     volumes:
       - ./monitoring/alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
@@ -211,7 +230,7 @@ services:
     restart: unless-stopped
 
   loki:
-    image: grafana/loki:2.9.10
+    image: grafana/loki:3.7.2
     command: -config.file=/etc/loki/loki.yaml
     volumes:
       - ./monitoring/loki/loki.yaml:/etc/loki/loki.yaml:ro
@@ -221,7 +240,7 @@ services:
     restart: unless-stopped
 
   promtail:
-    image: grafana/promtail:2.9.10
+    image: grafana/promtail:2.9.10  # EOL Mar 2026 — migrate to Grafana Alloy when ready
     command: -config.file=/etc/promtail/promtail.yaml
     volumes:
       - ./monitoring/promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
@@ -231,7 +250,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:10.4.2
+    image: grafana/grafana:13.0.1-security-01
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
@@ -246,6 +265,24 @@ services:
       - loki
     restart: unless-stopped
 
+  ml-service:
+    build: ./ml-service
+    ports:
+      - "8000:8000"
+    environment:
+      QUESTDB_HTTP_ADDR: http://questdb:9000
+      REDIS_URL: redis://redis:6379
+      ML_FEATURE_STORE_PATH: /data/features
+      ML_MODEL_REGISTRY_PATH: /data/models
+    volumes:
+      - ml_data:/data
+    depends_on:
+      questdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   redis-data:
   questdb-data:
@@ -254,3 +291,4 @@ volumes:
   alertmanager-data:
   grafana-data:
   loki-data:
+  ml_data:

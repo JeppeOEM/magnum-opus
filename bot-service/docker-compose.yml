@@ -20,12 +20,12 @@ services:
     stop_grace_period: 45s
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.6.3-alpine
     ports:
       - "6379:6379"
 
   questdb:
-    image: questdb/questdb:7.4.0
+    image: questdb/questdb:9.3.5
     ports:
       - "9000:9000"
       - "9009:9009"

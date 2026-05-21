@@ -1,5 +1,5 @@
 fastapi==0.136.1
-uvicorn[standard]==0.46.0
+uvicorn[standard]==0.47.0
 pydantic==2.13.4
 pydantic-settings==2.14.1
 structlog==25.5.0
@@ -8,6 +8,6 @@ questdb==4.1.0
 httpx==0.28.1
 prometheus-client==0.25.0
 backtrader==1.9.78.123
-pandas==3.0.2
+pandas==3.0.3
 pandas-ta==0.4.71b0
 websockets==16.0

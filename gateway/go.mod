@@ -1,6 +1,8 @@
 module github.com/mrqdt/magnum-opus/gateway
 
-go 1.24
+go 1.26
+
+toolchain go1.26.3
 
 require (
 	github.com/coder/websocket v1.8.14

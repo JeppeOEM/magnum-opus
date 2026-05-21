@@ -34,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26.3"
           cache-dependency-path: aggregator/go.sum
 
       - name: Download modules
@@ -62,7 +62,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26.3"
           cache-dependency-path: candle-service/go.sum
 
       - name: Download modules
@@ -112,7 +112,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.26.3"
           cache-dependency-path: gateway/go.sum
 
       - name: Download modules

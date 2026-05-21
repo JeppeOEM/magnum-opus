@@ -1,5 +1,5 @@
 # Stage 1: build
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 WORKDIR /build
 
 # Download dependencies separately so this layer is cached when source changes.

@@ -1,6 +1,8 @@
 module github.com/mrqdt/magnum-opus/aggregator
 
-go 1.24
+go 1.26
+
+toolchain go1.26.3
 
 // Direct dependencies — run `make check-deps` before updating any entry.
 // Re-verification command and prohibited alternatives are documented in DEPS.md.

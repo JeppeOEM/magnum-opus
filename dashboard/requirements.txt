@@ -1,6 +1,6 @@
-dash==2.18.2
-dash-bootstrap-components==1.7.1
-plotly==5.24.1
+dash==4.1.0
+dash-bootstrap-components==2.0.4
+plotly==6.7.0
 redis==7.4.0
-requests==2.32.3
-pandas==3.0.2
+requests==2.34.2
+pandas==3.0.3

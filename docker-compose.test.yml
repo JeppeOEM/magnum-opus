@@ -3,7 +3,7 @@
 # The aggregator process runs OUTSIDE compose and connects to toxiproxy ports.
 services:
   toxiproxy:
-    image: ghcr.io/shopify/toxiproxy:2.9.0
+    image: ghcr.io/shopify/toxiproxy:2.12.0
     ports:
       - "8474:8474"   # toxiproxy API
       - "6380:6380"   # redis proxy
@@ -12,11 +12,11 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:8.6.3-alpine
     # No persistent volume — fresh state each test run.
     restart: unless-stopped
 
   questdb:
-    image: questdb/questdb:8.2.1
+    image: questdb/questdb:9.3.5
     # No persistent volume — fresh state each test run.
     restart: unless-stopped

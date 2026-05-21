@@ -1,6 +1,8 @@
 module github.com/mrqdt/magnum-opus/candle-service
 
-go 1.24
+go 1.26
+
+toolchain go1.26.3
 
 require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.71
