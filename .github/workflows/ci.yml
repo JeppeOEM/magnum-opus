@@ -5,11 +5,19 @@ on:
     branches: ["**"]
     paths:
       - "aggregator/**"
+      - "candle-service/**"
+      - "bot-service/**"
+      - "gateway/**"
+      - "ml-service/**"
       - ".github/workflows/ci.yml"
   pull_request:
     branches: ["**"]
     paths:
       - "aggregator/**"
+      - "candle-service/**"
+      - "bot-service/**"
+      - "gateway/**"
+      - "ml-service/**"
       - ".github/workflows/ci.yml"
 
 jobs:
@@ -40,3 +48,98 @@ jobs:
 
       - name: L2 tests (mock infrastructure)
         run: make test-l2
+
+  candle-test:
+    name: Candle-service L1 + L2
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: candle-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: candle-service/go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: L1 tests
+        run: make test-l1
+
+      - name: L2 tests
+        run: make test-l2
+
+  bot-test:
+    name: Bot-service L1
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bot-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            bot-service/requirements.txt
+            bot-service/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: L1 unit tests
+        run: pytest -m "l1" -x --tb=short --strict-markers
+
+  gateway-test:
+    name: Gateway tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: gateway/go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Tests
+        run: go test -race -count=1 ./...
+
+  ml-test:
+    name: ML-service tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ml-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ml-service/pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Tests
+        run: pytest tests/ --tb=short -q

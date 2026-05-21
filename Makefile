@@ -6,9 +6,15 @@ REPORTS    := test-results
 
 export VERSION GIT_SHA BUILD_TIME
 
+# Load VPS connection config if present (sets VPS, VPS_DIR, CANDLE_SLOT)
+-include .env.deploy
+
 .PHONY: up down logs watch monitoring-logs \
-        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-dashboard \
-        test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all
+        run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-dashboard dev-ml \
+        bootstrap setup-vps deploy-all deploy-aggregator deploy-candle deploy-bot deploy-gateway deploy-dashboard deploy-ml deploy-monitoring \
+        vps-status vps-logs vps-ssh vps-restart rollback \
+        test test-l1 test-l2 test-l3 test-l4 test-candle test-chain test-all test-ml \
+        check-data-ready
 
 ## Spin up all services including one paper-trading bot — filtered logs by default, VERBOSE=1 for raw JSON
 ## Defaults to candle-blue slot; override with SLOT=green
@@ -18,6 +24,7 @@ up:
 	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081   /health /metrics"
 	@printf   "  %-14s %s\n"  "candle (green)" "http://localhost:8082   /health /metrics"
 	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090   /health /metrics"
+	@printf   "  %-14s %s\n"  "ml-service"     "http://localhost:8000   /health /docs"
 	@printf   "  %-14s %s\n"  "questdb"        "http://localhost:9000   (ILP: 9009)"
 	@printf   "  %-14s %s\n"  "dashboard"      "http://localhost:8050"
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
@@ -55,6 +62,7 @@ watch:
 	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081   /health /metrics"
 	@printf   "  %-14s %s\n"  "candle (green)" "http://localhost:8082   /health /metrics"
 	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090   /health /metrics"
+	@printf   "  %-14s %s\n"  "ml-service"     "http://localhost:8000   /health /docs"
 	@printf   "  %-14s %s\n"  "questdb"        "http://localhost:9000   (ILP: 9009)"
 	@printf   "  %-14s %s\n"  "dashboard"      "http://localhost:8050"
 	@printf   "  %-14s %s\n"  "grafana"        "http://localhost:3000"
@@ -103,7 +111,11 @@ test-chain:
 test-candle:
 	$(MAKE) -C candle-service test-all
 
-## Both services in sequence — aggregator (L1+L2+L3 with 95% gate) then candle-service (L1+L2 with coverage summary)
+## ML service tests
+test-ml:
+	cd ml-service && .venv/bin/pytest tests/ --tb=short -q
+
+## All services in sequence — aggregator (L1+L2+L3 with 95% gate), candle-service (L1+L2), ml-service
 test-all:
 	@echo "══════════════════════════════════════════════════"
 	@echo "  aggregator"
@@ -113,6 +125,10 @@ test-all:
 	@echo "  candle-service"
 	@echo "══════════════════════════════════════════════════"
 	$(MAKE) -C candle-service test-cover
+	@echo "══════════════════════════════════════════════════"
+	@echo "  ml-service"
+	@echo "══════════════════════════════════════════════════"
+	$(MAKE) test-ml
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -173,13 +189,27 @@ dev-dashboard:
 	cd dashboard && \
 	QUESTDB_HTTP_ADDR=http://localhost:9000 \
 	REDIS_URL=redis://localhost:6379 \
+	ML_SERVICE_URL=http://localhost:8000 \
 	.venv/bin/python app.py
+
+## Run the ML service locally (http://localhost:8000; requires local Redis + QuestDB)
+## Requires ml-service/.venv — run `python3 -m venv ml-service/.venv && ml-service/.venv/bin/pip install -e ml-service`
+dev-ml:
+	@set -a; [ -f ml-service/.env ] && . ml-service/.env; set +a; \
+	cd ml-service && \
+	LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
+	REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	ML_FEATURE_STORE_PATH=$${ML_FEATURE_STORE_PATH:-./data/features} \
+	ML_MODEL_REGISTRY_PATH=$${ML_MODEL_REGISTRY_PATH:-./data/models} \
+	.venv/bin/uvicorn ml_service.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Start backend services: infra + aggregator + candle + bot + gateway (dashboard: make dev-dashboard)
 run: dev-infra
 	@printf "\n  %-14s %s\n"  "aggregator"    "http://localhost:8080"
 	@printf   "  %-14s %s\n"  "candle (blue)"  "http://localhost:8081"
 	@printf   "  %-14s %s\n"  "bot"            "http://localhost:8090"
+	@printf   "  %-14s %s\n"  "ml-service"     "http://localhost:8000"
 	@printf   "  %-14s %s\n"  "gateway"        "ws://localhost:8083"
 	@printf   "  %-14s %s\n\n" "questdb"       "http://localhost:9000"
 	@set -a; [ -f .env ] && . .env; set +a; \
@@ -206,16 +236,23 @@ run: dev-infra
 	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
 	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
 	  .venv/bin/uvicorn bot_service.main:app --host 0.0.0.0 --port 8090 ) & BOT=$$!; \
+	( cd ml-service && \
+	  LOG_LEVEL=$${LOG_LEVEL:-info} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
+	  REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	  ML_FEATURE_STORE_PATH=$${ML_FEATURE_STORE_PATH:-./data/features} \
+	  ML_MODEL_REGISTRY_PATH=$${ML_MODEL_REGISTRY_PATH:-./data/models} \
+	  .venv/bin/uvicorn ml_service.main:app --host 0.0.0.0 --port 8000 ) & ML=$$!; \
 	( cd gateway && \
 	  REDIS_ADDR=$${REDIS_ADDR:-localhost:6379} \
 	  GATEWAY_ADDR=$${GATEWAY_ADDR:-:8083} \
 	  go run ./cmd/gateway/ ) & GATEWAY=$$!; \
-	trap "kill $$AGG $$CANDLE $$BOT $$GATEWAY 2>/dev/null" INT TERM EXIT; \
-	wait $$AGG $$CANDLE $$BOT $$GATEWAY
+	trap "kill $$AGG $$CANDLE $$BOT $$ML $$GATEWAY 2>/dev/null" INT TERM EXIT; \
+	wait $$AGG $$CANDLE $$BOT $$ML $$GATEWAY
 
 ## Start infra + all three services (interleaved logs, Ctrl+C stops all)
 dev: dev-infra
-	@echo "==> aggregator + candle-service + bot (Ctrl+C stops all)"
+	@echo "==> aggregator + candle-service + bot + ml-service (Ctrl+C stops all)"
 	@set -a; [ -f .env ] && . .env; set +a; \
 	set -a; [ -f candle-service/.env ] && . candle-service/.env; set +a; \
 	set -a; [ -f bot-service/.env ] && . bot-service/.env; set +a; \
@@ -240,5 +277,107 @@ dev: dev-infra
 	  QUESTDB_ILP_ADDR=$${QUESTDB_ILP_ADDR:-localhost:9009} \
 	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
 	  .venv/bin/uvicorn bot_service.main:app --host 0.0.0.0 --port 8090 ) & BOT=$$!; \
-	trap "kill $$AGG $$CANDLE $$BOT 2>/dev/null" INT TERM EXIT; \
-	wait $$AGG $$CANDLE $$BOT
+	( cd ml-service && \
+	  LOG_LEVEL=$${LOG_LEVEL:-debug} \
+	  QUESTDB_HTTP_ADDR=$${QUESTDB_HTTP_ADDR:-http://localhost:9000} \
+	  REDIS_URL=$${REDIS_URL:-redis://localhost:6379} \
+	  ML_FEATURE_STORE_PATH=$${ML_FEATURE_STORE_PATH:-./data/features} \
+	  ML_MODEL_REGISTRY_PATH=$${ML_MODEL_REGISTRY_PATH:-./data/models} \
+	  .venv/bin/uvicorn ml_service.main:app --host 0.0.0.0 --port 8000 ) & ML=$$!; \
+	trap "kill $$AGG $$CANDLE $$BOT $$ML 2>/dev/null" INT TERM EXIT; \
+	wait $$AGG $$CANDLE $$BOT $$ML
+
+# ── VPS Deploy ────────────────────────────────────────────────────────────────
+# All targets read VPS and VPS_DIR from .env.deploy (auto-loaded above).
+# Create .env.deploy from .env.deploy.example before using these targets.
+
+## One-time VPS bootstrap — runs bootstrap-vps.sh on the VPS as root
+##   Usage: make bootstrap VPS=root@<IP>
+bootstrap:
+	@[ -n "$(VPS)" ] || (echo "Usage: make bootstrap VPS=root@<IP>"; exit 1)
+	ssh $(VPS) 'bash -s' < scripts/bootstrap-vps.sh
+
+## First-time VPS setup — guided step-by-step provisioning
+##   Usage: make setup-vps VPS_IP=45.56.78.90
+setup-vps:
+	@[ -n "$(VPS_IP)" ] || (echo "Usage: make setup-vps VPS_IP=<public-ip>"; exit 1)
+	bash scripts/setup-vps.sh $(VPS_IP)
+
+## Deploy all services in sequence (infra → aggregator → candle → gateway → bot → dashboard → monitoring)
+deploy-all:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh all
+
+## Deploy aggregator service
+deploy-aggregator:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh aggregator
+
+## Deploy candle service (blue-green, zero-downtime)
+deploy-candle:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh candle
+
+## Deploy bot service (warns if open positions, never blocks)
+deploy-bot:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh bot
+
+## Deploy gateway service
+deploy-gateway:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh gateway
+
+## Deploy dashboard service
+deploy-dashboard:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh dashboard
+
+## Deploy ML service
+deploy-ml:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh ml
+
+## Deploy monitoring stack (prometheus / alertmanager / loki / promtail / grafana)
+deploy-monitoring:
+	@[ -n "$(VPS)" ] || (echo "VPS not set — create .env.deploy from .env.deploy.example"; exit 1)
+	bash scripts/vps-deploy.sh monitoring
+
+## Roll back a service to its previous image after a failed deploy
+##   Usage: make rollback SERVICE=bot
+rollback:
+	@[ -n "$(VPS)" ] || (echo "VPS not set"; exit 1)
+	@[ -n "$(SERVICE)" ] || (echo "Usage: make rollback SERVICE=<name>"; exit 1)
+	ssh $(VPS) "cd $(VPS_DIR) && \
+	  docker tag magnum-opus-$(SERVICE):rollback magnum-opus-$(SERVICE):latest && \
+	  docker compose up -d --no-deps $(SERVICE)"
+	@echo "✓ $(SERVICE) rolled back to previous image"
+
+## Show status of all services on VPS
+vps-status:
+	@[ -n "$(VPS)" ] || (echo "VPS not set"; exit 1)
+	ssh $(VPS) "cd $(VPS_DIR) && docker compose ps"
+
+## Tail logs for a specific service on VPS
+##   Usage: make vps-logs SERVICE=bot
+vps-logs:
+	@[ -n "$(VPS)" ] || (echo "VPS not set"; exit 1)
+	@[ -n "$(SERVICE)" ] || (echo "Usage: make vps-logs SERVICE=<name>"; exit 1)
+	ssh $(VPS) "cd $(VPS_DIR) && docker compose logs --tail=100 -f $(SERVICE)"
+
+## Check if snapshot_1s data meets ML training readiness criteria
+## Usage: make check-data-ready SYMBOL=BTCUSDT EXCHANGE=bybit
+check-data-ready:
+	python3 scripts/data_readiness_gate.py --symbol $(SYMBOL) --exchange $(or $(EXCHANGE),bybit)
+
+## SSH into the VPS
+vps-ssh:
+	@[ -n "$(VPS)" ] || (echo "VPS not set"; exit 1)
+	ssh $(VPS)
+
+## Restart a specific service on VPS without rebuilding
+##   Usage: make vps-restart SERVICE=bot
+vps-restart:
+	@[ -n "$(VPS)" ] || (echo "VPS not set"; exit 1)
+	@[ -n "$(SERVICE)" ] || (echo "Usage: make vps-restart SERVICE=<name>"; exit 1)
+	ssh $(VPS) "cd $(VPS_DIR) && docker compose restart $(SERVICE)"
