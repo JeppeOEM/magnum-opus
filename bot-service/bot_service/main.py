@@ -389,6 +389,17 @@ async def _run_backtest_task(
         _backtest_tasks.pop(run_id, None)
 
 
+@app.get("/strategies/detail")
+def strategies_detail() -> list[dict[str, object]]:
+    """Return live metadata for every loaded strategy (status, uptime, config params).
+
+    Used by the dashboard to display running bots even before any trades occur.
+    """
+    if _file_watcher is None:
+        return []
+    return _file_watcher.get_strategy_details()
+
+
 @app.get("/strategies")
 def list_strategies() -> list[dict[str, str]]:
     settings = get_settings()

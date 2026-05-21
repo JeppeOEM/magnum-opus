@@ -32,7 +32,7 @@ schema_config:
       index:
         prefix: index_
         period: 24h
-    - from: 2026-05-22
+    - from: 2026-05-21
       store: tsdb
       object_store: filesystem
       schema: v13

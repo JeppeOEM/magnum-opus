@@ -244,6 +244,10 @@ class FileWatcher:
         self._backoff: dict[str, tuple[float, int, float]] = {}
         # names currently in watchdog backoff — _rescan skips these to avoid double-load
         self._pending_restart: set[str] = set()
+        # class_name → live strategy instance (for metadata introspection)
+        self._strategy_instances: dict[str, BaseStrategy] = {}
+        # class_name → unix timestamp when the thread was last (re)started
+        self._started_at: dict[str, float] = {}
 
     async def initial_scan(self) -> set[str]:
         """Load all valid strategy files; register handles with BusManager (pre-start).
@@ -348,6 +352,8 @@ class FileWatcher:
             except OSError:
                 mtime = 0.0
             self._loaded[class_name] = (path, handle, stop_event, mtime)
+            self._strategy_instances[class_name] = strategy
+            self._started_at[class_name] = time.time()
 
             if pre_start:
                 self._bus_manager.register(handle)
@@ -372,6 +378,8 @@ class FileWatcher:
         if class_name not in self._loaded:
             return
         _, handle, stop_event, _ = self._loaded.pop(class_name)
+        self._strategy_instances.pop(class_name, None)
+        self._started_at.pop(class_name, None)
         self._bus_manager.deprovision_pubsub(class_name)
         _stop_thread(handle, stop_event, float(self._settings.bot_shutdown_timeout_s))
         self._bus_manager.dynamic_deregister(class_name)
@@ -414,6 +422,8 @@ class FileWatcher:
         if entry is None:
             return
         path, _, _, _ = entry
+        self._strategy_instances.pop(class_name, None)
+        self._started_at.pop(class_name, None)
         self._pending_restart.add(class_name)
 
         try:
@@ -466,6 +476,40 @@ class FileWatcher:
         for name in self._pending_restart:
             if name not in result:
                 result[name] = "restarting"
+        return result
+
+    def get_strategy_details(self) -> list[dict[str, object]]:
+        """Return per-strategy metadata for dashboard display.
+
+        Includes runtime status, uptime, config params (stop_loss, position size),
+        and the primary symbol/tf the strategy subscribed to.  Safe to call from
+        any thread — reads only immutable config properties and atomic dicts.
+        """
+        statuses = self.get_strategy_statuses()
+        result: list[dict[str, object]] = []
+        for class_name, status in statuses.items():
+            instance = self._strategy_instances.get(class_name)
+            started_at = self._started_at.get(class_name)
+
+            # Derive primary symbol/tf from registered bar handlers
+            symbol: str | None = None
+            tf: str | None = None
+            if instance is not None and instance._bar_handlers:
+                sym_tf = next(iter(instance._bar_handlers))
+                symbol, tf = sym_tf[0], sym_tf[1]
+
+            result.append({
+                "name": class_name,
+                "status": status,
+                "started_at": started_at,
+                "exchange": instance._exchange if instance is not None else None,
+                "symbol": symbol,
+                "tf": tf,
+                "paper_trading": instance.paper_trading if instance is not None else None,
+                "stop_loss_pct": instance.stop_loss_pct if instance is not None else None,
+                "max_position_pct": instance.max_position_pct if instance is not None else None,
+                "min_lookback": instance.min_lookback if instance is not None else None,
+            })
         return result
 
     def stop_all(self) -> None:

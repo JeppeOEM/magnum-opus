@@ -1,4 +1,4 @@
-"""Bot management data layer — queries order_events from QuestDB."""
+"""Bot management data layer — queries order_events from QuestDB + bot-service /strategies/detail."""
 from __future__ import annotations
 
 import logging
@@ -37,8 +37,31 @@ def _mode_filter(paper: bool) -> str:
     return "paper_trading = true" if paper else "paper_trading = false"
 
 
+# ── Live bot-service introspection ────────────────────────────────────────────
+
+def fetch_running_bots(bot_service_url: str) -> list[dict[str, Any]]:
+    """Return live metadata from the bot service for every loaded strategy.
+
+    Each dict contains: name, status, started_at (unix float), exchange, symbol,
+    tf, paper_trading, stop_loss_pct, max_position_pct, min_lookback.
+    Returns [] if the bot service is unreachable.
+    """
+    try:
+        resp = requests.get(
+            f"{bot_service_url}/strategies/detail",
+            timeout=3,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.warning("fetch_running_bots failed: %s", exc)
+        return []
+
+
+# ── QuestDB trade queries ─────────────────────────────────────────────────────
+
 def fetch_bot_overview(paper: bool, questdb_url: str) -> list[dict[str, Any]]:
-    """Return one row per active bot (strategy/exchange/symbol) with PnL and trade stats."""
+    """Return one row per active bot (strategy/exchange/symbol) with PnL, trade stats, win rate."""
     f = _mode_filter(paper)
     sql = f"""
         SELECT
@@ -48,6 +71,10 @@ def fetch_bot_overview(paper: bool, questdb_url: str) -> list[dict[str, Any]]:
             count() AS trade_count,
             round(sum(realized_pnl), 4) AS total_pnl,
             round(avg(realized_pnl), 4) AS avg_pnl_per_trade,
+            round(
+                sum(CASE WHEN realized_pnl > 0 THEN 1.0 ELSE 0.0 END) / count() * 100.0,
+                1
+            ) AS win_rate_pct,
             max(ts) AS last_trade_ts
         FROM order_events
         WHERE status = 'filled'
@@ -133,6 +160,81 @@ def fetch_bot_trades(
     return _q(questdb_url, sql)
 
 
+# ── Merge helpers ─────────────────────────────────────────────────────────────
+
+def format_uptime(started_at: float | None) -> str | None:
+    """Format seconds since started_at as 'Xd Xh Xm' or 'Xh Xm' or 'Xm'."""
+    import time
+    if started_at is None:
+        return None
+    elapsed = int(time.time() - started_at)
+    if elapsed < 0:
+        return "0m"
+    days, rem = divmod(elapsed, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def merge_bots(
+    running: list[dict[str, Any]],
+    trade_stats: list[dict[str, Any]],
+    paper: bool,
+) -> list[dict[str, Any]]:
+    """Merge live running bots with QuestDB trade stats.
+
+    Running bots always appear.  Trade stats fill in when available; otherwise
+    numeric fields are None so the table shows blank cells.
+
+    Filtering by paper_trading is applied here: bots whose paper_trading property
+    doesn't match the selected mode are excluded.
+    """
+    # Index trade stats by (strategy, exchange, symbol)
+    stats_index: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in trade_stats:
+        key = (row["strategy"], row.get("exchange", ""), row.get("symbol", ""))
+        stats_index[key] = row
+
+    merged: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+
+    for bot in running:
+        # Filter by paper/live mode
+        if bot.get("paper_trading") is not None and bool(bot["paper_trading"]) != paper:
+            continue
+
+        name = bot.get("name", "")
+        exchange = bot.get("exchange") or ""
+        symbol = bot.get("symbol") or ""
+        key = (name, exchange, symbol)
+        seen_keys.add(key)
+
+        stats = stats_index.get(key, {})
+        merged.append({
+            "strategy": name,
+            "exchange": exchange,
+            "symbol": symbol,
+            "tf": bot.get("tf"),
+            "status": bot.get("status", "unknown"),
+            "uptime": format_uptime(bot.get("started_at")),
+            "stop_loss_pct": bot.get("stop_loss_pct"),
+            "max_position_pct": bot.get("max_position_pct"),
+            "trade_count": stats.get("trade_count"),
+            "win_rate_pct": stats.get("win_rate_pct"),
+            "total_pnl": float(stats["total_pnl"]) if stats.get("total_pnl") is not None else None,
+            "avg_pnl_per_trade": float(stats["avg_pnl_per_trade"]) if stats.get("avg_pnl_per_trade") is not None else None,
+            "last_trade_ts": str(stats.get("last_trade_ts", ""))[:19] if stats.get("last_trade_ts") else None,
+        })
+
+    return merged
+
+
+# ── Metrics / equity curve ────────────────────────────────────────────────────
+
 def compute_equity_curve(trades: list[dict[str, Any]]) -> pd.DataFrame:
     """Compute cumulative PnL curve from a list of filled trade dicts."""
     if not trades:
@@ -140,7 +242,6 @@ def compute_equity_curve(trades: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(trades)
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
     df["realized_pnl"] = pd.to_numeric(df["realized_pnl"], errors="coerce").fillna(0.0)
-    # Drop rows with unparseable timestamps before cumsum so NaT rows don't distort the curve
     df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
     df["cumulative_pnl"] = df["realized_pnl"].cumsum()
     return df[["ts", "cumulative_pnl", "realized_pnl"]]
@@ -163,7 +264,6 @@ def compute_bot_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     win_rate = float((pnl > 0).sum() / trade_count) if trade_count > 0 else 0.0
     avg_pnl = float(pnl.mean()) if trade_count > 0 else 0.0
 
-    # Max drawdown from equity curve
     equity = pnl.cumsum()
     running_max = equity.cummax()
     drawdown = equity - running_max
