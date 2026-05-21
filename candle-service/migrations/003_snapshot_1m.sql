@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS snapshot_1m (
     inter_trade_interval_std_ms DOUBLE,
     num_trade_price_levels      INT,
 
-    -- Footprint (13)
+    -- Footprint (16)
     footprint_json              VARCHAR,
     poc_price                   DOUBLE,
     value_area_high             DOUBLE,

@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS snapshot_1s (
     best_bid         DOUBLE,
     best_ask         DOUBLE,
 
-    -- OB depth at open (8)
+    -- OB depth at open L1/L2 (8)
     bid_depth_l1_open     DOUBLE,
     ask_depth_l1_open     DOUBLE,
     bid_depth_l2_open     DOUBLE,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS snapshot_1s (
     bid_depth_total_open  DOUBLE,
     ask_depth_total_open  DOUBLE,
 
-    -- OB depth at close (8)
+    -- OB depth at close L1/L2 (8)
     bid_depth_l1_close    DOUBLE,
     ask_depth_l1_close    DOUBLE,
     bid_depth_l2_close    DOUBLE,
@@ -53,6 +53,22 @@ CREATE TABLE IF NOT EXISTS snapshot_1s (
     ask_depth_top10_close DOUBLE,
     bid_depth_total_close DOUBLE,
     ask_depth_total_close DOUBLE,
+
+    -- OB depth at open L3/L4/L5 (6)
+    bid_depth_l3_open  DOUBLE,
+    ask_depth_l3_open  DOUBLE,
+    bid_depth_l4_open  DOUBLE,
+    ask_depth_l4_open  DOUBLE,
+    bid_depth_l5_open  DOUBLE,
+    ask_depth_l5_open  DOUBLE,
+
+    -- OB depth at close L3/L4/L5 (6)
+    bid_depth_l3_close DOUBLE,
+    ask_depth_l3_close DOUBLE,
+    bid_depth_l4_close DOUBLE,
+    ask_depth_l4_close DOUBLE,
+    bid_depth_l5_close DOUBLE,
+    ask_depth_l5_close DOUBLE,
 
     -- Book shape (2)
     weighted_bid_price    DOUBLE,
@@ -67,8 +83,9 @@ CREATE TABLE IF NOT EXISTS snapshot_1s (
     ofi                   DOUBLE,
     ofi_l1                DOUBLE,
 
-    -- Trade flow (2)
+    -- Trade flow (3)
     buy_volume            DOUBLE,
+    sell_volume           DOUBLE,
     buy_count             INT,
 
     -- Block trades (2)
@@ -106,6 +123,44 @@ CREATE TABLE IF NOT EXISTS snapshot_1s (
     trade_sign_autocorr         DOUBLE,
     inter_trade_interval_std_ms DOUBLE,
     num_trade_price_levels      INT,
+
+    -- Footprint (16)
+    footprint_json              VARCHAR,
+    poc_price                   DOUBLE,
+    value_area_high             DOUBLE,
+    value_area_low              DOUBLE,
+    poc_volume                  DOUBLE,
+    imbalance_buy_count         INT,
+    imbalance_sell_count        INT,
+    imbalance_stack_buy         INT,
+    imbalance_stack_sell        INT,
+    imbalance_ratio             DOUBLE,
+    single_print_count          INT,
+    single_print_levels_json    VARCHAR,
+    unfinished_top              BOOLEAN,
+    unfinished_bottom           BOOLEAN,
+    absorption_detected         BOOLEAN,
+    footprint_delta_divergence  BYTE,
+
+    -- CVD (2)
+    cum_delta                   DOUBLE,
+    cvd_divergence              BYTE,
+
+    -- Iceberg (3)
+    iceberg_bid_detected        BOOLEAN,
+    iceberg_ask_detected        BOOLEAN,
+    iceberg_price               DOUBLE,
+
+    -- Microstructure signals (5)
+    hawkes_intensity            DOUBLE,
+    microprice                  DOUBLE,
+    microprice_mid_delta        DOUBLE,
+    cancel_bias                 DOUBLE,
+    trade_aggressiveness        DOUBLE,
+
+    -- VWAP deviation (2)
+    buy_vwap_deviation_bps      DOUBLE,
+    sell_vwap_deviation_bps     DOUBLE,
 
     -- Quality (3)
     is_partial                  BOOLEAN,

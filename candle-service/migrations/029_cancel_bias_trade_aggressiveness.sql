@@ -1,2 +1,0 @@
-ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS cancel_bias DOUBLE;
-ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS trade_aggressiveness DOUBLE;

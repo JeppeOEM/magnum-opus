@@ -1,2 +1,0 @@
-ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS microprice DOUBLE;
-ALTER TABLE snapshot_1s ADD COLUMN IF NOT EXISTS microprice_mid_delta DOUBLE;
