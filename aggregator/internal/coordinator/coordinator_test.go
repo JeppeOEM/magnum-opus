@@ -33,12 +33,13 @@ func newFakeExchange(name string) *fakeExchange {
 	}
 }
 
-func (f *fakeExchange) Name() string                                          { return f.name }
-func (f *fakeExchange) Connect(_ context.Context) error                       { return nil }
-func (f *fakeExchange) Subscribe(_ []string, _ []exchange.FeedType) error     { return nil }
-func (f *fakeExchange) Ticks() <-chan exchange.Tick                            { return f.ticksCh }
-func (f *fakeExchange) Signals() <-chan exchange.Signal                        { return f.sigsCh }
-func (f *fakeExchange) Close() error                                           { return nil }
+func (f *fakeExchange) Name() string                                              { return f.name }
+func (f *fakeExchange) Connect(_ context.Context) error                           { return nil }
+func (f *fakeExchange) Subscribe(_ []string, _ []exchange.FeedType) error         { return nil }
+func (f *fakeExchange) AddSymbols(_ []string, _ []exchange.FeedType) error        { return nil }
+func (f *fakeExchange) Ticks() <-chan exchange.Tick                                { return f.ticksCh }
+func (f *fakeExchange) Signals() <-chan exchange.Signal                            { return f.sigsCh }
+func (f *fakeExchange) Close() error                                               { return nil }
 
 // newCoordinatorHarness builds a coordinator with one fake exchange and one symbol.
 // Returns the coordinator, fake exchange, and a cancel func. Caller must call coord.Shutdown()

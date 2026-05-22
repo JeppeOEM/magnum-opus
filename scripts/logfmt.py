@@ -147,6 +147,9 @@ def _process(raw: str):
     content = line[m.end():]
     try:
         log = json.loads(content)
+        if not isinstance(log, dict):
+            _println(line)
+            return
     except Exception:
         _println(line)
         return
@@ -219,6 +222,9 @@ def _run_alerts():
             content = line[m.end():]
             try:
                 log = json.loads(content)
+                if not isinstance(log, dict):
+                    print(line, flush=True)
+                    continue
             except Exception:
                 # Non-JSON service log (uvicorn startup, Python traceback, etc.) — always show.
                 print(line, flush=True)

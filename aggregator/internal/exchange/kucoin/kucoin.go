@@ -592,6 +592,54 @@ func (a *Adapter) sendBatch(ctx context.Context, conn *transport.Conn, feed exch
 	return nil
 }
 
+// AddSymbols subscribes to additional symbols on the existing live WebSocket
+// connection. Only sends subscription messages for symbols not already tracked —
+// existing subscriptions are untouched. Uses the feed set registered during
+// Subscribe() so callers do not need to repeat it.
+// Safe to call concurrently with the running adapter.
+func (a *Adapter) AddSymbols(symbols []string, _ []exchange.FeedType) error {
+	a.subMu.Lock()
+	existing := make(map[string]bool, len(a.rawSyms))
+	for _, s := range a.rawSyms {
+		existing[s] = true
+	}
+	var fresh []string
+	for _, s := range symbols {
+		if !existing[s] {
+			a.rawSyms = append(a.rawSyms, s)
+			fresh = append(fresh, s)
+		}
+	}
+	feeds := make([]exchange.FeedType, len(a.feeds))
+	copy(feeds, a.feeds)
+	a.subMu.Unlock()
+
+	if len(fresh) == 0 {
+		return nil // already subscribed — idempotent
+	}
+
+	a.connMu.Lock()
+	conn := a.conn
+	a.connMu.Unlock()
+	if conn == nil {
+		return fmt.Errorf("kucoin: not connected")
+	}
+
+	for _, feed := range feeds {
+		for i := 0; i < len(fresh); i += subBatchSize {
+			end := i + subBatchSize
+			if end > len(fresh) {
+				end = len(fresh)
+			}
+			if err := a.sendBatch(a.adapterCtx, conn, feed, fresh[i:end]); err != nil {
+				return fmt.Errorf("kucoin: add symbol subscription: %w", err)
+			}
+		}
+	}
+	slog.Info("kucoin: dynamic symbols subscribed", "symbols", fresh)
+	return nil
+}
+
 func (a *Adapter) fireTrigger() {
 	select {
 	case a.reconnectTrigger <- struct{}{}:

@@ -102,6 +102,12 @@ type Exchange interface {
 	// appear in the exchange's API (e.g. "BTC-USDT" for KuCoin, "BTCUSDT" for Bybit).
 	Subscribe(symbols []string, feeds []FeedType) error
 
+	// AddSymbols subscribes to additional symbols on the live connection without
+	// replacing or re-sending existing subscriptions. Appends to the internal symbol
+	// list so reconnects include the new symbols. Safe to call while the adapter is
+	// running. Returns an error if the exchange does not support dynamic addition.
+	AddSymbols(symbols []string, feeds []FeedType) error
+
 	// Ticks returns the channel on which normalized Tick events are delivered.
 	// The channel is closed when the adapter shuts down.
 	Ticks() <-chan Tick

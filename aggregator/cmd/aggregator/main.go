@@ -37,6 +37,54 @@ var (
 	buildTime = "unknown"
 )
 
+// dynamicSymbolsPrefix is the Redis key prefix for dynamically-added symbols.
+// Key pattern: config:symbols:{exchange}  (Redis SET of raw symbol strings)
+// These are loaded at startup and merged with config.yaml so additions survive restarts.
+const dynamicSymbolsPrefix = "config:symbols:"
+
+// symbolManager implements httpapi.SymbolManager.
+// AddSymbol persists to Redis so new symbols survive a service restart.
+type symbolManager struct {
+	coord *coordinator.Coordinator
+	rdb   *goredis.Client
+}
+
+func (m *symbolManager) AddSymbol(ctx context.Context, exch, sym string) error {
+	if err := m.coord.AddSymbol(ctx, exch, sym); err != nil {
+		return err
+	}
+	// Best-effort Redis persist — symbol is live even if this fails.
+	if err := m.rdb.SAdd(ctx, dynamicSymbolsPrefix+exch, sym).Err(); err != nil {
+		slog.Warn("aggregator: symbol live but Redis persist failed — won't survive restart",
+			"exchange", exch, "symbol", sym, "err", err)
+	}
+	return nil
+}
+
+func (m *symbolManager) ListSymbols() []httpapi.SymbolEntry {
+	tracked := m.coord.ListSymbols()
+	entries := make([]httpapi.SymbolEntry, len(tracked))
+	for i, t := range tracked {
+		entries[i] = httpapi.SymbolEntry{Exchange: t.Exchange, Symbol: t.Symbol}
+	}
+	return entries
+}
+
+// mergeUnique appends strings from extra to base, skipping duplicates.
+func mergeUnique(base, extra []string) []string {
+	seen := make(map[string]bool, len(base))
+	for _, s := range base {
+		seen[s] = true
+	}
+	for _, s := range extra {
+		if !seen[s] {
+			base = append(base, s)
+			seen[s] = true
+		}
+	}
+	return base
+}
+
 // realClock wraps time.Now() for all components that require a Clock interface.
 type realClock struct{}
 
@@ -106,7 +154,30 @@ func main() {
 		1*time.Millisecond, 1*time.Hour, 30*time.Second,
 	).Start()
 
-	// ── 7. Exchange adapters (only for configured symbols) ───────────────────
+	// ── 7. Merge dynamic symbols from Redis (survive restarts) ───────────────
+	// Symbols added via POST /symbols are stored in Redis SETs so they are
+	// reloaded here on every start — config.yaml stays as the static baseline.
+	for _, exch := range []string{"kucoin", "bybit"} {
+		dynamic, err := redisClient.SMembers(ctx, dynamicSymbolsPrefix+exch).Result()
+		if err != nil {
+			slog.Warn("aggregator: could not load dynamic symbols from Redis",
+				"exchange", exch, "err", err)
+			continue
+		}
+		if len(dynamic) == 0 {
+			continue
+		}
+		switch exch {
+		case "kucoin":
+			cfg.Symbols.KuCoin = mergeUnique(cfg.Symbols.KuCoin, dynamic)
+		case "bybit":
+			cfg.Symbols.Bybit = mergeUnique(cfg.Symbols.Bybit, dynamic)
+		}
+		slog.Info("aggregator: loaded dynamic symbols from Redis",
+			"exchange", exch, "symbols", dynamic)
+	}
+
+	// ── 8. Exchange adapters (only for configured symbols) ───────────────────
 	kuCoinSyms := normalizeSymbols("kucoin", cfg.Symbols.KuCoin)
 	bybitSyms := normalizeSymbols("bybit", cfg.Symbols.Bybit)
 
@@ -152,7 +223,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── 8. Coordinator ────────────────────────────────────────────────────────
+	// ── 9. Coordinator ────────────────────────────────────────────────────────
 	fetcher := &multiSnapshotFetcher{fetchers: fetchers}
 
 	coord := coordinator.New(
@@ -160,16 +231,18 @@ func main() {
 		streamWriter, ilpWriter, fetcher, clk,
 	).WithMetrics(metricsReg).WithOBPublisher(pubsubWriter)
 
-	// ── 9. HTTP server + startup gate ─────────────────────────────────────────
+	// ── 10. HTTP server + startup gate ────────────────────────────────────────
 	gapWin := gapwindow.New()
 	feedStatus := httpapi.NewGathererFeedStatus(promReg)
+
+	symMgr := &symbolManager{coord: coord, rdb: redisClient}
 
 	var startupReady atomic.Bool
 	httpSrv := httpapi.New(
 		cfg.Service.HTTPAddr,
 		feedStatus, gapWin, promReg, startTime,
 		httpapi.VersionInfo{Version: version, GitSHA: gitSHA, BuildTime: buildTime},
-	).WithReadyFn(startupReady.Load)
+	).WithReadyFn(startupReady.Load).WithSymbolManager(symMgr)
 
 	// ── 10. Start coordinator and HTTP server ─────────────────────────────────
 	coord.Run(ctx)

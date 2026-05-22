@@ -138,6 +138,13 @@ func (a *Adapter) Signals() <-chan exchange.Signal {
 	return m.Signals()
 }
 
+// AddSymbols is not yet supported on the Bybit adapter. The connection
+// multiplexer would need restructuring to assign new symbols to live slots.
+// Add the symbol to config.yaml and restart the service.
+func (a *Adapter) AddSymbols(_ []string, _ []exchange.FeedType) error {
+	return fmt.Errorf("bybit: dynamic symbol addition not yet supported — add to config.yaml and restart")
+}
+
 // Close cancels the adapter context and waits for all goroutines to exit.
 func (a *Adapter) Close() error {
 	a.mu.Lock()
