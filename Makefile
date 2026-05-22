@@ -9,7 +9,7 @@ export VERSION GIT_SHA BUILD_TIME
 # Load VPS connection config if present (sets VPS, VPS_DIR, CANDLE_SLOT)
 -include .env.deploy
 
-.PHONY: up down logs watch monitoring-logs \
+.PHONY: up down clean logs watch monitoring-logs \
         run dev dev-infra dev-infra-down dev-aggregator dev-candle dev-bot dev-gateway dev-dashboard dev-ml \
         bootstrap setup-vps deploy-all deploy-aggregator deploy-candle deploy-bot deploy-gateway deploy-dashboard deploy-ml deploy-monitoring \
         vps-status vps-logs vps-ssh vps-restart rollback \
@@ -50,6 +50,29 @@ up:
 down:
 	docker compose --profile candle-blue --profile candle-green --profile bot --profile dashboard down
 	docker compose -f docker-compose.test.yml down 2>/dev/null || true
+
+## ⚠ DESTRUCTIVE — stop all containers AND delete all data volumes (QuestDB + Redis).
+## Requires typing "yes" to confirm. Use only when you want a clean slate.
+clean:
+	@printf "\n  \033[1;31m⚠  WARNING: This will permanently delete all data!\033[0m\n"
+	@printf "  Volumes to be removed:\n"
+	@printf "    • magnum-opus_questdb-data   (all candle history, trades, backtests)\n"
+	@printf "    • magnum-opus_questdb-conf\n"
+	@printf "    • magnum-opus_redis-data     (all streams)\n"
+	@printf "    • all other magnum-opus_* volumes (grafana, prometheus, loki, ml)\n\n"
+	@printf "  Type \033[1myes\033[0m to continue, anything else to abort: "; \
+	read CONFIRM; \
+	if [ "$$CONFIRM" != "yes" ]; then \
+		printf "\n  Aborted.\n\n"; \
+		exit 1; \
+	fi
+	@printf "\n  Stopping all containers...\n"
+	@docker compose --profile candle-blue --profile candle-green --profile bot --profile dashboard down 2>/dev/null || true
+	@docker compose -f docker-compose.test.yml down 2>/dev/null || true
+	@printf "  Removing data volumes...\n"
+	@docker compose --profile candle-blue --profile candle-green --profile bot --profile dashboard down --volumes 2>/dev/null || true
+	@printf "\n  \033[32m✓ All containers and data volumes removed.\033[0m\n"
+	@printf "  Run \033[1mmake up\033[0m to start fresh.\n\n"
 
 ## Tail aggregator logs (when running detached)
 logs:
