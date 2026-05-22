@@ -1,6 +1,7 @@
 """Layout for the /backtests page."""
 from __future__ import annotations
 
+import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
@@ -19,6 +20,15 @@ _EXCHANGE_OPTIONS = [
     {"label": "KuCoin", "value": "kucoin"},
 ]
 
+_EMPTY_EQUITY_FIG = go.Figure()
+_EMPTY_EQUITY_FIG.update_layout(
+    template="plotly_dark",
+    title="Equity Curve",
+    margin={"l": 40, "r": 10, "t": 30, "b": 30},
+    xaxis_title=None,
+    yaxis_title="Value (USD)",
+)
+
 backtest_page_layout = dbc.Container(
     [
         # ── Top controls ──────────────────────────────────────────────────────
@@ -33,6 +43,16 @@ backtest_page_layout = dbc.Container(
                     width=3,
                 ),
                 dbc.Col(
+                    dbc.Button(
+                        "🔄",
+                        id="backtest-refresh-strategies-btn",
+                        color="secondary",
+                        size="sm",
+                        title="Refresh strategies",
+                    ),
+                    width="auto",
+                ),
+                dbc.Col(
                     dcc.Dropdown(
                         id="backtest-exchange-dd",
                         options=_EXCHANGE_OPTIONS,
@@ -42,11 +62,10 @@ backtest_page_layout = dbc.Container(
                     width=2,
                 ),
                 dbc.Col(
-                    dbc.Input(
-                        id="backtest-symbol-inp",
-                        placeholder="BTCUSDT",
-                        value="BTCUSDT",
-                        debounce=True,
+                    dcc.Dropdown(
+                        id="backtest-symbol-dd",
+                        placeholder="Select symbol…",
+                        clearable=False,
                     ),
                     width=2,
                 ),
@@ -90,6 +109,16 @@ backtest_page_layout = dbc.Container(
             ],
             className="mb-2",
             align="center",
+        ),
+        dbc.Row(
+            dbc.Col(
+                html.Div(
+                    id="backtest-strategy-status",
+                    style={"color": "#ff9800", "fontSize": "12px"},
+                ),
+                width=12,
+            ),
+            className="mb-1",
         ),
         dbc.Row(
             [
@@ -142,10 +171,11 @@ backtest_page_layout = dbc.Container(
                                 html.Div(id="backtest-metrics-div"),
                             ),
                             className="mb-2",
+                            style={"minHeight": "160px"},
                         ),
                         dcc.Graph(
                             id="backtest-equity-chart",
-                            figure={},
+                            figure=_EMPTY_EQUITY_FIG,
                             style={"height": "260px"},
                         ),
                     ],

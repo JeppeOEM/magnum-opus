@@ -377,3 +377,10 @@ development_status:
   39-4-models-tab: done
   39-5-live-tab: done
   epic-39-retrospective: optional
+
+  # ─── Epic 40: Backtest UI Fixes ───────────────────────────────────────────────
+  epic-40: done
+  40-1-available-symbols-endpoint: done
+  40-2-symbol-dropdown: done
+  40-3-strategy-dropdown-and-results-display: done
+  epic-40-retrospective: optional

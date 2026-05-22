@@ -42,6 +42,24 @@ def fetch_strategies() -> list[dict[str, Any]]:
         return []
 
 
+def fetch_available_symbols(exchange: str | None = None) -> list[dict[str, Any]]:
+    """Return distinct (exchange, symbol) pairs that have data in snapshot_1s."""
+    params: dict[str, str] = {}
+    if exchange:
+        params["exchange"] = exchange
+    try:
+        resp = requests.get(
+            f"{BOT_SERVICE_URL}/backtest/available-symbols",
+            params=params,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.warning("fetch_available_symbols_failed: %s", exc)
+        return []
+
+
 def submit_backtest(
     strategy_name: str,
     symbol: str,

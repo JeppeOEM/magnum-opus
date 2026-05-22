@@ -420,6 +420,8 @@ def list_strategies() -> list[dict[str, str]]:
 @app.post("/backtest/run")
 async def backtest_run(req: BacktestRunRequest) -> dict[str, str]:
     import uuid
+    if not _IDENT_RE.match(req.strategy_name):
+        raise HTTPException(status_code=400, detail="Invalid strategy name")
     settings = get_settings()
     strategies_dir = Path(settings.bot_strategies_dir).resolve()
     path = (strategies_dir / f"{req.strategy_name}.py").resolve()
@@ -446,6 +448,34 @@ def backtest_status(run_id: str) -> dict[str, Any]:
     if result is None:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
     return {"run_id": run_id, **result}
+
+
+@app.get("/backtest/available-symbols")
+def available_symbols(exchange: str | None = Query(default=None)) -> list[dict[str, Any]]:
+    """Return distinct (exchange, symbol) pairs that have data in snapshot_1s."""
+    if exchange is not None and not _IDENT_RE.match(exchange):
+        raise HTTPException(status_code=400, detail="Invalid exchange")
+    settings = get_settings()
+    where = f" WHERE exchange = '{exchange}'" if exchange else ""
+    query = (
+        f"SELECT exchange, symbol, min(ts) as min_ts, max(ts) as max_ts, count() as row_count "
+        f"FROM snapshot_1s{where} GROUP BY exchange, symbol ORDER BY exchange, symbol"
+    )
+    try:
+        resp = httpx.get(
+            f"{settings.questdb_http_addr}/exec",
+            params={"query": query},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            return []  # table missing or other QuestDB error
+        cols = [c["name"] for c in data.get("columns", [])]
+        return [dict(zip(cols, row)) for row in data.get("dataset", [])]
+    except Exception as exc:
+        log.warning("available_symbols_query_failed", error=str(exc))
+        return []
 
 
 @app.get("/backtest/runs")
@@ -596,6 +626,8 @@ async def _run_validate_task(run_id: str, req: BacktestValidateRequest, path: Pa
 @app.post("/backtest/validate")
 async def backtest_validate(req: BacktestValidateRequest) -> dict[str, str]:
     import uuid
+    if not _IDENT_RE.match(req.strategy_name):
+        raise HTTPException(status_code=400, detail="Invalid strategy name")
     settings = get_settings()
     strategies_dir = Path(settings.bot_strategies_dir).resolve()
     path = (strategies_dir / f"{req.strategy_name}.py").resolve()

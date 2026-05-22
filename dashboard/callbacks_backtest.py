@@ -7,17 +7,41 @@ import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dash_table, html, no_update
 
 import backtest_data
+from layout_backtest import _EMPTY_EQUITY_FIG
 
 
 # ── Strategy select → code viewer + history ───────────────────────────────────
 
 @callback(
     Output("backtest-strategy-dd", "options"),
-    Input("backtest-strategy-dd", "id"),  # fires once on page load
+    Output("backtest-strategy-status", "children"),
+    Input("backtest-strategy-dd", "id"),                          # initial page load
+    Input("backtest-refresh-strategies-btn", "n_clicks"),         # manual refresh
 )
-def load_strategy_options(_: str) -> list[dict]:
+def load_strategy_options(_id: str, _n_clicks) -> tuple:
     strategies = backtest_data.fetch_strategies()
-    return [{"label": s["name"], "value": s["name"]} for s in strategies]
+    if not strategies:
+        status = html.Span(
+            "⚠ No strategies found — is bot-service running? Click 🔄 to retry.",
+            style={"color": "#ff9800"},
+        )
+        return [], status
+    options = [{"label": s["name"], "value": s["name"]} for s in strategies]
+    return options, ""
+
+
+# ── Exchange → symbol dropdown ────────────────────────────────────────────────
+
+@callback(
+    Output("backtest-symbol-dd", "options"),
+    Output("backtest-symbol-dd", "value"),
+    Input("backtest-exchange-dd", "value"),
+)
+def load_symbol_options(exchange: str | None):
+    symbols = backtest_data.fetch_available_symbols(exchange=exchange)
+    options = [{"label": s["symbol"], "value": s["symbol"]} for s in symbols]
+    value = symbols[0]["symbol"] if symbols else None
+    return options, value
 
 
 @callback(
@@ -47,10 +71,11 @@ def on_strategy_select(strategy_name: str | None):
     Output("backtest-run-id-store", "data"),
     Output("backtest-status-div", "children"),
     Output("backtest-poll-interval", "disabled"),
+    Output("backtest-equity-chart", "figure", allow_duplicate=True),
     Input("backtest-run-btn", "n_clicks"),
     State("backtest-strategy-dd", "value"),
     State("backtest-exchange-dd", "value"),
-    State("backtest-symbol-inp", "value"),
+    State("backtest-symbol-dd", "value"),
     State("backtest-tf-dd", "value"),
     State("backtest-start-date", "value"),
     State("backtest-end-date", "value"),
@@ -59,14 +84,16 @@ def on_strategy_select(strategy_name: str | None):
 )
 def on_run_click(n_clicks, strategy_name, exchange, symbol, tf, start, end, capital):
     if not strategy_name:
-        return no_update, "Select a strategy first.", True
+        return no_update, "Select a strategy first.", True, no_update
+    if not symbol:
+        return no_update, "Select a symbol first.", True, no_update
     try:
         cap = float(capital or 10000)
     except ValueError:
         cap = 10000.0
     result = backtest_data.submit_backtest(
         strategy_name=strategy_name,
-        symbol=symbol or "BTCUSDT",
+        symbol=symbol,
         tf=tf or "1s",
         exchange=exchange or "bybit",
         start_date=start or "2026-01-01",
@@ -74,9 +101,9 @@ def on_run_click(n_clicks, strategy_name, exchange, symbol, tf, start, end, capi
         capital=cap,
     )
     if "error" in result:
-        return None, f"Error: {result['error']}", True
+        return None, html.Span(f"❌ Error: {result['error']}", style={"color": "#f44336"}), True, no_update
     run_id = result.get("run_id")
-    return run_id, f"Running… (run_id={run_id})", False
+    return run_id, f"Running… (run_id={run_id})", False, _EMPTY_EQUITY_FIG
 
 
 # ── Polling ───────────────────────────────────────────────────────────────────
@@ -98,7 +125,7 @@ def on_poll(n_intervals, run_id, strategy_name):
 
     status_data = backtest_data.poll_run_status(run_id)
     if "error" in status_data:
-        return f"Poll error: {status_data['error']}", no_update, no_update, True, no_update
+        return html.Span(f"❌ Poll error: {status_data['error']}", style={"color": "#f44336"}), no_update, no_update, True, no_update
 
     status = status_data.get("status", "unknown")
 
@@ -106,7 +133,8 @@ def on_poll(n_intervals, run_id, strategy_name):
         return f"Running… (run_id={run_id})", no_update, no_update, False, no_update
 
     if status == "failed":
-        return f"Failed: {status_data.get('error', 'unknown error')}", no_update, no_update, True, no_update
+        error_msg = status_data.get("error", "unknown error")
+        return html.Span(f"❌ Failed: {error_msg}", style={"color": "#f44336"}), no_update, no_update, True, no_update
 
     # Done — extract metrics and equity curve
     metrics_div = _build_metrics(status_data.get("result", {}))
@@ -116,7 +144,7 @@ def on_poll(n_intervals, run_id, strategy_name):
     df = backtest_data.fetch_run_history(strategy_name=strategy_name)
     _, history_table = _build_history(df)
 
-    return f"Done (run_id={run_id})", metrics_div, eq_fig, True, history_table
+    return html.Span(f"✓ Done (run_id={run_id})", style={"color": "#4caf50"}), metrics_div, eq_fig, True, history_table
 
 
 # ── Hash filter ───────────────────────────────────────────────────────────────
@@ -137,7 +165,10 @@ def on_hash_filter(hash_val: str | None, strategy_name: str | None):
 
 def _build_metrics(result: dict) -> object:
     if not result:
-        return "No result yet."
+        return html.Div(
+            "Run a backtest to see metrics.",
+            style={"color": "#888", "fontSize": "13px"},
+        )
     rows = [
         dbc.Row([
             dbc.Col(html.Span("Return", style={"color": "#888", "fontSize": "12px"}), width=4),
@@ -170,7 +201,7 @@ def _build_metrics(result: dict) -> object:
             ),
         ]),
     ]
-    return rows
+    return html.Div(rows)
 
 
 def _build_equity_figure(run_id: str) -> go.Figure:

@@ -439,3 +439,127 @@ def test_backtest_validate_path_traversal_blocked(tmp_path: Path, monkeypatch: p
         "end_date": "2026-02-01",
     })
     assert resp.status_code in (400, 404)
+
+
+@pytest.mark.l1
+def test_backtest_run_invalid_strategy_name_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /backtest/run rejects strategy_name with chars outside [A-Za-z0-9_\\-.] via _IDENT_RE."""
+    monkeypatch.setenv("BOT_STRATEGIES_DIR", str(tmp_path))
+    client = TestClient(app, raise_server_exceptions=False)
+    for bad_name in ["../etc/passwd", "foo;bar", "x$(id)", "../../secrets"]:
+        resp = client.post("/backtest/run", json={
+            "strategy_name": bad_name,
+            "symbol": "BTCUSDT",
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-01",
+        })
+        assert resp.status_code == 400, f"Expected 400 for {bad_name!r}, got {resp.status_code}"
+
+
+@pytest.mark.l1
+def test_backtest_validate_invalid_strategy_name_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /backtest/validate rejects strategy_name with chars outside [A-Za-z0-9_\\-.] via _IDENT_RE."""
+    monkeypatch.setenv("BOT_STRATEGIES_DIR", str(tmp_path))
+    client = TestClient(app, raise_server_exceptions=False)
+    for bad_name in ["../etc/passwd", "foo;bar", "x$(id)", "../../secrets"]:
+        resp = client.post("/backtest/validate", json={
+            "strategy_name": bad_name,
+            "symbol": "BTCUSDT",
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-01",
+        })
+        assert resp.status_code == 400, f"Expected 400 for {bad_name!r}, got {resp.status_code}"
+
+
+# ── /backtest/available-symbols ───────────────────────────────────────────────
+
+@pytest.mark.l1
+def test_available_symbols_no_exchange_filter() -> None:
+    """GET /backtest/available-symbols (no filter) returns all symbols from QuestDB."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {
+        "columns": [
+            {"name": "exchange"}, {"name": "symbol"},
+            {"name": "min_ts"}, {"name": "max_ts"}, {"name": "row_count"},
+        ],
+        "dataset": [
+            ["bybit", "BTCUSDT", "2026-01-01T00:00:00.000000Z", "2026-05-01T00:00:00.000000Z", 11232000],
+            ["bybit", "ETHUSDT", "2026-01-01T00:00:00.000000Z", "2026-05-01T00:00:00.000000Z", 11200000],
+        ],
+    }
+    with patch("bot_service.main.httpx.get", return_value=mock_resp):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/backtest/available-symbols")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["exchange"] == "bybit"
+    assert data[0]["symbol"] == "BTCUSDT"
+    assert data[0]["row_count"] == 11232000
+    assert data[1]["symbol"] == "ETHUSDT"
+
+
+@pytest.mark.l1
+def test_available_symbols_empty_table() -> None:
+    """GET /backtest/available-symbols returns [] when QuestDB returns no rows."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {"columns": [], "dataset": []}
+    with patch("bot_service.main.httpx.get", return_value=mock_resp):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/backtest/available-symbols")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.l1
+def test_available_symbols_invalid_exchange() -> None:
+    """GET /backtest/available-symbols returns 400 for invalid exchange param."""
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/backtest/available-symbols?exchange=../../etc/passwd")
+    assert resp.status_code == 400
+
+
+@pytest.mark.l1
+def test_available_symbols_table_missing_returns_empty() -> None:
+    """GET /backtest/available-symbols returns [] when QuestDB reports table missing."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {"error": "table 'snapshot_1s' does not exist"}
+    with patch("bot_service.main.httpx.get", return_value=mock_resp):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/backtest/available-symbols")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.l1
+def test_available_symbols_questdb_unreachable_returns_empty() -> None:
+    """GET /backtest/available-symbols returns [] when QuestDB is unreachable."""
+    with patch("bot_service.main.httpx.get", side_effect=Exception("connection refused")):
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/backtest/available-symbols")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+@pytest.mark.l1
+def test_available_symbols_exchange_filter_passed_in_query() -> None:
+    """GET /backtest/available-symbols?exchange=kucoin passes exchange to SQL WHERE clause."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {"columns": [{"name": "exchange"}, {"name": "symbol"}, {"name": "min_ts"}, {"name": "max_ts"}, {"name": "row_count"}], "dataset": []}
+    captured_queries: list[str] = []
+
+    def _capture(url: str, **kwargs: object) -> MagicMock:
+        captured_queries.append(str(kwargs.get("params", {}).get("query", "")))
+        return mock_resp
+
+    with patch("bot_service.main.httpx.get", side_effect=_capture):
+        client = TestClient(app, raise_server_exceptions=False)
+        client.get("/backtest/available-symbols?exchange=kucoin")
+
+    assert len(captured_queries) == 1
+    assert "kucoin" in captured_queries[0]
+    assert "WHERE" in captured_queries[0]
