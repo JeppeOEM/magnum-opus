@@ -13,6 +13,7 @@ from layout import _charts_page
 from layout_bots import bot_page_layout
 from layout_backtest import backtest_page_layout
 from layout_ml import ml_page_layout
+from layout_strategies import strategies_browser_layout, strategies_detail_layout
 
 _QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
 
@@ -28,6 +29,11 @@ def render_page(pathname):
         return backtest_page_layout
     if pathname == "/ml":
         return ml_page_layout
+    if pathname == "/strategies":
+        return strategies_browser_layout
+    if pathname and pathname.startswith("/strategies/"):
+        strategy_name = pathname.split("/strategies/", 1)[1]
+        return strategies_detail_layout(strategy_name)
     return _charts_page
 
 

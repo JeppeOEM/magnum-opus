@@ -3,6 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import structlog
 
+STRATEGY_GROUP = "Mean Reversion"
+STRATEGY_TAGS = ["rsi", "oscillator", "paper", "bybit", "btc"]
+
 from bot_service.exchange import OrderRequest
 from bot_service.strategy.base import BaseStrategy
 from bot_service.strategy.signals.rsi import rsi_signal

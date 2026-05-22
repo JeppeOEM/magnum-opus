@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import structlog
 
+STRATEGY_GROUP = "Arbitrage"
+STRATEGY_TAGS = ["funding-rate", "arb", "paper", "bybit", "btc"]
+
 from bot_service.bus.event_types import FundingRate
 from bot_service.exchange import OrderRequest
 from bot_service.strategy.base import BaseStrategy

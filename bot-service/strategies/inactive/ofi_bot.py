@@ -3,6 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import structlog
 
+STRATEGY_GROUP = "Microstructure"
+STRATEGY_TAGS = ["ofi", "order-flow", "1s", "paper", "bybit", "btc"]
+
 from bot_service.exchange import OrderRequest
 from bot_service.strategy.base import BaseStrategy
 from bot_service.strategy.signals.ofi import compute_ofi_signal

@@ -3,6 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import structlog
 
+STRATEGY_GROUP = "Trend Following"
+STRATEGY_TAGS = ["ma", "crossover", "paper", "bybit", "btc"]
+
 from bot_service.exchange import OrderRequest
 from bot_service.strategy.base import BaseStrategy
 from bot_service.strategy.signals.ma_cross import compute_ma_cross_signal

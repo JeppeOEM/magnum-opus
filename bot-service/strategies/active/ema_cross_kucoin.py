@@ -12,6 +12,9 @@ from __future__ import annotations
 import pandas as pd
 import structlog
 
+STRATEGY_GROUP = "Trend Following"
+STRATEGY_TAGS = ["ema", "crossover", "paper", "kucoin", "btc"]
+
 from bot_service.bus.event_types import GapMarker
 from bot_service.exchange import OrderRequest
 from bot_service.strategy.base import BaseStrategy
