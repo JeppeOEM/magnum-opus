@@ -285,10 +285,23 @@ class BaseStrategy(ABC):
 
     def _query_questdb(self, symbol: str, tf: str, n_bars: int) -> pd.DataFrame | None:
         table = _TF_TABLE.get(tf, "snapshot_1s")
+        # snapshot_1s stores all timeframes in one table and has dedicated
+        # `tf`, `is_complete`, and `has_gap` columns.  snapshot_1m and
+        # snapshot_15m store exactly one timeframe per table and instead use
+        # `is_partial` and `gap_count` — derive equivalent columns inline.
+        if table == "snapshot_1s":
+            cols = "ts,open,high,low,close,volume,quote_volume,trade_count,is_complete,has_gap"
+            tf_filter = f"AND tf='{tf}' "
+        else:
+            cols = (
+                "ts,open,high,low,close,volume,quote_volume,trade_count,"
+                "CASE WHEN is_partial THEN false ELSE true END AS is_complete,"
+                "CASE WHEN gap_count > 0 THEN true ELSE false END AS has_gap"
+            )
+            tf_filter = ""
         query = (
-            f"SELECT ts,open,high,low,close,volume,quote_volume,trade_count,"
-            f"is_complete,has_gap FROM {table} "
-            f"WHERE symbol='{symbol}' AND tf='{tf}' "
+            f"SELECT {cols} FROM {table} "
+            f"WHERE symbol='{symbol}' {tf_filter}"
             f"ORDER BY ts DESC LIMIT {n_bars}"
         )
         try:

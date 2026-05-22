@@ -143,7 +143,7 @@ backtest_page_layout = dbc.Container(
                         dbc.Collapse(
                             dbc.Input(
                                 id="backtest-start-date",
-                                placeholder="YYYY-MM-DD",
+                                placeholder="YYYY-MM-DD HH:MM:SS",
                                 value="",
                                 debounce=True,
                                 size="sm",
@@ -171,7 +171,7 @@ backtest_page_layout = dbc.Container(
                         dbc.Collapse(
                             dbc.Input(
                                 id="backtest-end-date",
-                                placeholder="YYYY-MM-DD",
+                                placeholder="YYYY-MM-DD HH:MM:SS",
                                 value="",
                                 debounce=True,
                                 size="sm",

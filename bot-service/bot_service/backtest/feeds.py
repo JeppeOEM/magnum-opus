@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Union
 
 import backtrader as bt
 import httpx
@@ -53,6 +53,11 @@ def _fetch_snapshot(
     Table routing (snapshot_1s / snapshot_1m / snapshot_15m) is done by the
     caller via _TF_TABLE. No per-row tf filter is needed — each table stores
     exactly one timeframe.
+
+    QuestDB returns SQL NULL as Python ``None`` in JSON.  All non-string
+    columns are coerced to float so backtrader's linebuffer never receives
+    ``None`` (which raises ``TypeError: must be real number, not NoneType``
+    on Python 3.12+).
     """
     if start.tzinfo is None or end.tzinfo is None:
         raise ValueError("start and end must be timezone-aware datetimes")
@@ -83,7 +88,65 @@ def _fetch_snapshot(
     df = pd.DataFrame(rows, columns=cols)
     df["ts"] = pd.to_datetime(df["ts"])
     df = df.set_index("ts").sort_index()
+
+    # Replace None (QuestDB NULL) with NaN in every column that should be
+    # numeric.  Text/varchar columns (exchange, symbol, tf, *_json) are
+    # left as-is; everything else is coerced to float64.
+    _TEXT_COLS = {"exchange", "symbol", "tf", "footprint_json", "single_print_levels_json"}
+    for col in df.columns:
+        if col not in _TEXT_COLS and df[col].dtype == object:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     return df
+
+
+def _find_data_segments(df: pd.DataFrame) -> list[dict]:
+    """Detect contiguous runs of valid bars (non-null close, gap_count == 0).
+
+    Returns a list of dicts, one per segment::
+
+        {"start": "YYYY-MM-DDTHH:MM:SS", "end": "...", "bars": N}
+
+    Null-OHLCV bars (startup partial candles) and gap bars (service restarts)
+    are treated as breaks between segments.  The caller can derive gap
+    durations by comparing adjacent segment end/start timestamps.
+    """
+    if df.empty:
+        return []
+
+    close = pd.to_numeric(df.get("close", pd.Series(dtype=float)), errors="coerce")
+    gap_cnt = pd.to_numeric(
+        df.get("gap_count", pd.Series(0, index=df.index)), errors="coerce"
+    ).fillna(0)
+    valid: list[bool] = (close.notna() & (gap_cnt == 0)).tolist()
+    timestamps: list[Any] = df.index.tolist()
+
+    segments: list[dict] = []
+    seg_start: int | None = None
+
+    for i, ok in enumerate(valid):
+        if ok and seg_start is None:
+            seg_start = i
+        elif not ok and seg_start is not None:
+            segments.append(
+                {
+                    "start": str(timestamps[seg_start])[:19].replace(" ", "T"),
+                    "end": str(timestamps[i - 1])[:19].replace(" ", "T"),
+                    "bars": i - seg_start,
+                }
+            )
+            seg_start = None
+
+    if seg_start is not None:
+        segments.append(
+            {
+                "start": str(timestamps[seg_start])[:19].replace(" ", "T"),
+                "end": str(timestamps[-1])[:19].replace(" ", "T"),
+                "bars": len(timestamps) - seg_start,
+            }
+        )
+
+    return segments
 
 
 def _fetch_snapshot_1s(
@@ -201,10 +264,20 @@ _CUSTOM_PARAMS: tuple[tuple[str, str], ...] = tuple(
 
 
 class QuestDBFeed(bt.feeds.PandasData):  # type: ignore[misc]
-    """Backtrader data feed backed by QuestDB snapshot_1s.
+    """Backtrader data feed backed by QuestDB snapshot tables.
 
-    Gap bars (gap_count > 0) are replaced with NaN rows so strategy
-    next() can detect them via math.isnan(self.data.close[0]).
+    Gap bars (gap_count > 0) and null-OHLCV bars (startup partial candles)
+    are replaced with NaN rows so strategy next() can detect them via
+    ``math.isnan(self.data.close[0])``.
+
+    After construction the attribute ``data_segments`` contains a list of
+    dicts describing the contiguous valid-data segments found in the fetched
+    window::
+
+        [{"start": "2026-05-22T17:59:30", "end": "2026-05-22T18:10:00", "bars": 631}, ...]
+
+    This is exposed on BacktestResult so the dashboard can show the user
+    exactly which time windows the backtest actually ran on.
     """
 
     lines: tuple[str, ...] = _CUSTOM_LINES
@@ -226,7 +299,18 @@ class QuestDBFeed(bt.feeds.PandasData):  # type: ignore[misc]
         df = _fetch_snapshot(questdb_http_addr, table, exchange, symbol, start, end)
         if df.empty:
             raise InsufficientHistoryError(exchange, symbol, start, end)
+        # Detect segments BEFORE replacing gap rows with NaN (gap_count intact).
+        self.data_segments: list[dict] = _find_data_segments(df)
         df = _replace_gap_rows(df)
+        # Drop every row where close is NaN — these are gap bars (gap_count > 0)
+        # and null startup bars (partial candles with no OHLCV data).
+        # Backtrader market orders execute at the NEXT bar's open; a NaN open
+        # corrupts the broker state (NaN fill price → NaN portfolio value).
+        # Removing these rows is safe: backtrader only cares about timestamps
+        # for ordering, not continuity, so the equity curve is still correct.
+        df = df.dropna(subset=["close"])
+        if df.empty:
+            raise InsufficientHistoryError(exchange, symbol, start, end)
         df = df.drop(columns=["exchange", "symbol", "tf"], errors="ignore")
         # backtrader metaclass sets self.p before __init__; assign dataname
         # directly so PandasData.start() finds the pre-fetched DataFrame.

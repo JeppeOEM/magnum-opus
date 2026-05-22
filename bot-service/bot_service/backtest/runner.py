@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import math
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -46,6 +47,10 @@ class BacktestResult:
     total_fees_usd: float
     passes_fee_gate: bool
     equity_curve: list[tuple[str, float]] = field(default_factory=list)
+    # Contiguous segments of valid data found in the query window.
+    # Each dict: {"start": ISO_str, "end": ISO_str, "bars": int}
+    # Empty list means the whole window was usable (no gaps detected).
+    data_segments: list[dict] = field(default_factory=list)
 
 
 def hash_file(path: Path) -> str:
@@ -53,10 +58,16 @@ def hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
-def load_strategy_class(path: Path) -> type[BaseStrategy]:
-    """Load a .py file and return the single BaseStrategy subclass it defines.
+def load_strategy_class(path: Path) -> type:
+    """Load a .py file and return the single strategy class it defines.
 
-    Raises ValueError if zero or more than one subclass is found, or on import error.
+    Accepts two strategy styles:
+    - ``bt.Strategy`` subclass  — backtest-only, full backtrader interface available.
+    - ``BaseStrategy`` subclass — live/backtest dual-mode (must also implement
+      a backtrader-compatible ``next()`` method when used for backtesting).
+
+    Raises ValueError if zero or more than one qualifying class is found, or
+    on import error.
     """
     module_name = f"_bt_strategy_{path.stem}_{hash_file(path)}"
     sys.modules.pop(module_name, None)
@@ -71,15 +82,19 @@ def load_strategy_class(path: Path) -> type[BaseStrategy]:
             cls
             for cls in vars(module).values()
             if isinstance(cls, type)
-            and issubclass(cls, BaseStrategy)
+            and (issubclass(cls, BaseStrategy) or issubclass(cls, bt.Strategy))
             and cls is not BaseStrategy
+            and cls is not bt.Strategy
             and cls.__module__ == module_name
         ]
         if len(candidates) == 0:
-            raise ValueError(f"No BaseStrategy subclass found in {path}")
+            raise ValueError(
+                f"No strategy class found in {path} — "
+                "define exactly one bt.Strategy or BaseStrategy subclass"
+            )
         if len(candidates) > 1:
             raise ValueError(
-                f"Multiple BaseStrategy subclasses in {path}: "
+                f"Multiple strategy classes in {path}: "
                 + ", ".join(c.__name__ for c in candidates)
             )
         cls = candidates[0]
@@ -99,17 +114,24 @@ def _compute_metrics(
 ) -> dict[str, float | int | bool]:
     strat = results[0]
 
-    # SharpeRatio
+    # SharpeRatio — can return None (no trades) or NaN (insufficient returns).
+    # NaN is truthy in Python, so `val or 0.0` does NOT replace it; guard explicitly.
     sharpe = 0.0
     if hasattr(strat.analyzers, "sharpe"):
         sr = strat.analyzers.sharpe.get_analysis()
-        sharpe = float(sr.get("sharperatio") or 0.0)
+        _raw_sharpe = sr.get("sharperatio")
+        if _raw_sharpe is not None and not (isinstance(_raw_sharpe, float) and math.isnan(_raw_sharpe)):
+            sharpe = float(_raw_sharpe)
 
     # DrawDown
+    # Note: backtrader's DrawDown analyzer can return None for "drawdown" when
+    # there are no bars with a drawdown (e.g. equity only goes up, or no trades).
+    # dict.get(key, default) returns None when the key EXISTS with value None;
+    # the default only fires for missing keys.  Guard with `or 0.0`.
     max_dd = 0.0
     if hasattr(strat.analyzers, "drawdown"):
         dd = strat.analyzers.drawdown.get_analysis()
-        max_dd = float(dd.get("max", {}).get("drawdown", 0.0))
+        max_dd = float(dd.get("max", {}).get("drawdown") or 0.0)
 
     # TradeAnalyzer
     n_trades = 0
@@ -118,12 +140,12 @@ def _compute_metrics(
     total_fees = 0.0
     if hasattr(strat.analyzers, "trades"):
         ta = strat.analyzers.trades.get_analysis()
-        total_closed = int(ta.get("total", {}).get("closed", 0))
+        total_closed = int(ta.get("total", {}).get("closed") or 0)
         n_trades = total_closed
-        won = int(ta.get("won", {}).get("total", 0))
+        won = int(ta.get("won", {}).get("total") or 0)
         win_rate = (won / total_closed * 100.0) if total_closed > 0 else 0.0
-        pnl_net = ta.get("pnl", {}).get("net", {})
-        total_pnl = float(pnl_net.get("total", 0.0))
+        pnl_net = ta.get("pnl", {}).get("net") or {}
+        total_pnl = float(pnl_net.get("total") or 0.0)
         avg_pnl = total_pnl / total_closed if total_closed > 0 else 0.0
 
     # Fees: sum from completed orders
@@ -240,5 +262,6 @@ def run_backtest(
         initial_capital=initial_capital,
         final_value=final_value,
         equity_curve=equity,
+        data_segments=feed.data_segments,
         **{k: v for k, v in metrics.items() if k != "equity_curve"},  # type: ignore[arg-type]
     )

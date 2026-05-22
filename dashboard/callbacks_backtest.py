@@ -98,8 +98,9 @@ def update_range_info(date_range, start_mode, end_mode, custom_start, custom_end
     end   = _resolve_date(end_mode,   "last",  custom_end,   dr.get("max_ts"))
     if not start and not end:
         return ""
-    start_str = start[:10] if start else "?"
-    end_str   = end[:10]   if end   else "?"
+    # Show up to "YYYY-MM-DD HH:MM:SS" (19 chars); replace T separator for readability.
+    start_str = start[:19].replace("T", " ") if start else "?"
+    end_str   = end[:19].replace("T", " ")   if end   else "?"
     return f"Range: {start_str}  →  {end_str}"
 
 
@@ -207,7 +208,8 @@ def on_poll(n_intervals, run_id, strategy_name):
     if status == "failed":
         error_msg = status_data.get("error", "unknown error")
         return html.Span(f"❌ Failed: {error_msg}", style={"color": "#f44336"}), no_update, no_update, True, no_update
-    metrics_div = _build_metrics(status_data.get("result", {}))
+    result = status_data.get("result", {})
+    metrics_div = _build_metrics(result, result.get("data_segments", []))
     eq_fig = _build_equity_figure(run_id)
     df = backtest_data.fetch_run_history(strategy_name=strategy_name)
     _, history_table = _build_history(df)
@@ -241,10 +243,11 @@ def _resolve_date(mode: str, sentinel: str, custom: str | None, ts_from_db: str 
     return (custom or "")
 
 
-def _build_metrics(result: dict) -> object:
+def _build_metrics(result: dict, segments: list | None = None) -> object:
     if not result:
         return html.Div("Run a backtest to see metrics.", style={"color": "#888", "fontSize": "13px"})
-    rows = [
+
+    metric_rows = [
         _metric_row("Return",       f"{result.get('total_return_pct', 0):.2f}%"),
         _metric_row("Sharpe",       f"{result.get('sharpe_ratio', 0):.2f}"),
         _metric_row("Max Drawdown", f"{result.get('max_drawdown_pct', 0):.2f}%"),
@@ -256,7 +259,100 @@ def _build_metrics(result: dict) -> object:
             "#4caf50" if result.get("passes_fee_gate") else "#f44336",
         ),
     ]
-    return html.Div(rows)
+
+    coverage_section = _build_coverage(segments or [])
+    return html.Div([html.Div(metric_rows), coverage_section])
+
+
+def _build_coverage(segments: list[dict]) -> object:
+    """Render a Data Coverage section showing valid segments and gaps.
+
+    When there are many segments (fragmented data from a fresh DB), only the
+    largest ones are shown — tiny isolated 1-2 bar segments are folded into a
+    summary count.  No more than 8 segment rows are rendered.
+    """
+    from datetime import datetime as _dt
+
+    if not segments:
+        return html.Div()
+
+    total_bars = sum(s["bars"] for s in segments)
+    n_segs = len(segments)
+
+    # Separate "significant" segments (>= 5 bars) from tiny ones.
+    BIG = [s for s in segments if s["bars"] >= 5]
+    tiny_count = n_segs - len(BIG)
+    tiny_bars  = sum(s["bars"] for s in segments if s["bars"] < 5)
+
+    # If even big segments are too many, cap at 8 (first 5 + last 3).
+    display_segs = BIG
+    truncated = 0
+    if len(display_segs) > 8:
+        truncated = len(display_segs) - 8
+        display_segs = display_segs[:5] + display_segs[-3:]
+
+    def _fmt_gap(t1_iso: str, t2_iso: str) -> str:
+        try:
+            gap_sec = int((_dt.fromisoformat(t2_iso) - _dt.fromisoformat(t1_iso)).total_seconds())
+            if gap_sec >= 3600:
+                return f"{gap_sec // 3600}h {(gap_sec % 3600) // 60}m"
+            if gap_sec >= 60:
+                return f"{gap_sec // 60}m {gap_sec % 60}s"
+            return f"{gap_sec}s"
+        except Exception:
+            return "?"
+
+    _mono = {"fontFamily": "monospace", "fontSize": "11px"}
+    items: list = [
+        html.Div(
+            "Data Coverage",
+            style={"color": "#888", "fontSize": "11px", "marginTop": "10px",
+                   "marginBottom": "4px", "fontWeight": "bold", "letterSpacing": "0.05em"},
+        )
+    ]
+
+    for i, seg in enumerate(display_segs):
+        start = seg["start"][:19].replace("T", " ")
+        end   = seg["end"][:19].replace("T", " ")
+        bars  = seg["bars"]
+        items.append(
+            html.Div([
+                html.Span(f"▶ {start}", style={**_mono, "color": "#4fc3f7"}),
+                html.Span("  →  ", style={"color": "#555", "fontSize": "11px"}),
+                html.Span(end, style={**_mono, "color": "#4fc3f7"}),
+                html.Span(f"  ({bars:,} bars)", style={"color": "#888", "fontSize": "11px"}),
+            ], style={"marginBottom": "2px"})
+        )
+        # Gap indicator between consecutive display segments
+        if i < len(display_segs) - 1:
+            # find the original next significant segment for the gap calc
+            orig_idx = BIG.index(seg)
+            if orig_idx + 1 < len(BIG):
+                next_seg = BIG[orig_idx + 1]
+            else:
+                continue
+            gap_str = _fmt_gap(seg["end"], next_seg["start"])
+            # Show truncation marker before the gap if we skipped segments
+            if truncated and i == 4:
+                items.append(html.Div(
+                    f"  … {truncated} more segment(s) …",
+                    style={"color": "#555", "fontSize": "11px", "fontFamily": "monospace",
+                           "marginBottom": "2px"},
+                ))
+            items.append(html.Div(
+                f"  ⚡ gap  {gap_str}",
+                style={**_mono, "color": "#ff9800", "marginBottom": "2px"},
+            ))
+
+    # Summary footer
+    footer_parts = [f"{total_bars:,} usable bars in {n_segs} segment{'s' if n_segs != 1 else ''}"]
+    if tiny_count:
+        footer_parts.append(f"({tiny_count} tiny ≤4-bar segment{'s' if tiny_count != 1 else ''} with {tiny_bars} bars not shown)")
+    items.append(html.Div(
+        "  ".join(footer_parts),
+        style={"color": "#666", "fontSize": "11px", "marginTop": "4px"},
+    ))
+    return html.Div(items)
 
 
 def _metric_row(label: str, value: str, color: str = "#ccc") -> dbc.Row:
