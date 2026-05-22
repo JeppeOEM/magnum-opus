@@ -49,6 +49,8 @@ type Bar struct {
 	IsComplete bool
 	BuyVolume  float64
 	SellVolume float64
+	// SpreadMean is the mean spread across all folded 1s bars; nil when no OB quotes.
+	SpreadMean *float64
 }
 
 // cascadeAcc holds the rolling accumulation state for one timeframe.
@@ -64,6 +66,9 @@ type cascadeAcc struct {
 	barCount   int
 	gapCount   int
 	buyVolume  float64
+	// spread tracking — sourced from accumulator.Bar.SpreadMean
+	spreadSum   float64
+	spreadCount int
 }
 
 func (a *cascadeAcc) fold(bar accumulator.Bar) {
@@ -102,6 +107,10 @@ func (a *cascadeAcc) fold(bar accumulator.Bar) {
 	if bar.BuyVolume != nil {
 		a.buyVolume += *bar.BuyVolume
 	}
+	if bar.SpreadMean != nil {
+		a.spreadSum += *bar.SpreadMean
+		a.spreadCount++
+	}
 }
 
 func (a *cascadeAcc) reset(openTs int64) {
@@ -138,6 +147,10 @@ func (a *cascadeAcc) toBar(exchange, symbol string, tf TF, isComplete bool) Bar 
 	if a.closeVal != nil {
 		v := *a.closeVal
 		b.Close = &v
+	}
+	if a.spreadCount > 0 {
+		v := a.spreadSum / float64(a.spreadCount)
+		b.SpreadMean = &v
 	}
 	return b
 }

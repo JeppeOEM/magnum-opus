@@ -79,11 +79,14 @@ func TestClassify_ThinBook(t *testing.T) {
 func TestClassify_HighVol(t *testing.T) {
 	rdb, _ := setupMiniredis(t)
 	ctx := context.Background()
-	// Normal spread, but latest realized_vol > 0.002
-	addUniformBars(t, rdb, 9, "50000", "1.0", "0.001")
-	addBar(t, rdb, "50000", "1.0", "0.005") // latest: vol=0.005 > threshold
+	// Alternating close prices 50000/50500 produce log-return std-dev ≈ 0.01 > 0.002 threshold.
+	// realized_vol is now derived from the close sequence, not read from the stream field.
+	prices := []string{"50000", "50500", "50000", "50500", "50000", "50500", "50000", "50500", "50000", "50500"}
+	for _, p := range prices {
+		addBar(t, rdb, p, "1.0", "0.0") // spread_mean=1.0; realized_vol field ignored
+	}
 	result := newClassifier(rdb).Classify(ctx)
-	assert.Equal(t, regime.RegimeHighVol, result, "vol 0.005 > 0.002 threshold → HIGH_VOL")
+	assert.Equal(t, regime.RegimeHighVol, result, "alternating ±1% prices → realized_vol ≈ 0.01 > 0.002 → HIGH_VOL")
 }
 
 func TestClassify_TrendingUp(t *testing.T) {

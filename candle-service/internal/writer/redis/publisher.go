@@ -128,6 +128,9 @@ func barFields(bar cascade.Bar, isComplete bool) map[string]any {
 		m["buy_volume"] = strconv.FormatFloat(bar.BuyVolume, 'f', -1, 64)
 		m["sell_volume"] = strconv.FormatFloat(bar.SellVolume, 'f', -1, 64)
 	}
+	if bar.SpreadMean != nil {
+		m["spread_mean"] = strconv.FormatFloat(*bar.SpreadMean, 'f', -1, 64)
+	}
 	return m
 }
 

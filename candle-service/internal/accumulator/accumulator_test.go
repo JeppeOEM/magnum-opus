@@ -150,8 +150,8 @@ func TestAccumulator_Apply_OFIDelta_Accumulated(t *testing.T) {
 	acc.Apply("0", "0", false, "", 0, q0, q1) // Δ_bid=+1, Δ_ask=0 → OFI=1
 	acc.Apply("0", "0", false, "", 0, q1, q2) // Δ_bid=+1, Δ_ask=0 → OFI=1
 	bar := acc.CurrentBar(epoch.UnixMilli(), false)
-	require.NotNil(t, bar.OFI)
-	assert.InDelta(t, 2.0, *bar.OFI, 1e-9)
+	require.NotNil(t, bar.OFIL1)
+	assert.InDelta(t, 2.0, *bar.OFIL1, 1e-9)
 }
 
 func TestAccumulator_Apply_QuoteVolume(t *testing.T) {
@@ -1213,8 +1213,8 @@ func TestAccumulator_OFI_NonNilForOBDeltaBar(t *testing.T) {
 	q1 := bq("100", "2", "101", "1")
 	acc.Apply("0", "0", false, "", 0, q0, q1) // OB delta only
 	bar := acc.CurrentBar(epoch.UnixMilli(), false)
-	require.NotNil(t, bar.OFI, "OFI must be non-nil when OB delta tick received")
-	assert.InDelta(t, 1.0, *bar.OFI, 1e-9)
+	require.NotNil(t, bar.OFIL1, "OFIL1 must be non-nil when OB delta tick received")
+	assert.InDelta(t, 1.0, *bar.OFIL1, 1e-9)
 }
 
 func TestAccumulator_OFI_NonNilForTradeBar(t *testing.T) {
@@ -1222,7 +1222,7 @@ func TestAccumulator_OFI_NonNilForTradeBar(t *testing.T) {
 	q := bq("100", "1", "101", "1")
 	acc.Apply("100", "1", true, "buy", 0, noQ, q)
 	bar := acc.CurrentBar(epoch.UnixMilli(), false)
-	require.NotNil(t, bar.OFI, "OFI must be non-nil when trade tick received")
+	require.NotNil(t, bar.OFIL1, "OFIL1 must be non-nil when trade tick received")
 }
 
 func TestAccumulator_SeedFromLastKnown_PopulatesOpenQuote(t *testing.T) {

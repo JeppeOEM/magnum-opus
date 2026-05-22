@@ -80,8 +80,12 @@ def run_clustering(
     if "regime" not in df.columns:
         df["regime"] = "RANGING"
 
-    # Initialise cluster column to noise
-    df["cluster"] = -1
+    # Initialise cluster column to noise only when no prior labels exist.
+    # Preserving existing values means regimes skipped due to insufficient data
+    # (n_regime < min_cluster_size) retain their previously computed labels
+    # instead of being silently overwritten with -1 noise on write-back.
+    if "cluster" not in df.columns:
+        df["cluster"] = -1
 
     stats: dict = {}
 

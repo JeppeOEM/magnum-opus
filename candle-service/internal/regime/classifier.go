@@ -12,6 +12,36 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
+// realizedVol computes the annualised standard deviation of log returns
+// from a slice of close prices. Returns 0 when fewer than 2 prices are given.
+func realizedVol(closes []float64) float64 {
+	n := len(closes)
+	if n < 2 {
+		return 0
+	}
+	// log returns
+	rets := make([]float64, n-1)
+	for i := 1; i < n; i++ {
+		if closes[i-1] <= 0 {
+			return 0
+		}
+		rets[i-1] = math.Log(closes[i] / closes[i-1])
+	}
+	// mean
+	var sum float64
+	for _, r := range rets {
+		sum += r
+	}
+	mean := sum / float64(len(rets))
+	// variance
+	var vsum float64
+	for _, r := range rets {
+		d := r - mean
+		vsum += d * d
+	}
+	return math.Sqrt(vsum / float64(len(rets)))
+}
+
 const (
 	RegimeThinBook     = "THIN_BOOK"
 	RegimeHighVol      = "HIGH_VOL"
@@ -56,9 +86,9 @@ func New(rdb goredis.Cmdable, exchange, symbol string, cfg Config) *Classifier {
 }
 
 type bar1m struct {
-	close       float64
-	spreadMean  float64
-	realizedVol float64
+	close      float64
+	spreadMean float64
+	// realizedVol is derived from the close sequence in Classify(), not read from the stream.
 }
 
 // Classify reads recent 1m bars from Redis and returns the current regime string.
@@ -79,9 +109,6 @@ func (c *Classifier) Classify(ctx context.Context) string {
 		if v, ok := msg.Values["spread_mean"].(string); ok {
 			b.spreadMean, _ = strconv.ParseFloat(v, 64)
 		}
-		if v, ok := msg.Values["realized_vol"].(string); ok {
-			b.realizedVol, _ = strconv.ParseFloat(v, 64)
-		}
 		if b.close > 0 {
 			bars = append(bars, b)
 		}
@@ -99,8 +126,13 @@ func (c *Classifier) Classify(ctx context.Context) string {
 		return RegimeThinBook
 	}
 
-	// HIGH_VOL: latest realized_vol above threshold.
-	if latest.realizedVol > c.cfg.VolThreshold {
+	// HIGH_VOL: realized_vol computed from the close sequence (newest-first, so reverse).
+	// Using the window's closes avoids depending on a field not present in the stream.
+	closes := make([]float64, len(bars))
+	for i, b := range bars {
+		closes[len(bars)-1-i] = b.close // oldest-first for log-return order
+	}
+	if realizedVol(closes) > c.cfg.VolThreshold {
 		return RegimeHighVol
 	}
 

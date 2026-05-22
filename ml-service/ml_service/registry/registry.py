@@ -57,10 +57,17 @@ def init(model_registry_path: str) -> None:
 
 
 def _reload_handler(signum, frame) -> None:
-    """SIGHUP handler — reload models.json from disk without restarting."""
+    """SIGHUP handler — reload models.json from disk without restarting.
+
+    Also clears the inference engine's artifact cache so the next predict() call
+    loads the new model artifacts for any updated artifact_dir paths.
+    """
     global _entries
     with _LOCK:
         _entries = _load(_registry_path)
+    # Local import avoids circular dependency (engine imports registry.get_all).
+    from ml_service.inference.engine import clear_cache  # noqa: PLC0415
+    clear_cache()
     log.info("registry_reloaded_sighup", n=len(_entries))
 
 

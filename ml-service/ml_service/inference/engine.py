@@ -90,9 +90,11 @@ def predict(
     if regime in ("TRENDING_UP", "TRENDING_DOWN"):
         return _flat_signal(regime, deviation_bps)
 
-    # Hurst gate: non-mean-reverting window
-    hurst = float(row.get("hurst_60") or 0.5)
-    if hurst >= 0.5:
+    # Hurst gate: non-mean-reverting window.
+    # Only apply when hurst_60 is present — raw snapshot_1s rows don't carry rolling
+    # features, so a missing value must not default into the gate firing.
+    hurst_raw = row.get("hurst_60")
+    if hurst_raw is not None and float(hurst_raw) >= 0.5:
         return _flat_signal(regime, deviation_bps)
 
     # Find all registry candidates for this (exchange, symbol, regime)

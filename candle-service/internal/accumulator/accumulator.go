@@ -625,7 +625,8 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		BarCount:   a.barCount + 1, // this bar counts as 1
 	}
 	if a.hasTicks {
-		bar.OFI = ptr(a.ofiSum)
+		// ofiSum is computed from BestQuote (L1 only), so OFIL1 is the canonical field.
+		// OFI (multi-level) is left nil until a separate multi-level accumulator is added.
 		bar.OFIL1 = ptr(a.ofiSum)
 		bar.HawkesIntensity = ptr(a.hawkesDecaySum)
 	}
@@ -720,8 +721,10 @@ func (a *Accumulator) CurrentBar(tsSecMs int64, isPartial bool) Bar {
 		bar.CancelBias = ptr(cb)
 	}
 
-	// Trade aggressiveness — volume pressure vs available bid liquidity
-	if a.hasCloseDepth {
+	// Trade aggressiveness — volume pressure vs available bid liquidity.
+	// Requires both close depth and at least one trade; nil on no-trade bars so
+	// consumers can distinguish "no trades" from genuine zero-aggression reads.
+	if a.hasCloseDepth && a.tradeCount > 0 {
 		if a.closeDepth.BidL1 > 0 {
 			bar.TradeAggressiveness = ptr(a.volumeSum / (a.closeDepth.BidL1 + 1e-9))
 		} else {
