@@ -145,12 +145,21 @@ def query_questdb_nonterminal_orders(
     if not _STRATEGY_NAME_RE.match(strategy_name):
         log.error("reconciliation_invalid_strategy_name", strategy=strategy_name)
         return None
+    # Use LATEST ON to get the most-recent status per order_id, then filter out
+    # terminal statuses.  This avoids re-importing "placed" rows that already
+    # have a corresponding "filled" row (QuestDB is append-only: both rows exist
+    # but the latest status for a filled order is "filled", not "placed").
     query = (
         "SELECT order_id, client_order_id, symbol, side, order_type, requested_size, "
         "limit_price, signal_type, status "
+        "FROM ("
+        "SELECT order_id, client_order_id, symbol, side, order_type, requested_size, "
+        "limit_price, signal_type, status, ts "
         "FROM order_events "
-        f"WHERE status NOT IN ('filled','cancelled','rejected','failed') "
-        f"AND strategy = '{strategy_name}' "
+        f"WHERE strategy = '{strategy_name}' "
+        "LATEST ON ts PARTITION BY order_id"
+        ") "
+        "WHERE status NOT IN ('filled','cancelled','rejected','failed') "
         "ORDER BY ts DESC"
     )
     try:

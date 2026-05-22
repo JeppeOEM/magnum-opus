@@ -41,6 +41,8 @@ async def run_strategy_event_loop(
     """Strategy event loop: subscribe → heartbeat → route events until stop.
 
     Called inside the strategy's dedicated asyncio event loop thread.
+    Also starts the OrderQueueWorker consumer task so that orders posted via
+    ``strategy._order_worker.post()`` are actually processed.
     """
     try:
         strategy.run_subscribe(timeout_s=float(strategy._settings.bot_subscribe_timeout_s))
@@ -53,20 +55,37 @@ async def run_strategy_event_loop(
         )
         return
     ready_event.set()
-    while not stop_event.is_set():
-        try:
-            event = await asyncio.wait_for(queue.get(), timeout=1.0)
-        except asyncio.TimeoutError:
+
+    # Start the order queue worker in this event loop.  Without this task the
+    # asyncio.Queue in OrderQueueWorker is never drained and no orders reach
+    # the exchange client or QuestDB.
+    _ow = getattr(strategy, "_order_worker", None)
+    _ow_task: asyncio.Task | None = None
+    if _ow is not None:
+        _ow_task = asyncio.create_task(_ow.run(stop_event), name=f"order-worker-{strategy._name}")
+
+    try:
+        while not stop_event.is_set():
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                strategy.ack_heartbeat()
+                continue
+            if isinstance(event, BarClose):
+                strategy.on_bar(event)
+            elif isinstance(event, GapMarker):
+                strategy.handle_gap(event)
+            elif isinstance(event, FundingRate):
+                strategy._last_event_ts = time.time()
+                strategy.handle_funding_rate(event)
             strategy.ack_heartbeat()
-            continue
-        if isinstance(event, BarClose):
-            strategy.on_bar(event)
-        elif isinstance(event, GapMarker):
-            strategy.handle_gap(event)
-        elif isinstance(event, FundingRate):
-            strategy._last_event_ts = time.time()
-            strategy.handle_funding_rate(event)
-        strategy.ack_heartbeat()
+    finally:
+        if _ow_task is not None:
+            _ow_task.cancel()
+            try:
+                await _ow_task
+            except asyncio.CancelledError:
+                pass
 
 
 def _import_strategy_class(path: Path) -> type[BaseStrategy] | None:
@@ -302,27 +321,49 @@ class FileWatcher:
         """Instantiate, reconcile, spawn thread, and register with BusManager."""
         try:
             strategy = cls(name=class_name, settings=self._settings)
+
+            # For paper-trading strategies, substitute PaperExchangeClient so
+            # orders are simulated locally instead of hitting the real exchange.
+            # The client reads tick prices via sync Redis in a thread pool to
+            # avoid event-loop binding issues.
+            if strategy.paper_trading:
+                from bot_service.exchange.paper import PaperExchangeClient
+                # on_fill will be wired to the order worker below after creation.
+                _paper_client = PaperExchangeClient(
+                    exchange=self._exchange,
+                    redis_url=self._settings.redis_url,
+                    on_fill=None,  # type: ignore[arg-type]  # filled in below
+                )
+                effective_exchange_client: ExchangeClient = _paper_client
+            else:
+                effective_exchange_client = self._exchange_client
+
             order_worker = OrderQueueWorker(
                 strategy_name=class_name,
                 max_position_pct=strategy.max_position_pct,
                 paper_trading=strategy.paper_trading,
-                exchange_client=self._exchange_client,
+                exchange_client=effective_exchange_client,
                 questdb_ilp_addr=self._questdb_ilp_addr,
                 portfolio_value_usd=self._settings.bot_portfolio_value_usd,
                 max_order_notional_usd=self._settings.max_order_notional_usd,
                 circuit_breaker=self._circuit_breaker,
                 on_circuit_breaker_trip=self._on_circuit_breaker_trip,
             )
+
+            # Wire the fill callback now that order_worker exists.
+            if strategy.paper_trading:
+                _paper_client._on_fill = order_worker.handle_fill  # type: ignore[union-attr]
+
             await run_startup_reconciliation(
                 strategy=strategy,
                 order_worker=order_worker,
-                exchange_client=self._exchange_client,
+                exchange_client=effective_exchange_client,
                 exchange=self._exchange,
                 questdb_http_addr=self._questdb_http_addr,
                 questdb_ilp_addr=self._questdb_ilp_addr,
                 timeout_s=float(self._settings.bot_reconciliation_timeout_s),
             )
-            strategy._exchange_client = self._exchange_client
+            strategy._exchange_client = effective_exchange_client
             strategy._exchange = self._exchange
             strategy._order_worker = order_worker
             stop_event = threading.Event()
@@ -331,6 +372,9 @@ class FileWatcher:
                 stop_event,
                 queue_max_depth=self._settings.bot_queue_max_depth,
             )
+            # Wire the event loop into the order worker so that post() can
+            # safely schedule onto the loop from the pub/sub delivery thread.
+            order_worker._loop = handle.loop
 
             mode = strategy.orderbook_mode
             if mode != "none":
@@ -491,12 +535,19 @@ class FileWatcher:
             instance = self._strategy_instances.get(class_name)
             started_at = self._started_at.get(class_name)
 
-            # Derive primary symbol/tf from registered bar handlers
+            # Derive primary symbol/tf from registered bar handlers (stream-based
+            # strategies), or from _primary_symbol/_primary_tf set directly on the
+            # instance (pub/sub strategies that use _on_candles1s instead of
+            # register_bar_handler).
             symbol: str | None = None
             tf: str | None = None
-            if instance is not None and instance._bar_handlers:
-                sym_tf = next(iter(instance._bar_handlers))
-                symbol, tf = sym_tf[0], sym_tf[1]
+            if instance is not None:
+                if instance._bar_handlers:
+                    sym_tf = next(iter(instance._bar_handlers))
+                    symbol, tf = sym_tf[0], sym_tf[1]
+                else:
+                    symbol = getattr(instance, "_primary_symbol", None)
+                    tf = getattr(instance, "_primary_tf", None)
 
             result.append({
                 "name": class_name,

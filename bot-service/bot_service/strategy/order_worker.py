@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections import deque
 from typing import Any, Callable
@@ -59,6 +60,9 @@ class OrderQueueWorker:
         self._on_circuit_breaker_trip = on_circuit_breaker_trip
         self._trip_fired = False
         self._queue: asyncio.Queue[OrderRequest] = asyncio.Queue()
+        # Set by registry after the strategy event-loop thread is created so that
+        # post() can safely schedule onto the loop from pub/sub or other threads.
+        self._loop: asyncio.AbstractEventLoop | None = None
         # order_id → (OrderRequest, PlacedOrder)
         self.open_orders: dict[str, tuple[OrderRequest, PlacedOrder]] = {}
         # symbol → notional USD position size
@@ -76,7 +80,21 @@ class OrderQueueWorker:
     # ---- Public interface ------------------------------------------------
 
     def post(self, req: OrderRequest) -> None:
-        """Post an order request to the queue (non-blocking)."""
+        """Post an order request to the queue (thread-safe).
+
+        May be called from any thread — including the pub/sub delivery thread.
+        Uses ``loop.call_soon_threadsafe`` to safely schedule ``put_nowait``
+        onto the strategy event loop when a loop reference is available.
+        Falls back to a direct ``put_nowait`` if the loop is not yet set (e.g.,
+        during startup reconciliation, which runs in the main event loop).
+        """
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(self._queue.put_nowait, req)
+                return
+            except RuntimeError:
+                pass  # loop is stopping — fall through to direct put
         self._queue.put_nowait(req)
 
     def restore_open_order(self, order_id: str, req: OrderRequest, placed: PlacedOrder) -> None:
@@ -113,7 +131,9 @@ class OrderQueueWorker:
 
         req, placed = self.open_orders[fill.order_id]
 
-        notional = req.size * (req.limit_price or fill.fill_price)
+        # Use the same portfolio-fraction formula as _order_notional so that
+        # the position_notional balance stays consistent after the fill.
+        notional = self._order_notional(req)
         self._position_notional[req.symbol] = max(
             0.0,
             self._position_notional.get(req.symbol, 0.0) - notional,
@@ -187,8 +207,14 @@ class OrderQueueWorker:
         )
         set_drawdown(self._strategy_name, drawdown)
 
-    async def run(self, stop_event: asyncio.Event) -> None:
-        """Consume queue until stop_event is set."""
+    async def run(self, stop_event: threading.Event) -> None:
+        """Consume the order queue until stop_event is set.
+
+        Must be started as an asyncio task inside the strategy's event loop
+        (``asyncio.create_task(worker.run(stop_event))`` in
+        ``run_strategy_event_loop``).  The ``stop_event`` is the same
+        ``threading.Event`` that signals the strategy loop to exit.
+        """
         while not stop_event.is_set():
             try:
                 req = await asyncio.wait_for(self._queue.get(), timeout=1.0)
@@ -273,12 +299,10 @@ class OrderQueueWorker:
     def _order_notional(self, req: OrderRequest) -> float:
         """Projected notional USD for risk gate and position tracking.
 
-        Limit orders: size × limit_price.
-        Market orders: size × portfolio_value_usd (size is treated as a portfolio
-        fraction, so the notional is the portfolio fraction × total portfolio value).
+        ``size`` is always a portfolio fraction (e.g. 0.01 = 1 % of portfolio).
+        Notional = size × portfolio_value_usd for ALL order types so that the
+        risk gate is consistent regardless of whether the order has a limit_price.
         """
-        if req.limit_price:
-            return float(req.size) * float(req.limit_price)
         return float(req.size) * self._portfolio_value_usd
 
     def _exceeds_risk_gate(self, req: OrderRequest) -> bool:

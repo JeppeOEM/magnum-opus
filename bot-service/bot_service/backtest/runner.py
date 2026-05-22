@@ -217,9 +217,19 @@ def run_backtest(
     )
 
     # Wrap strategy to track fees, fills, and per-trade entry/exit data.
+    # BaseStrategy subclasses require (name, settings) args that backtrader
+    # does not pass.  Detect this case and supply safe defaults so cerebro
+    # can instantiate the wrapper without a TypeError.
+    _is_base_strategy = issubclass(cls, BaseStrategy)
+    _bt_strategy_name = strategy_name
+
     class _WrappedStrategy(cls):  # type: ignore[valid-type]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
+            if _is_base_strategy:
+                from bot_service.config import get_settings
+                super().__init__(name=_bt_strategy_name, settings=get_settings())
+            else:
+                super().__init__(*args, **kwargs)
             self._bt_total_fees: float = 0.0
             self._bt_trades: list[dict] = []
             # Pending entry info (set when a buy order completes).

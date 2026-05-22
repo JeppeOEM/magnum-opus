@@ -151,6 +151,8 @@ services:
       QUESTDB_ILP_ADDR: questdb:9009
       REDIS_URL: redis://redis:6379
       BOT_EXCHANGE: kucoin
+    volumes:
+      - ./bot-service/strategies:/app/strategies:ro
     ports:
       - "8090:8090"
     depends_on:

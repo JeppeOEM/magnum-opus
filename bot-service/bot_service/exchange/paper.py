@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import redis
 import structlog
 
 from bot_service.bus.event_types import OrderFilled
@@ -18,24 +19,33 @@ log = structlog.get_logger()
 class PaperExchangeClient:
     """Simulated exchange client for paper trading.
 
-    `place_order` returns a PlacedOrder immediately, then schedules a background
-    task that waits a random latency, reads the Redis tick/OB stream, and calls
-    `on_fill` with an OrderFilled event.
+    ``place_order`` returns a ``PlacedOrder`` immediately, then schedules a
+    background task that waits a random simulated latency, reads a live tick
+    price from Redis (synchronously via :func:`asyncio.to_thread` to avoid
+    event-loop binding issues), and calls ``on_fill`` with an
+    :class:`~bot_service.bus.event_types.OrderFilled` event.
 
-    Satisfies the ExchangeClient protocol (place_order, cancel_order, get_open_orders).
+    Satisfies the :class:`~bot_service.exchange.ExchangeClient` protocol.
+
+    Parameters
+    ----------
+    redis_url:
+        Sync-redis URL (e.g. ``"redis://redis:6379"``).  A fresh connection is
+        opened (and closed) for every price lookup so that the client is safe
+        to use from any asyncio event loop.
     """
 
     def __init__(
         self,
         exchange: str,
-        redis_client: Any,
+        redis_url: str,
         on_fill: Callable[[OrderFilled], Awaitable[None]],
         latency_min_ms: int = 50,
         latency_max_ms: int = 250,
         slippage_bps: int = 5,
     ) -> None:
         self._exchange = exchange
-        self._redis = redis_client
+        self._redis_url = redis_url
         self._on_fill = on_fill
         self._latency_min_ms = latency_min_ms
         self._latency_max_ms = latency_max_ms
@@ -97,58 +107,60 @@ class PaperExchangeClient:
             )
 
     async def _resolve_limit_price(self, req: OrderRequest, order_id: str) -> float:
-        """Read recent ticks; fill at limit_price regardless of crossing (optimistic)."""
-        limit_price = req.limit_price if req.limit_price is not None else 0.0
-        stream_key = f"ticks:{self._exchange}:{req.symbol}"
-
-        try:
-            entries: list[Any] = await self._redis.xrevrange(stream_key, "+", "-", count=100)
-        except Exception as exc:
-            log.warning("paper_fill_redis_error", symbol=req.symbol, error=str(exc))
-            entries = []
-
-        if not entries:
-            log.warning(
-                "paper_fill_no_ticks",
-                exchange=self._exchange,
-                symbol=req.symbol,
-                order_id=order_id,
-            )
-            return limit_price
-
-        # Fill optimistically at limit price regardless of whether any tick crossed
-        return limit_price
+        """Fill at limit_price (optimistic — ignores whether the price was crossed)."""
+        return float(req.limit_price) if req.limit_price is not None else 0.0
 
     async def _resolve_market_price(self, req: OrderRequest) -> float:
-        """Read most recent OB snapshot; return mid ± slippage."""
-        stream_key = f"candles:ob:{self._exchange}:{req.symbol}"
+        """Read the most recent 1-minute candle close; return price ± slippage.
 
-        try:
-            entries: list[Any] = await self._redis.xrevrange(stream_key, "+", "-", count=1)
-        except Exception as exc:
-            log.warning("paper_fill_redis_error", symbol=req.symbol, error=str(exc))
-            entries = []
+        Uses a short-lived *synchronous* Redis connection (via
+        :func:`asyncio.to_thread`) so the client is safe to call from any
+        asyncio event loop without event-loop binding issues.
 
-        if not entries:
-            log.warning(
-                "paper_fill_no_ob_snapshot",
-                exchange=self._exchange,
-                symbol=req.symbol,
-            )
+        The 1-minute candle stream (``candles:close:{exchange}:{symbol}:1m``)
+        is preferred because its ``close`` field is a true trade price and not
+        an order-book level.  Falls back to ``candles:ob:`` then ``ticks:``
+        streams if the candle stream is empty.
+        """
+        exchange = self._exchange
+        symbol = req.symbol
+        redis_url = self._redis_url
+
+        # Use the 1-minute candle close as the primary price source.
+        # The tick stream deliberately is NOT used here — it contains order-book
+        # levels at all price depths (including deep bids far below market) and
+        # would produce unreliable fill prices.
+        streams_and_fields: list[tuple[str, list[str]]] = [
+            (f"candles:close:{exchange}:{symbol}:1m", ["close"]),
+            (f"candles:ob:{exchange}:{symbol}", ["mid_price"]),
+        ]
+
+        def _sync_fetch() -> float:
+            r: redis.Redis[str] = redis.from_url(redis_url, decode_responses=True)
+            try:
+                for stream_key, field_names in streams_and_fields:
+                    entries = r.xrevrange(stream_key, "+", "-", count=1)
+                    if not entries:
+                        continue
+                    _eid, fields = entries[0]
+                    for fn in field_names:
+                        raw = fields.get(fn)
+                        if raw:
+                            try:
+                                val = float(raw)
+                                if val > 0.0:
+                                    return val
+                            except (ValueError, TypeError):
+                                pass
+            finally:
+                r.close()
             return 0.0
 
-        _entry_id, fields = entries[0]
-        try:
-            mid_price = float(fields.get(b"mid_price") or fields.get("mid_price") or 0.0)
-        except (ValueError, TypeError):
-            log.warning("paper_fill_bad_ob_data", symbol=req.symbol)
-            return 0.0
+        price = await asyncio.to_thread(_sync_fetch)
 
-        if mid_price == 0.0:
-            log.warning("paper_fill_zero_mid_price", symbol=req.symbol)
+        if price == 0.0:
+            log.warning("paper_fill_no_price", exchange=exchange, symbol=symbol)
             return 0.0
 
         slippage = self._slippage_bps / 10_000.0
-        if req.side == "buy":
-            return mid_price * (1.0 + slippage)
-        return mid_price * (1.0 - slippage)
+        return price * (1.0 + slippage) if req.side == "buy" else price * (1.0 - slippage)
