@@ -120,6 +120,67 @@ def fetch_run_history(
     return pd.DataFrame(rows)
 
 
+_CHART_TABLE: dict[str, str] = {
+    "1s":  "snapshot_1s",
+    "1m":  "snapshot_1m",
+    "5m":  "snapshot_1m",
+    "15m": "snapshot_15m",
+    "1h":  "snapshot_15m",
+    "4h":  "snapshot_15m",
+    "1d":  "snapshot_15m",
+    "1w":  "snapshot_15m",
+}
+
+_TF_BAR_SECONDS: dict[str, int] = {
+    "1s": 1, "1m": 60, "5m": 300, "15m": 900,
+    "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800,
+}
+
+
+def fetch_candles_around(
+    exchange: str,
+    symbol: str,
+    center_ts: str,
+    tf: str = "1s",
+    window: int = 300,
+) -> list[dict]:
+    """Return up to ``2*window`` candles centred on *center_ts*.
+
+    Fetches from the raw snapshot table for *tf* (no aggregation — raw bars
+    give the highest resolution for chart inspection).  Returns dicts with
+    the same keys as the snapshot table rows.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    if not _SAFE_IDENT.match(exchange) or not _SAFE_IDENT.match(symbol):
+        return []
+    table = _CHART_TABLE.get(tf, "snapshot_1s")
+    bar_sec = _TF_BAR_SECONDS.get(tf, 1)
+    half_sec = window * bar_sec
+
+    try:
+        ts = center_ts.replace("Z", "+00:00")
+        center_dt = datetime.fromisoformat(ts)
+        if center_dt.tzinfo is None:
+            center_dt = center_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        logger.warning("fetch_candles_around: bad center_ts %r", center_ts)
+        return []
+
+    start_dt = center_dt - timedelta(seconds=half_sec)
+    end_dt   = center_dt + timedelta(seconds=half_sec)
+    start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    end_str   = end_dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+    sql = (
+        f"SELECT * FROM {table} "
+        f"WHERE exchange='{exchange}' AND symbol='{symbol}' "
+        f"AND ts >= '{start_str}' AND ts <= '{end_str}' "
+        f"ORDER BY ts ASC LIMIT {window * 2 + 50}"
+    )
+    return _qdb(sql)
+
+
 def fetch_equity_curve(run_id: str) -> pd.DataFrame:
     if not _SAFE_IDENT.match(run_id):
         return pd.DataFrame()

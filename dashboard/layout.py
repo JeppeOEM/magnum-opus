@@ -36,6 +36,7 @@ _nav = dbc.Nav(
         dbc.NavLink("Bots",       href="/bots",       active="exact",    id="nav-bots"),
         dbc.NavLink("Strategies", href="/strategies", active="partial",  id="nav-strategies"),
         dbc.NavLink("Backtests",  href="/backtests",  active="exact",    id="nav-backtests"),
+        dbc.NavLink("Chart",      href="/chart",      active="partial",  id="nav-chart"),
         dbc.NavLink("ML",         href="/ml",         active="exact",    id="nav-ml"),
     ],
     pills=True,

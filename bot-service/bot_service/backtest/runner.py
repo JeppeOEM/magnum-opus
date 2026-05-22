@@ -51,6 +51,9 @@ class BacktestResult:
     # Each dict: {"start": ISO_str, "end": ISO_str, "bars": int}
     # Empty list means the whole window was usable (no gaps detected).
     data_segments: list[dict] = field(default_factory=list)
+    # Per-trade list: each dict has entry_ts, exit_ts, entry_price, exit_price,
+    # size, pnl, pnl_net, direction.  Capped at 5 000 entries.
+    trades: list[dict] = field(default_factory=list)
 
 
 def hash_file(path: Path) -> str:
@@ -213,18 +216,54 @@ def run_backtest(
         symbol=symbol,
     )
 
-    # Wrap strategy to track fees and hook BacktestResultWriter
+    # Wrap strategy to track fees, fills, and per-trade entry/exit data.
     class _WrappedStrategy(cls):  # type: ignore[valid-type]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._bt_total_fees: float = 0.0
+            self._bt_trades: list[dict] = []
+            # Pending entry info (set when a buy order completes).
+            self._bt_pending_entry: dict | None = None
 
         def notify_order(self, order: Any) -> None:
             super().notify_order(order)
             if order.status == order.Completed:
                 pos_size = float(self.broker.getposition(self.data).size)
                 writer.write_fill(order, pos_size)
-                self._bt_total_fees += abs(float(order.executed.comm))
+                comm = abs(float(order.executed.comm))
+                self._bt_total_fees += comm
+
+                # --- per-trade tracking ---
+                fill_price = float(order.executed.price)
+                fill_size = float(order.executed.size)
+                try:
+                    bar_dt = self.data.datetime.datetime(0).isoformat()
+                except Exception:
+                    bar_dt = ""
+
+                if fill_size > 0:  # BUY → open long
+                    self._bt_pending_entry = {
+                        "entry_ts": bar_dt,
+                        "entry_price": fill_price,
+                        "entry_size": abs(fill_size),
+                        "entry_comm": comm,
+                    }
+                elif fill_size < 0 and self._bt_pending_entry is not None:  # SELL → close long
+                    e = self._bt_pending_entry
+                    size = abs(fill_size)
+                    pnl = (fill_price - e["entry_price"]) * size
+                    pnl_net = pnl - e["entry_comm"] - comm
+                    self._bt_trades.append({
+                        "entry_ts": e["entry_ts"],
+                        "exit_ts": bar_dt,
+                        "entry_price": round(e["entry_price"], 6),
+                        "exit_price": round(fill_price, 6),
+                        "size": round(size, 8),
+                        "pnl": round(pnl, 4),
+                        "pnl_net": round(pnl_net, 4),
+                        "direction": "long",
+                    })
+                    self._bt_pending_entry = None
 
     commission_cls = _COMMISSION_MAP.get(exchange.lower())
 
@@ -246,6 +285,8 @@ def run_backtest(
     final_value = cerebro.broker.getvalue()
     metrics = _compute_metrics(results, initial_capital, final_value)
     equity = collect_equity(results[0], sample_every)
+    # Cap trades at 5 000 to keep the in-memory result compact.
+    trades: list[dict] = getattr(results[0], "_bt_trades", [])[:5000]
 
     log.info("backtest_finished", strategy=strategy_name, run_id=run_id,
              total_return_pct=metrics["total_return_pct"], n_trades=metrics["n_trades"])
@@ -263,5 +304,6 @@ def run_backtest(
         final_value=final_value,
         equity_curve=equity,
         data_segments=feed.data_segments,
+        trades=trades,
         **{k: v for k, v in metrics.items() if k != "equity_curve"},  # type: ignore[arg-type]
     )

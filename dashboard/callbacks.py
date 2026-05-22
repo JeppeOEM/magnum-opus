@@ -12,6 +12,7 @@ import data
 from layout import _charts_page
 from layout_bots import bot_page_layout
 from layout_backtest import backtest_page_layout
+from layout_chart import chart_page_layout
 from layout_ml import ml_page_layout
 from layout_strategies import strategies_browser_layout, strategies_detail_layout
 
@@ -27,6 +28,8 @@ def render_page(pathname):
         return bot_page_layout
     if pathname == "/backtests":
         return backtest_page_layout
+    if pathname == "/chart":
+        return chart_page_layout
     if pathname == "/ml":
         return ml_page_layout
     if pathname == "/strategies":

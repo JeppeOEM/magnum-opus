@@ -1,10 +1,12 @@
 """Callbacks for the /backtests page."""
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import pandas as pd
 import plotly.graph_objects as go
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dash_table, html, no_update
+from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
 
 import backtest_data
 from layout_backtest import _EMPTY_EQUITY_FIG
@@ -191,29 +193,46 @@ def on_run_click(
     Output("backtest-equity-chart", "figure"),
     Output("backtest-poll-interval", "disabled", allow_duplicate=True),
     Output("backtest-history-table", "children", allow_duplicate=True),
+    Output("backtest-trades-store", "data"),
+    Output("backtest-trades-div", "children"),
     Input("backtest-poll-interval", "n_intervals"),
     State("backtest-run-id-store", "data"),
     State("backtest-strategy-dd", "value"),
+    State("backtest-exchange-dd", "value"),
+    State("backtest-symbol-dd", "value"),
+    State("backtest-tf-dd", "value"),
     prevent_initial_call=True,
 )
-def on_poll(n_intervals, run_id, strategy_name):
+def on_poll(n_intervals, run_id, strategy_name, exchange, symbol, tf):
     if not run_id:
-        return no_update, no_update, no_update, True, no_update
+        return no_update, no_update, no_update, True, no_update, no_update, no_update
     status_data = backtest_data.poll_run_status(run_id)
     if "error" in status_data:
-        return html.Span(f"❌ Poll error: {status_data['error']}", style={"color": "#f44336"}), no_update, no_update, True, no_update
+        err = html.Span(f"❌ Poll error: {status_data['error']}", style={"color": "#f44336"})
+        return err, no_update, no_update, True, no_update, no_update, no_update
     status = status_data.get("status", "unknown")
     if status == "running":
-        return f"Running… (run_id={run_id})", no_update, no_update, False, no_update
+        return f"Running… (run_id={run_id})", no_update, no_update, False, no_update, no_update, no_update
     if status == "failed":
         error_msg = status_data.get("error", "unknown error")
-        return html.Span(f"❌ Failed: {error_msg}", style={"color": "#f44336"}), no_update, no_update, True, no_update
+        err = html.Span(f"❌ Failed: {error_msg}", style={"color": "#f44336"})
+        return err, no_update, no_update, True, no_update, no_update, no_update
     result = status_data.get("result", {})
     metrics_div = _build_metrics(result, result.get("data_segments", []))
     eq_fig = _build_equity_figure(run_id)
     df = backtest_data.fetch_run_history(strategy_name=strategy_name)
     _, history_table = _build_history(df)
-    return html.Span(f"✓ Done (run_id={run_id})", style={"color": "#4caf50"}), metrics_div, eq_fig, True, history_table
+    trades = result.get("trades", [])
+    trades_div = _build_trades_table(trades, run_id, exchange or "bybit", symbol or "", tf or "1s")
+    return (
+        html.Span(f"✓ Done (run_id={run_id})", style={"color": "#4caf50"}),
+        metrics_div,
+        eq_fig,
+        True,
+        history_table,
+        trades,
+        trades_div,
+    )
 
 
 # ── Hash filter ───────────────────────────────────────────────────────────────
@@ -360,6 +379,72 @@ def _metric_row(label: str, value: str, color: str = "#ccc") -> dbc.Row:
         dbc.Col(html.Span(label, style={"color": "#888", "fontSize": "12px"}), width=5),
         dbc.Col(html.Span(value, style={"color": color}), width=7),
     ], className="mb-1")
+
+
+def _build_trades_table(
+    trades: list[dict],
+    run_id: str,
+    exchange: str,
+    symbol: str,
+    tf: str,
+) -> object:
+    """Render the per-trade table.  Each row has a 📊 link that navigates to /chart."""
+    if not trades:
+        return html.Div("No trades recorded.", style={"color": "#555"})
+
+    rows = []
+    for i, t in enumerate(trades):
+        pnl_net = t.get("pnl_net", t.get("pnl", 0)) or 0
+        pnl_color = "#4caf50" if float(pnl_net) >= 0 else "#f44336"
+        entry_ts = t.get("entry_ts", "")
+
+        # Build chart link for this trade
+        chart_params = urlencode({
+            "exchange": exchange,
+            "symbol": symbol,
+            "tf": tf,
+            "center_ts": entry_ts,
+            "run_id": run_id,
+            "trade_idx": i,
+        })
+        chart_href = f"/chart?{chart_params}"
+
+        rows.append(html.Tr([
+            html.Td(str(i + 1), style={"color": "#555"}),
+            html.Td(entry_ts[:19].replace("T", " "),
+                    style={"fontFamily": "monospace", "fontSize": "12px"}),
+            html.Td(t.get("exit_ts", "")[:19].replace("T", " "),
+                    style={"fontFamily": "monospace", "fontSize": "12px"}),
+            html.Td(f"{t.get('entry_price', 0):.4f}"),
+            html.Td(f"{t.get('exit_price', 0):.4f}"),
+            html.Td(f"${float(pnl_net):.4f}", style={"color": pnl_color}),
+            html.Td(
+                dcc.Link(
+                    "📊 Chart",
+                    href=chart_href,
+                    style={"color": "#80cbc4", "fontSize": "11px"},
+                ),
+            ),
+        ], style={"fontSize": "12px",
+                  "backgroundColor": "transparent" if i % 2 == 0 else "#1a1a1a"}))
+
+    header = html.Thead(html.Tr([
+        html.Th("#"),
+        html.Th("Entry Time"),
+        html.Th("Exit Time"),
+        html.Th("Entry $"),
+        html.Th("Exit $"),
+        html.Th("PnL Net"),
+        html.Th(""),
+    ], style={"color": "#666", "fontSize": "11px", "borderBottom": "1px solid #333"}))
+
+    return html.Div(
+        html.Table(
+            [header, html.Tbody(rows)],
+            style={"width": "100%", "borderCollapse": "collapse"},
+        ),
+        style={"maxHeight": "360px", "overflowY": "auto"},
+    )
 
 
 def _build_equity_figure(run_id: str) -> go.Figure:

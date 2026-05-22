@@ -274,6 +274,25 @@ backtest_page_layout = dbc.Container(
             className="mb-3",
         ),
 
+        # ── Trades ────────────────────────────────────────────────────────────
+        dbc.Row(
+            dbc.Col(
+                html.H6("Trades", style={"color": "#888", "fontSize": "12px"}),
+                width=12,
+            ),
+            className="mb-1 mt-1",
+        ),
+        dbc.Row(
+            dbc.Col(
+                html.Div(
+                    id="backtest-trades-div",
+                    style={"fontSize": "12px", "color": "#555"},
+                ),
+                width=12,
+            ),
+            className="mb-3",
+        ),
+
         # ── Run history ────────────────────────────────────────────────────────
         dbc.Row(dbc.Col(html.H6("Run History", className="mb-2"), width=12)),
         dbc.Row(
@@ -293,6 +312,7 @@ backtest_page_layout = dbc.Container(
         dcc.Store(id="backtest-run-id-store", data=None),
         dcc.Store(id="backtest-symbol-data", data=[]),    # full symbol list with min/max ts
         dcc.Store(id="backtest-date-range", data={}),     # {min_ts, max_ts} for selected symbol
+        dcc.Store(id="backtest-trades-store", data=[]),   # per-trade list from last completed run
         dcc.Interval(id="backtest-poll-interval", interval=2000, n_intervals=0, disabled=True),
     ],
     fluid=True,
