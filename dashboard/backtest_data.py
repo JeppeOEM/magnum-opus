@@ -11,7 +11,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-BOT_SERVICE_URL = os.environ.get("BOT_SERVICE_ADDR", "http://bot-service:8090")
+BOT_SERVICE_URL = os.environ.get("BOT_SERVICE_URL", "http://localhost:8090")
 QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
 
 _SAFE_IDENT = re.compile(r"^[A-Za-z0-9._\-]+$")

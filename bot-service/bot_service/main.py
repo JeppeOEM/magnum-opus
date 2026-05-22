@@ -402,18 +402,32 @@ def strategies_detail() -> list[dict[str, object]]:
 
 @app.get("/strategies")
 def list_strategies() -> list[dict[str, str]]:
+    """Return all strategy files from both active and inactive directories.
+
+    Each item includes ``folder`` (``"active"`` or ``"inactive"``) so callers
+    can distinguish deployed strategies from retired ones.
+    """
     settings = get_settings()
-    strategies_dir = Path(settings.bot_strategies_dir)
-    if not strategies_dir.is_dir():
-        return []
+    dirs: list[tuple[str, Path]] = [
+        ("active", Path(settings.bot_strategies_dir)),
+        ("inactive", Path(settings.bot_strategies_inactive_dir)),
+    ]
     result = []
-    for py_file in sorted(strategies_dir.glob("*.py")):
-        try:
-            code = py_file.read_text(encoding="utf-8")
-            file_hash = hash_file(py_file)
-            result.append({"name": py_file.stem, "hash": file_hash, "code": code})
-        except Exception:
-            pass
+    for folder, strategies_dir in dirs:
+        if not strategies_dir.is_dir():
+            continue
+        for py_file in sorted(strategies_dir.glob("*.py")):
+            try:
+                code = py_file.read_text(encoding="utf-8")
+                file_hash = hash_file(py_file)
+                result.append({
+                    "name": py_file.stem,
+                    "hash": file_hash,
+                    "code": code,
+                    "folder": folder,
+                })
+            except Exception:
+                pass
     return result
 
 
@@ -423,13 +437,22 @@ async def backtest_run(req: BacktestRunRequest) -> dict[str, str]:
     if not _IDENT_RE.match(req.strategy_name):
         raise HTTPException(status_code=400, detail="Invalid strategy name")
     settings = get_settings()
-    strategies_dir = Path(settings.bot_strategies_dir).resolve()
-    path = (strategies_dir / f"{req.strategy_name}.py").resolve()
-    try:
-        path.relative_to(strategies_dir)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid strategy name")
-    if not path.exists():
+    # Resolve strategy file from active dir first, then inactive dir.
+    candidate_dirs = [
+        Path(settings.bot_strategies_dir).resolve(),
+        Path(settings.bot_strategies_inactive_dir).resolve(),
+    ]
+    path: Path | None = None
+    for strategies_dir in candidate_dirs:
+        candidate = (strategies_dir / f"{req.strategy_name}.py").resolve()
+        try:
+            candidate.relative_to(strategies_dir)  # path-traversal guard
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid strategy name")
+        if candidate.exists():
+            path = candidate
+            break
+    if path is None:
         raise HTTPException(status_code=404, detail=f"Strategy not found: {req.strategy_name}")
     try:
         file_bytes = path.read_bytes()
@@ -629,13 +652,22 @@ async def backtest_validate(req: BacktestValidateRequest) -> dict[str, str]:
     if not _IDENT_RE.match(req.strategy_name):
         raise HTTPException(status_code=400, detail="Invalid strategy name")
     settings = get_settings()
-    strategies_dir = Path(settings.bot_strategies_dir).resolve()
-    path = (strategies_dir / f"{req.strategy_name}.py").resolve()
-    try:
-        path.relative_to(strategies_dir)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid strategy name")
-    if not path.exists():
+    # Resolve from active dir first, then inactive.
+    candidate_dirs = [
+        Path(settings.bot_strategies_dir).resolve(),
+        Path(settings.bot_strategies_inactive_dir).resolve(),
+    ]
+    path: Path | None = None
+    for strategies_dir in candidate_dirs:
+        candidate = (strategies_dir / f"{req.strategy_name}.py").resolve()
+        try:
+            candidate.relative_to(strategies_dir)  # path-traversal guard
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid strategy name")
+        if candidate.exists():
+            path = candidate
+            break
+    if path is None:
         raise HTTPException(status_code=404, detail=f"Strategy not found: {req.strategy_name}")
     run_id = str(uuid.uuid4())
     _put_validate_result(run_id, {"status": "running"})

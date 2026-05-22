@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     bot_shutdown_timeout_s: int = 30
     bot_filewatcher_interval_s: int = 60
     bot_strategies_dir: str = "strategies/active"
+    bot_strategies_inactive_dir: str = "strategies/inactive"
     bot_exchange: str = "bybit"
 
     # WebSocket fallback

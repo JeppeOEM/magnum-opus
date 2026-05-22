@@ -26,7 +26,13 @@ def load_strategy_options(_id: str, _n_clicks) -> tuple:
             style={"color": "#ff9800"},
         )
         return [], status
-    options = [{"label": s["name"], "value": s["name"]} for s in strategies]
+    options = [
+        {
+            "label": f"{s['name']} [{s.get('folder', 'active')}]",
+            "value": s["name"],
+        }
+        for s in strategies
+    ]
     return options, ""
 
 
