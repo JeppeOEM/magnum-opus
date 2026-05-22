@@ -1,0 +1,95 @@
+/*
+ * Dark-theme fixes for dcc.Dropdown (Dash 4.x / React Select v5).
+ * Emotion CSS generates dynamic class names, so we match on the suffix.
+ */
+
+/* ── Control (the "input box" area) ─────────────────────────────────────── */
+.dash-dropdown [class$="-control"],
+.dash-dropdown [class*="-control "] {
+    background-color: #2c2c2c !important;
+    border-color: #555 !important;
+}
+
+/* ── Single selected value ───────────────────────────────────────────────── */
+.dash-dropdown [class$="-singleValue"] {
+    color: #e0e0e0 !important;
+}
+
+/* ── Placeholder text ────────────────────────────────────────────────────── */
+.dash-dropdown [class$="-placeholder"] {
+    color: #888 !important;
+}
+
+/* ── Typed input inside the control ─────────────────────────────────────── */
+.dash-dropdown [class$="-Input"] input,
+.dash-dropdown [class$="-input"] input {
+    color: #e0e0e0 !important;
+    caret-color: #e0e0e0 !important;
+}
+
+/* ── Dropdown menu container ─────────────────────────────────────────────── */
+.dash-dropdown [class$="-menu"],
+.dash-dropdown [class$="-MenuList"] {
+    background-color: #262626 !important;
+    border: 1px solid #444 !important;
+}
+
+.dash-dropdown [class$="-menu-list"] {
+    background-color: #262626 !important;
+}
+
+/* ── Each option row ─────────────────────────────────────────────────────── */
+.dash-dropdown [class$="-option"] {
+    background-color: #262626 !important;
+    color: #ccc !important;
+}
+
+.dash-dropdown [class$="-option"]:hover {
+    background-color: #37474f !important;
+    color: #fff !important;
+}
+
+/* focused (keyboard navigation) */
+.dash-dropdown [class*="-option"][class*="focused"] {
+    background-color: #37474f !important;
+    color: #fff !important;
+}
+
+/* selected */
+.dash-dropdown [class*="-option"][class*="selected"] {
+    background-color: #1565c0 !important;
+    color: #fff !important;
+}
+
+/* ── Multi-select: selected tag pills ────────────────────────────────────── */
+.dash-dropdown [class$="-multiValue"] {
+    background-color: #1565c0 !important;
+}
+
+.dash-dropdown [class$="-multiValue"] > div:first-child {
+    color: #fff !important;
+}
+
+/* Remove (×) button in multi tag */
+.dash-dropdown [class$="-multiValue"] > div:last-child {
+    color: #fff !important;
+}
+
+.dash-dropdown [class$="-multiValue"] > div:last-child:hover {
+    background-color: #b71c1c !important;
+    color: #fff !important;
+}
+
+/* ── Indicator icons (chevron, clear) ────────────────────────────────────── */
+.dash-dropdown [class$="-indicatorContainer"] svg {
+    fill: #888 !important;
+}
+
+.dash-dropdown [class$="-indicatorContainer"]:hover svg {
+    fill: #ccc !important;
+}
+
+/* ── Separator line between value and chevron ────────────────────────────── */
+.dash-dropdown [class$="-indicatorSeparator"] {
+    background-color: #555 !important;
+}
