@@ -82,7 +82,7 @@ def test_load_strategy_class_returns_class(tmp_path: Path) -> None:
 def test_load_strategy_class_raises_on_no_class(tmp_path: Path) -> None:
     f = tmp_path / "empty.py"
     f.write_text(_NO_STRATEGY)
-    with pytest.raises(ValueError, match="No BaseStrategy"):
+    with pytest.raises(ValueError, match="No strategy class found"):
         load_strategy_class(f)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import abc as _abc
 import hashlib
 import importlib.util
 import math
@@ -16,7 +17,7 @@ from bot_service.backtest.commission import BybitCommissionInfo, KuCoinCommissio
 from bot_service.backtest.equity import EquitySampler, collect_equity
 from bot_service.backtest.feeds import QuestDBFeed
 from bot_service.backtest.writer import BacktestResultWriter
-from bot_service.strategy.base import BaseStrategy
+from bot_service.strategy.base import BaseStrategy, _HISTORY_COLUMNS
 
 log = structlog.get_logger()
 
@@ -46,6 +47,21 @@ class BacktestResult:
     avg_pnl_per_trade: float
     total_fees_usd: float
     passes_fee_gate: bool
+    # Extended metrics
+    annualized_return_pct: float = 0.0
+    sqn: float = 0.0
+    max_drawdown_usd: float = 0.0
+    max_drawdown_duration_bars: int = 0
+    profit_factor: float = 0.0
+    avg_win_usd: float = 0.0
+    avg_loss_usd: float = 0.0
+    best_trade_usd: float = 0.0
+    worst_trade_usd: float = 0.0
+    max_consec_wins: int = 0
+    max_consec_losses: int = 0
+    avg_trade_bars: float = 0.0
+    n_long_trades: int = 0
+    n_short_trades: int = 0
     equity_curve: list[tuple[str, float]] = field(default_factory=list)
     # Contiguous segments of valid data found in the query window.
     # Each dict: {"start": ISO_str, "end": ISO_str, "bars": int}
@@ -110,6 +126,15 @@ def load_strategy_class(path: Path) -> type:
         raise ValueError(f"Import error for {path}: {exc}") from exc
 
 
+def _safe_float(val: Any, default: float = 0.0) -> float:
+    """Coerce to float; return default if None, NaN, or inf."""
+    try:
+        f = float(val)
+        return default if (math.isnan(f) or math.isinf(f)) else f
+    except (TypeError, ValueError):
+        return default
+
+
 def _compute_metrics(
     results: list[Any],
     initial_capital: float,
@@ -117,41 +142,89 @@ def _compute_metrics(
 ) -> dict[str, float | int | bool]:
     strat = results[0]
 
-    # SharpeRatio — can return None (no trades) or NaN (insufficient returns).
+    # ── Sharpe Ratio ─────────────────────────────────────────────────────────
+    # Can return None (no trades) or NaN (insufficient returns).
     # NaN is truthy in Python, so `val or 0.0` does NOT replace it; guard explicitly.
     sharpe = 0.0
     if hasattr(strat.analyzers, "sharpe"):
         sr = strat.analyzers.sharpe.get_analysis()
-        _raw_sharpe = sr.get("sharperatio")
-        if _raw_sharpe is not None and not (isinstance(_raw_sharpe, float) and math.isnan(_raw_sharpe)):
-            sharpe = float(_raw_sharpe)
+        sharpe = _safe_float(sr.get("sharperatio"))
 
-    # DrawDown
-    # Note: backtrader's DrawDown analyzer can return None for "drawdown" when
-    # there are no bars with a drawdown (e.g. equity only goes up, or no trades).
+    # ── DrawDown ──────────────────────────────────────────────────────────────
     # dict.get(key, default) returns None when the key EXISTS with value None;
     # the default only fires for missing keys.  Guard with `or 0.0`.
     max_dd = 0.0
+    max_dd_usd = 0.0
+    max_dd_bars = 0
     if hasattr(strat.analyzers, "drawdown"):
         dd = strat.analyzers.drawdown.get_analysis()
-        max_dd = float(dd.get("max", {}).get("drawdown") or 0.0)
+        max_dd = _safe_float(dd.get("max", {}).get("drawdown"))
+        max_dd_usd = _safe_float(dd.get("max", {}).get("moneydown"))
+        max_dd_bars = int(dd.get("max", {}).get("len") or 0)
 
-    # TradeAnalyzer
+    # ── TradeAnalyzer ─────────────────────────────────────────────────────────
     n_trades = 0
     win_rate = 0.0
     avg_pnl = 0.0
-    total_fees = 0.0
+    profit_factor = 0.0
+    avg_win = 0.0
+    avg_loss = 0.0
+    best_trade = 0.0
+    worst_trade = 0.0
+    max_consec_wins = 0
+    max_consec_losses = 0
+    avg_trade_bars = 0.0
+    n_long = 0
+    n_short = 0
+
     if hasattr(strat.analyzers, "trades"):
         ta = strat.analyzers.trades.get_analysis()
         total_closed = int(ta.get("total", {}).get("closed") or 0)
         n_trades = total_closed
         won = int(ta.get("won", {}).get("total") or 0)
+        lost = int(ta.get("lost", {}).get("total") or 0)
         win_rate = (won / total_closed * 100.0) if total_closed > 0 else 0.0
+
+        # PnL averages
         pnl_net = ta.get("pnl", {}).get("net") or {}
-        total_pnl = float(pnl_net.get("total") or 0.0)
+        total_pnl = _safe_float(pnl_net.get("total"))
         avg_pnl = total_pnl / total_closed if total_closed > 0 else 0.0
 
-    # Fees: sum from completed orders
+        # Profit factor = gross wins / |gross losses|
+        won_pnl_total = _safe_float(ta.get("won", {}).get("pnl", {}).get("total"))
+        lost_pnl_total = abs(_safe_float(ta.get("lost", {}).get("pnl", {}).get("total")))
+        if lost_pnl_total > 0:
+            profit_factor = round(won_pnl_total / lost_pnl_total, 4)
+
+        # Per-trade averages / extremes
+        avg_win = _safe_float(ta.get("won", {}).get("pnl", {}).get("average"))
+        avg_loss = _safe_float(ta.get("lost", {}).get("pnl", {}).get("average"))
+        best_trade = _safe_float(ta.get("won", {}).get("pnl", {}).get("max"))
+        worst_trade = _safe_float(ta.get("lost", {}).get("pnl", {}).get("max"))
+
+        # Streaks
+        max_consec_wins = int(ta.get("streak", {}).get("won", {}).get("longest") or 0)
+        max_consec_losses = int(ta.get("streak", {}).get("lost", {}).get("longest") or 0)
+
+        # Average bars per trade (ta["len"] is a flat dict: {"total": N, "average": X, ...})
+        avg_trade_bars = _safe_float(ta.get("len", {}).get("average"))
+
+        # Long / short breakdown
+        n_long = int(ta.get("long", {}).get("total") or 0)
+        n_short = int(ta.get("short", {}).get("total") or 0)
+
+    # ── Returns (annualised) ──────────────────────────────────────────────────
+    ann_return = 0.0
+    if hasattr(strat.analyzers, "returns"):
+        ann_return = _safe_float(strat.analyzers.returns.get_analysis().get("rnorm100"))
+
+    # ── SQN (Van Tharp System Quality Number) ────────────────────────────────
+    sqn_val = 0.0
+    if hasattr(strat.analyzers, "sqn"):
+        sqn_val = _safe_float(strat.analyzers.sqn.get_analysis().get("sqn"))
+
+    # ── Fees ──────────────────────────────────────────────────────────────────
+    total_fees = 0.0
     if hasattr(strat, "_bt_total_fees"):
         total_fees = float(strat._bt_total_fees)
 
@@ -168,6 +241,21 @@ def _compute_metrics(
         "avg_pnl_per_trade": round(avg_pnl, 4),
         "total_fees_usd": round(total_fees, 4),
         "passes_fee_gate": passes_fee_gate,
+        # Extended
+        "annualized_return_pct": round(ann_return, 4),
+        "sqn": round(sqn_val, 4),
+        "max_drawdown_usd": round(max_dd_usd, 4),
+        "max_drawdown_duration_bars": max_dd_bars,
+        "profit_factor": profit_factor,
+        "avg_win_usd": round(avg_win, 4),
+        "avg_loss_usd": round(avg_loss, 4),
+        "best_trade_usd": round(best_trade, 4),
+        "worst_trade_usd": round(worst_trade, 4),
+        "max_consec_wins": max_consec_wins,
+        "max_consec_losses": max_consec_losses,
+        "avg_trade_bars": round(avg_trade_bars, 2),
+        "n_long_trades": n_long,
+        "n_short_trades": n_short,
     }
 
 
@@ -185,11 +273,21 @@ def run_backtest(
 ) -> BacktestResult:
     """Run a full backtest and return a BacktestResult.
 
-    Does NOT write strategy_snapshots or backtest_runs to QuestDB — that is
-    the responsibility of the REST layer (story 27-4). Order fills are written
-    to order_events (backtest=true) via BacktestResultWriter as before.
+    Supports two strategy patterns:
+
+    1. **Pure bt.Strategy subclasses** — no bridge needed; backtrader calls
+       ``next()`` directly and the strategy uses ``self.buy()``/``self.sell()``.
+
+    2. **BaseStrategy subclasses** — live/backtest dual-mode strategies that
+       use the event-bus pattern (``subscribe()`` → ``register_bar_handler()``
+       → handler → ``_order_worker.post(OrderRequest)``).  The bridge in
+       ``_WrappedStrategy`` translates each backtrader bar into a ``BarClose``
+       event and each ``OrderRequest`` into a ``self.buy()``/``self.sell()``
+       call so that strategies run unmodified.
     """
     from datetime import datetime, timezone
+    import pandas as _pd
+    from bot_service.bus.event_types import BarClose as _BarClose
 
     file_hash = hash_file(path)
     strategy_name = path.stem
@@ -216,64 +314,174 @@ def run_backtest(
         symbol=symbol,
     )
 
-    # Wrap strategy to track fees, fills, and per-trade entry/exit data.
-    # BaseStrategy subclasses require (name, settings) args that backtrader
-    # does not pass.  Detect this case and supply safe defaults so cerebro
-    # can instantiate the wrapper without a TypeError.
+    # Detect strategy style
     _is_base_strategy = issubclass(cls, BaseStrategy)
+    # True when the user's class inherits BaseStrategy but NOT bt.Strategy.
+    # In this case backtrader's MetaStrategy hasn't run, so _addobserver and
+    # other bt internals are missing — we must include bt.Strategy in the MRO.
+    _needs_bt_base = _is_base_strategy and not issubclass(cls, bt.Strategy)
     _bt_strategy_name = strategy_name
 
-    class _WrappedStrategy(cls):  # type: ignore[valid-type]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            if _is_base_strategy:
+    def _apply_fill(instance: Any, order: Any) -> None:
+        """Shared fill handler — records fees and per-trade entry/exit."""
+        if order.status == order.Completed:
+            pos_size = float(instance.broker.getposition(instance.data).size)
+            writer.write_fill(order, pos_size)
+            comm = abs(float(order.executed.comm))
+            instance._bt_total_fees += comm
+
+            fill_price = float(order.executed.price)
+            fill_size = float(order.executed.size)
+            try:
+                bar_dt = instance.data.datetime.datetime(0).isoformat()
+            except Exception:
+                bar_dt = ""
+
+            if fill_size > 0:  # BUY → open long
+                instance._bt_pending_entry = {
+                    "entry_ts": bar_dt,
+                    "entry_price": fill_price,
+                    "entry_size": abs(fill_size),
+                    "entry_comm": comm,
+                }
+            elif fill_size < 0 and instance._bt_pending_entry is not None:  # SELL → close long
+                e = instance._bt_pending_entry
+                size = abs(fill_size)
+                pnl = (fill_price - e["entry_price"]) * size
+                pnl_net = pnl - e["entry_comm"] - comm
+                instance._bt_trades.append({
+                    "entry_ts": e["entry_ts"],
+                    "exit_ts": bar_dt,
+                    "entry_price": round(e["entry_price"], 6),
+                    "exit_price": round(fill_price, 6),
+                    "size": round(size, 8),
+                    "pnl": round(pnl, 4),
+                    "pnl_net": round(pnl_net, 4),
+                    "direction": "long",
+                })
+                instance._bt_pending_entry = None
+
+    if _needs_bt_base:
+        # ── BaseStrategy subclass that doesn't already inherit bt.Strategy ──
+        # Create a combined metaclass to satisfy both ABCMeta and MetaStrategy.
+        _WrappedMeta = type("_WrappedMeta", (type(bt.Strategy), _abc.ABCMeta), {})
+
+        class _WrappedStrategy(cls, bt.Strategy, metaclass=_WrappedMeta):  # type: ignore[valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
                 from bot_service.config import get_settings
-                super().__init__(name=_bt_strategy_name, settings=get_settings())
-            else:
-                super().__init__(*args, **kwargs)
-            self._bt_total_fees: float = 0.0
-            self._bt_trades: list[dict] = []
-            # Pending entry info (set when a buy order completes).
-            self._bt_pending_entry: dict | None = None
+                cls.__init__(self, name=_bt_strategy_name, settings=get_settings())
+                self._bt_total_fees: float = 0.0
+                self._bt_trades: list[dict] = []
+                self._bt_pending_entry: dict | None = None
+                # Inject the exchange name so on_bar handlers don't bail out.
+                self._exchange = exchange
 
-        def notify_order(self, order: Any) -> None:
-            super().notify_order(order)
-            if order.status == order.Completed:
-                pos_size = float(self.broker.getposition(self.data).size)
-                writer.write_fill(order, pos_size)
-                comm = abs(float(order.executed.comm))
-                self._bt_total_fees += comm
+                # Fake order worker: translates OrderRequest → bt buy/sell calls.
+                class _FakeOrderWorker:
+                    def __init__(self_, strat: Any) -> None:
+                        self_.strat = strat
 
-                # --- per-trade tracking ---
-                fill_price = float(order.executed.price)
-                fill_size = float(order.executed.size)
+                    def post(self_, req: Any) -> None:
+                        s = self_.strat
+                        try:
+                            price = float(s.data.close[0])
+                            if price <= 0 or math.isnan(price):
+                                return
+                            units = (float(s.broker.getvalue()) * float(req.size)) / price
+                            pos = float(s.broker.getposition(s.data).size)
+                            if req.side == "buy":
+                                if req.order_role == "exit" and pos < 0:
+                                    s.buy(size=abs(pos))       # cover short
+                                elif req.order_role != "exit" and units > 0:
+                                    s.buy(size=units)          # open long
+                            elif req.side == "sell":
+                                if req.order_role == "exit" and pos > 0:
+                                    s.sell(size=pos)           # close long
+                                elif req.order_role != "exit" and units > 0:
+                                    s.sell(size=units)         # open short
+                        except Exception:
+                            pass
+
+                self._order_worker = _FakeOrderWorker(self)
+
+                # Patch get_history to return an empty DataFrame so subscribe()
+                # does not make HTTP calls to QuestDB during backtesting.
+                def _noop_history(sym: str, tf_: str, n: int) -> _pd.DataFrame:
+                    return _pd.DataFrame(columns=_HISTORY_COLUMNS)
+
+                _orig_get_history = self.get_history
+                self.get_history = _noop_history  # type: ignore[method-assign]
                 try:
-                    bar_dt = self.data.datetime.datetime(0).isoformat()
-                except Exception:
-                    bar_dt = ""
+                    self.subscribe()
+                except Exception as exc:
+                    log.warning("backtest_subscribe_failed", error=str(exc))
+                finally:
+                    self.get_history = _orig_get_history  # type: ignore[method-assign]
 
-                if fill_size > 0:  # BUY → open long
-                    self._bt_pending_entry = {
-                        "entry_ts": bar_dt,
-                        "entry_price": fill_price,
-                        "entry_size": abs(fill_size),
-                        "entry_comm": comm,
-                    }
-                elif fill_size < 0 and self._bt_pending_entry is not None:  # SELL → close long
-                    e = self._bt_pending_entry
-                    size = abs(fill_size)
-                    pnl = (fill_price - e["entry_price"]) * size
-                    pnl_net = pnl - e["entry_comm"] - comm
-                    self._bt_trades.append({
-                        "entry_ts": e["entry_ts"],
-                        "exit_ts": bar_dt,
-                        "entry_price": round(e["entry_price"], 6),
-                        "exit_price": round(fill_price, 6),
-                        "size": round(size, 8),
-                        "pnl": round(pnl, 4),
-                        "pnl_net": round(pnl_net, 4),
-                        "direction": "long",
-                    })
-                    self._bt_pending_entry = None
+            def next(self) -> None:
+                """Drive the strategy via the event-bus path on each bar."""
+                try:
+                    close_val = float(self.data.close[0])
+                except Exception:
+                    return
+                if math.isnan(close_val):
+                    return
+
+                # Use the key the strategy registered under (e.g. "BTC-USDT"/"1m")
+                # rather than the run_backtest params — handles format differences.
+                if self._bar_handlers:
+                    bt_sym, bt_tf_str = next(iter(self._bar_handlers))
+                else:
+                    bt_sym, bt_tf_str = symbol, tf
+
+                try:
+                    ts_ms = int(self.data.datetime.datetime(0).timestamp() * 1000)
+                except Exception:
+                    ts_ms = 0
+
+                def _s(attr: str, default: float = 0.0) -> float:
+                    try:
+                        v = float(getattr(self.data, attr)[0])
+                        return default if math.isnan(v) else v
+                    except Exception:
+                        return default
+
+                bar = _BarClose(
+                    exchange=exchange,
+                    symbol=bt_sym,
+                    tf=bt_tf_str,
+                    ts=ts_ms,
+                    open=float(self.data.open[0]),
+                    high=float(self.data.high[0]),
+                    low=float(self.data.low[0]),
+                    close=close_val,
+                    volume=_s("volume"),
+                    quote_volume=_s("quote_volume"),
+                    trade_count=int(_s("trade_count")),
+                    is_complete=True,
+                )
+                self.on_bar(bar)
+
+            def notify_order(self, order: Any) -> None:
+                super().notify_order(order)
+                _apply_fill(self, order)
+
+    else:
+        # ── Pure bt.Strategy or already inherits bt.Strategy ─────────────────
+        class _WrappedStrategy(cls):  # type: ignore[valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                if _is_base_strategy:
+                    from bot_service.config import get_settings
+                    super().__init__(name=_bt_strategy_name, settings=get_settings())
+                else:
+                    super().__init__(*args, **kwargs)
+                self._bt_total_fees: float = 0.0
+                self._bt_trades: list[dict] = []
+                self._bt_pending_entry: dict | None = None
+
+            def notify_order(self, order: Any) -> None:
+                super().notify_order(order)
+                _apply_fill(self, order)
 
     commission_cls = _COMMISSION_MAP.get(exchange.lower())
 
@@ -286,6 +494,8 @@ def run_backtest(
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name="sharpe", timeframe=bt.TimeFrame.Minutes)
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name="drawdown")
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name="trades")
+    cerebro.addanalyzer(bt.analyzers.Returns, _name="returns")
+    cerebro.addanalyzer(bt.analyzers.SQN, _name="sqn")
     cerebro.addobserver(EquitySampler, sample_every=sample_every)
 
     log.info("backtest_started", strategy=strategy_name, symbol=symbol, tf=tf,
@@ -315,5 +525,5 @@ def run_backtest(
         equity_curve=equity,
         data_segments=feed.data_segments,
         trades=trades,
-        **{k: v for k, v in metrics.items() if k != "equity_curve"},  # type: ignore[arg-type]
+        **metrics,  # type: ignore[arg-type]
     )

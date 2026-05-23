@@ -5,6 +5,7 @@ from urllib.parse import urlencode
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import dash_bootstrap_components as dbc
 from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
 
@@ -266,21 +267,65 @@ def _build_metrics(result: dict, segments: list | None = None) -> object:
     if not result:
         return html.Div("Run a backtest to see metrics.", style={"color": "#888", "fontSize": "13px"})
 
-    metric_rows = [
-        _metric_row("Return",       f"{result.get('total_return_pct', 0):.2f}%"),
-        _metric_row("Sharpe",       f"{result.get('sharpe_ratio', 0):.2f}"),
-        _metric_row("Max Drawdown", f"{result.get('max_drawdown_pct', 0):.2f}%"),
-        _metric_row("Trades",       str(result.get("n_trades", 0))),
-        _metric_row("Win Rate",     f"{result.get('win_rate_pct', 0):.1f}%"),
-        _metric_row(
-            "Fee Gate",
-            "✓ Pass" if result.get("passes_fee_gate") else "✗ Fail",
-            "#4caf50" if result.get("passes_fee_gate") else "#f44336",
-        ),
+    def _cell(label: str, value: str, color: str = "#ccc") -> dbc.Col:
+        return dbc.Col([
+            html.Div(label, style={"color": "#666", "fontSize": "10px", "marginBottom": "1px"}),
+            html.Div(value, style={"color": color, "fontSize": "13px", "fontWeight": "500"}),
+        ], width=3, style={"marginBottom": "6px"})
+
+    def _section(title: str, cells: list) -> html.Div:
+        return html.Div([
+            html.Div(title, style={
+                "color": "#555", "fontSize": "10px", "letterSpacing": "0.08em",
+                "textTransform": "uppercase", "marginBottom": "4px", "marginTop": "8px",
+                "borderBottom": "1px solid #2a2a2a", "paddingBottom": "2px",
+            }),
+            dbc.Row(cells),
+        ])
+
+    pct = result.get("total_return_pct", 0)
+    ret_color = "#4caf50" if pct >= 0 else "#f44336"
+    cap = float(result.get("initial_capital", 1) or 1)
+    final = float(result.get("final_value", cap))
+    pnl_usd = final - cap
+
+    fee_pass = result.get("passes_fee_gate", False)
+
+    sections = [
+        _section("Returns", [
+            _cell("Total Return", f"{pct:.2f}%", ret_color),
+            _cell("Annualised", f"{result.get('annualized_return_pct', 0):.2f}%", ret_color),
+            _cell("P&L (USD)", f"${pnl_usd:+,.2f}", ret_color),
+            _cell("Avg / Trade", f"${result.get('avg_pnl_per_trade', 0):.4f}"),
+        ]),
+        _section("Risk", [
+            _cell("Sharpe", f"{result.get('sharpe_ratio', 0):.3f}"),
+            _cell("SQN", f"{result.get('sqn', 0):.2f}"),
+            _cell("Max DD %", f"{result.get('max_drawdown_pct', 0):.2f}%", "#ff9800"),
+            _cell("Max DD $", f"${result.get('max_drawdown_usd', 0):.2f}", "#ff9800"),
+            _cell("DD Duration", f"{result.get('max_drawdown_duration_bars', 0)} bars"),
+        ]),
+        _section("Trades", [
+            _cell("Total", str(result.get("n_trades", 0))),
+            _cell("Win Rate", f"{result.get('win_rate_pct', 0):.1f}%"),
+            _cell("Profit Factor", f"{result.get('profit_factor', 0):.3f}"),
+            _cell("Long / Short", f"{result.get('n_long_trades', 0)} / {result.get('n_short_trades', 0)}"),
+            _cell("Avg Win", f"${result.get('avg_win_usd', 0):.4f}", "#4caf50"),
+            _cell("Avg Loss", f"${result.get('avg_loss_usd', 0):.4f}", "#f44336"),
+            _cell("Best", f"${result.get('best_trade_usd', 0):.4f}", "#4caf50"),
+            _cell("Worst", f"${result.get('worst_trade_usd', 0):.4f}", "#f44336"),
+            _cell("Consec W/L", f"{result.get('max_consec_wins', 0)} / {result.get('max_consec_losses', 0)}"),
+            _cell("Avg Bars", f"{result.get('avg_trade_bars', 0):.1f}"),
+        ]),
+        _section("Costs", [
+            _cell("Fees (USD)", f"${result.get('total_fees_usd', 0):.4f}"),
+            _cell("Fee Gate", "✓ Pass" if fee_pass else "✗ Fail",
+                  "#4caf50" if fee_pass else "#f44336"),
+        ]),
     ]
 
     coverage_section = _build_coverage(segments or [])
-    return html.Div([html.Div(metric_rows), coverage_section])
+    return html.Div([html.Div(sections), coverage_section])
 
 
 def _build_coverage(segments: list[dict]) -> object:
@@ -374,11 +419,23 @@ def _build_coverage(segments: list[dict]) -> object:
     return html.Div(items)
 
 
-def _metric_row(label: str, value: str, color: str = "#ccc") -> dbc.Row:
-    return dbc.Row([
-        dbc.Col(html.Span(label, style={"color": "#888", "fontSize": "12px"}), width=5),
-        dbc.Col(html.Span(value, style={"color": color}), width=7),
-    ], className="mb-1")
+
+
+def _trade_duration(entry_ts: str, exit_ts: str) -> str:
+    """Human-readable duration between two ISO timestamp strings."""
+    try:
+        from datetime import datetime as _dt
+        delta = _dt.fromisoformat(exit_ts) - _dt.fromisoformat(entry_ts)
+        s = int(delta.total_seconds())
+        if s < 0:
+            return "?"
+        if s < 60:
+            return f"{s}s"
+        if s < 3600:
+            return f"{s // 60}m {s % 60}s"
+        return f"{s // 3600}h {(s % 3600) // 60}m"
+    except Exception:
+        return "?"
 
 
 def _build_trades_table(
@@ -388,53 +445,57 @@ def _build_trades_table(
     symbol: str,
     tf: str,
 ) -> object:
-    """Render the per-trade table.  Each row has a 📊 link that navigates to /chart."""
+    """Render the per-trade table.  Each row has a 📊 link to the chart page."""
     if not trades:
         return html.Div("No trades recorded.", style={"color": "#555"})
 
+    _mono = {"fontFamily": "monospace", "fontSize": "12px"}
     rows = []
+    running_pnl = 0.0
     for i, t in enumerate(trades):
-        pnl_net = t.get("pnl_net", t.get("pnl", 0)) or 0
-        pnl_color = "#4caf50" if float(pnl_net) >= 0 else "#f44336"
+        pnl_net = float(t.get("pnl_net", t.get("pnl", 0)) or 0)
+        running_pnl += pnl_net
+        pnl_color = "#4caf50" if pnl_net >= 0 else "#f44336"
+        run_color = "#4caf50" if running_pnl >= 0 else "#f44336"
         entry_ts = t.get("entry_ts", "")
+        exit_ts = t.get("exit_ts", "")
+        dur = _trade_duration(entry_ts, exit_ts)
 
-        # Build chart link for this trade
         chart_params = urlencode({
-            "exchange": exchange,
-            "symbol": symbol,
-            "tf": tf,
-            "center_ts": entry_ts,
-            "run_id": run_id,
-            "trade_idx": i,
+            "exchange": exchange, "symbol": symbol, "tf": tf,
+            "center_ts": entry_ts, "run_id": run_id, "trade_idx": i,
         })
-        chart_href = f"/chart?{chart_params}"
 
         rows.append(html.Tr([
             html.Td(str(i + 1), style={"color": "#555"}),
-            html.Td(entry_ts[:19].replace("T", " "),
-                    style={"fontFamily": "monospace", "fontSize": "12px"}),
-            html.Td(t.get("exit_ts", "")[:19].replace("T", " "),
-                    style={"fontFamily": "monospace", "fontSize": "12px"}),
-            html.Td(f"{t.get('entry_price', 0):.4f}"),
-            html.Td(f"{t.get('exit_price', 0):.4f}"),
-            html.Td(f"${float(pnl_net):.4f}", style={"color": pnl_color}),
             html.Td(
-                dcc.Link(
-                    "📊 Chart",
-                    href=chart_href,
-                    style={"color": "#80cbc4", "fontSize": "11px"},
-                ),
+                html.Span(t.get("direction", "long")[0].upper(),
+                          style={"color": "#80cbc4" if t.get("direction") == "long" else "#ff9800"}),
+            ),
+            html.Td(entry_ts[:19].replace("T", " "), style=_mono),
+            html.Td(exit_ts[:19].replace("T", " "), style=_mono),
+            html.Td(dur, style={"color": "#888", "fontSize": "11px"}),
+            html.Td(f"{t.get('entry_price', 0):.4f}", style=_mono),
+            html.Td(f"{t.get('exit_price', 0):.4f}", style=_mono),
+            html.Td(f"${pnl_net:+.4f}", style={"color": pnl_color, **_mono}),
+            html.Td(f"${running_pnl:+.4f}", style={"color": run_color, **_mono}),
+            html.Td(
+                dcc.Link("📊", href=f"/chart?{chart_params}",
+                         style={"color": "#80cbc4", "fontSize": "14px"}),
             ),
         ], style={"fontSize": "12px",
                   "backgroundColor": "transparent" if i % 2 == 0 else "#1a1a1a"}))
 
     header = html.Thead(html.Tr([
-        html.Th("#"),
+        html.Th("#", style={"width": "3%"}),
+        html.Th("Dir", style={"width": "3%"}),
         html.Th("Entry Time"),
         html.Th("Exit Time"),
+        html.Th("Dur"),
         html.Th("Entry $"),
         html.Th("Exit $"),
         html.Th("PnL Net"),
+        html.Th("Run PnL"),
         html.Th(""),
     ], style={"color": "#666", "fontSize": "11px", "borderBottom": "1px solid #333"}))
 
@@ -443,30 +504,55 @@ def _build_trades_table(
             [header, html.Tbody(rows)],
             style={"width": "100%", "borderCollapse": "collapse"},
         ),
-        style={"maxHeight": "360px", "overflowY": "auto"},
+        style={"maxHeight": "420px", "overflowY": "auto"},
     )
 
 
 def _build_equity_figure(run_id: str) -> go.Figure:
     df = backtest_data.fetch_equity_curve(run_id)
-    fig = go.Figure()
     if df.empty:
+        fig = go.Figure()
         fig.update_layout(template="plotly_dark", title="No equity data")
         return fig
+
+    # Compute drawdown % from equity curve
+    equity = df["portfolio_value"]
+    roll_max = equity.cummax()
+    dd_pct = (equity - roll_max) / roll_max * 100.0
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.65, 0.35],
+        vertical_spacing=0.04,
+    )
+
     fig.add_trace(go.Scatter(
         x=df["bar_ts"],
-        y=df["portfolio_value"],
+        y=equity,
         mode="lines",
         line={"color": "#4fc3f7", "width": 1.5},
         name="Portfolio Value",
-    ))
+    ), row=1, col=1)
+
+    fig.add_trace(go.Scatter(
+        x=df["bar_ts"],
+        y=dd_pct,
+        mode="lines",
+        fill="tozeroy",
+        line={"color": "#ff9800", "width": 1.0},
+        fillcolor="rgba(255,152,0,0.15)",
+        name="Drawdown %",
+    ), row=2, col=1)
+
     fig.update_layout(
         template="plotly_dark",
         margin={"l": 40, "r": 10, "t": 30, "b": 30},
-        title="Equity Curve",
-        xaxis_title=None,
-        yaxis_title="Value (USD)",
+        legend={"orientation": "h", "y": 1.06, "x": 0, "font": {"size": 11}},
+        showlegend=True,
     )
+    fig.update_yaxes(title_text="USD", row=1, col=1)
+    fig.update_yaxes(title_text="DD %", row=2, col=1)
     return fig
 
 
