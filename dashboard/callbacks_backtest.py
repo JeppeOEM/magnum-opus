@@ -1,16 +1,15 @@
 """Callbacks for the /backtests page."""
 from __future__ import annotations
 
-from urllib.parse import urlencode
-
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, callback, dash_table, dcc, html, no_update
+from dash import Input, Output, State, callback, dash_table, dcc, html, no_update, ALL
 
 import backtest_data
-from layout_backtest import _EMPTY_EQUITY_FIG
+import charts
+from layout_backtest import _EMPTY_EQUITY_FIG, _EMPTY_CANDLE_FIG
 
 
 # ── Strategy dropdown ─────────────────────────────────────────────────────────
@@ -101,7 +100,6 @@ def update_range_info(date_range, start_mode, end_mode, custom_start, custom_end
     end   = _resolve_date(end_mode,   "last",  custom_end,   dr.get("max_ts"))
     if not start and not end:
         return ""
-    # Show up to "YYYY-MM-DD HH:MM:SS" (19 chars); replace T separator for readability.
     start_str = start[:19].replace("T", " ") if start else "?"
     end_str   = end[:19].replace("T", " ")   if end   else "?"
     return f"Range: {start_str}  →  {end_str}"
@@ -176,7 +174,7 @@ def on_run_click(
         symbol=symbol,
         tf=tf or "1s",
         exchange=exchange or "bybit",
-        start_date=start_date[:19],   # trim sub-second precision if present
+        start_date=start_date[:19],
         end_date=end_date[:19],
         capital=cap,
     )
@@ -196,6 +194,8 @@ def on_run_click(
     Output("backtest-history-table", "children", allow_duplicate=True),
     Output("backtest-trades-store", "data"),
     Output("backtest-trades-div", "children"),
+    Output("backtest-result-store", "data"),
+    Output("backtest-gap-segments-store", "data"),
     Input("backtest-poll-interval", "n_intervals"),
     State("backtest-run-id-store", "data"),
     State("backtest-strategy-dd", "value"),
@@ -206,21 +206,22 @@ def on_run_click(
 )
 def on_poll(n_intervals, run_id, strategy_name, exchange, symbol, tf):
     if not run_id:
-        return no_update, no_update, no_update, True, no_update, no_update, no_update
+        return no_update, no_update, no_update, True, no_update, no_update, no_update, no_update, no_update
     status_data = backtest_data.poll_run_status(run_id)
     if "error" in status_data:
         err = html.Span(f"❌ Poll error: {status_data['error']}", style={"color": "#f44336"})
-        return err, no_update, no_update, True, no_update, no_update, no_update
+        return err, no_update, no_update, True, no_update, no_update, no_update, no_update, no_update
     status = status_data.get("status", "unknown")
     if status == "running":
-        return f"Running… (run_id={run_id})", no_update, no_update, False, no_update, no_update, no_update
+        return f"Running… (run_id={run_id})", no_update, no_update, False, no_update, no_update, no_update, no_update, no_update
     if status == "failed":
         error_msg = status_data.get("error", "unknown error")
         err = html.Span(f"❌ Failed: {error_msg}", style={"color": "#f44336"})
-        return err, no_update, no_update, True, no_update, no_update, no_update
+        return err, no_update, no_update, True, no_update, no_update, no_update, no_update, no_update
     result = status_data.get("result", {})
-    metrics_div = _build_metrics(result, result.get("data_segments", []))
-    eq_fig = _build_equity_figure(run_id)
+    segments = result.get("data_segments", [])
+    metrics_div = _build_metrics(result, segments)
+    eq_fig = _build_equity_figure(result)
     df = backtest_data.fetch_run_history(strategy_name=strategy_name)
     _, history_table = _build_history(df)
     trades = result.get("trades", [])
@@ -233,6 +234,8 @@ def on_poll(n_intervals, run_id, strategy_name, exchange, symbol, tf):
         history_table,
         trades,
         trades_div,
+        result,
+        segments,
     )
 
 
@@ -250,14 +253,219 @@ def on_hash_filter(hash_val, strategy_name):
     return table
 
 
+# ── Gap modal ─────────────────────────────────────────────────────────────────
+
+@callback(
+    Output("backtest-gap-modal", "is_open"),
+    Output("backtest-gap-modal-body", "children"),
+    Input("backtest-gap-badge-btn", "n_clicks"),
+    State("backtest-gap-segments-store", "data"),
+    prevent_initial_call=True,
+)
+def open_gap_modal(n_clicks, segments):
+    if not n_clicks:
+        return False, no_update
+    return True, _build_coverage_detail(segments or [])
+
+
+# ── Trade chart button → load inline chart ───────────────────────────────────
+
+@callback(
+    Output("backtest-chart-candles-store", "data"),
+    Output("backtest-chart-trade-idx", "data"),
+    Output("backtest-chart-collapse", "is_open"),
+    Output("backtest-inline-chart-title", "children"),
+    Input({"type": "trade-chart-btn", "index": ALL}, "n_clicks"),
+    State("backtest-exchange-dd", "value"),
+    State("backtest-symbol-dd", "value"),
+    State("backtest-tf-dd", "value"),
+    State("backtest-trades-store", "data"),
+    prevent_initial_call=True,
+)
+def on_trade_chart_click(all_clicks, exchange, symbol, tf, trades):
+    from dash import ctx
+    if not any(c for c in (all_clicks or []) if c):
+        return no_update, no_update, no_update, no_update
+
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        return no_update, no_update, no_update, no_update
+
+    trade_idx = triggered.get("index", 0)
+    trades = trades or []
+    if not (0 <= trade_idx < len(trades)):
+        return no_update, no_update, no_update, no_update
+
+    trade = trades[trade_idx]
+    entry_ts = trade.get("entry_ts", "")
+
+    rows: list[dict] = []
+    if entry_ts:
+        rows = backtest_data.fetch_candles_around(
+            exchange or "bybit",
+            symbol or "",
+            entry_ts,
+            tf=tf or "1s",
+            window=300,
+        )
+
+    title = (
+        f"Trade #{trade_idx + 1}  ·  {trade.get('direction','long').upper()}  ·  "
+        f"Entry {entry_ts[:19].replace('T', ' ')}  ·  "
+        f"PnL ${float(trade.get('pnl_net', 0) or 0):.4f}"
+    )
+    return rows, trade_idx, True, title
+
+
+@callback(
+    Output("backtest-chart-collapse", "is_open", allow_duplicate=True),
+    Input("backtest-close-chart-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_inline_chart(n_clicks):
+    return False
+
+
+# ── Inline candlestick chart ──────────────────────────────────────────────────
+
+@callback(
+    Output("backtest-inline-candlestick", "figure"),
+    Input("backtest-chart-candles-store", "data"),
+    Input("backtest-chart-trade-idx", "data"),
+    State("backtest-trades-store", "data"),
+)
+def build_inline_chart(candle_rows, trade_idx, all_trades):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    fig = charts.build_candlestick(df)
+    if not df.empty:
+        fig = charts.add_volume_levels(fig, df)
+
+    all_trades = all_trades or []
+    if not all_trades:
+        return fig
+
+    # All entry/exit markers
+    entry_x = [t.get("entry_ts") for t in all_trades if t.get("entry_ts")]
+    entry_y = [t.get("entry_price") for t in all_trades if t.get("entry_ts")]
+    if entry_x:
+        fig.add_trace(go.Scatter(
+            x=entry_x, y=entry_y, mode="markers",
+            marker=dict(symbol="triangle-up", size=10, color="#26A69A",
+                        line=dict(color="#1a7a71", width=1)),
+            name="Buy",
+            hovertemplate="Entry<br>%{x}<br>%{y:.4f}<extra></extra>",
+        ))
+
+    exit_x = [t.get("exit_ts") for t in all_trades if t.get("exit_ts")]
+    exit_y = [t.get("exit_price") for t in all_trades if t.get("exit_ts")]
+    if exit_x:
+        fig.add_trace(go.Scatter(
+            x=exit_x, y=exit_y, mode="markers",
+            marker=dict(symbol="triangle-down", size=10, color="#EF5350",
+                        line=dict(color="#b33b38", width=1)),
+            name="Sell",
+            hovertemplate="Exit<br>%{x}<br>%{y:.4f}<extra></extra>",
+        ))
+
+    # Highlighted trade
+    sel = None
+    if trade_idx is not None and 0 <= int(trade_idx) < len(all_trades):
+        sel = all_trades[int(trade_idx)]
+
+    if sel:
+        e_ts, e_px = sel.get("entry_ts"), sel.get("entry_price")
+        x_ts, x_px = sel.get("exit_ts"),  sel.get("exit_price")
+        if e_ts and e_px is not None:
+            fig.add_trace(go.Scatter(
+                x=[e_ts], y=[e_px], mode="markers",
+                marker=dict(symbol="triangle-up", size=18, color="#FFD700",
+                            line=dict(color="#fff", width=2)),
+                name="Selected Buy",
+                hovertemplate="Selected Entry<br>%{x}<br>%{y:.4f}<extra></extra>",
+            ))
+        if x_ts and x_px is not None:
+            fig.add_trace(go.Scatter(
+                x=[x_ts], y=[x_px], mode="markers",
+                marker=dict(symbol="triangle-down", size=18, color="#FF9800",
+                            line=dict(color="#fff", width=2)),
+                name="Selected Sell",
+                hovertemplate="Selected Exit<br>%{x}<br>%{y:.4f}<extra></extra>",
+            ))
+        if e_ts and x_ts:
+            pnl = sel.get("pnl_net", sel.get("pnl", 0)) or 0
+            fill_color = "rgba(38,166,154,0.10)" if float(pnl) >= 0 else "rgba(239,83,80,0.10)"
+            fig.add_vrect(
+                x0=e_ts, x1=x_ts,
+                fillcolor=fill_color,
+                line_width=0,
+                annotation_text=f"{'▲' if float(pnl) >= 0 else '▼'} ${float(pnl):.2f}",
+                annotation_font_color="#ccc",
+                annotation_font_size=11,
+                annotation_position="top left",
+            )
+    return fig
+
+
+@callback(
+    Output("backtest-inline-cvd", "figure"),
+    Input("backtest-chart-candles-store", "data"),
+)
+def update_inline_cvd(candle_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    return charts.build_cvd_panel(df)
+
+
+@callback(
+    Output("backtest-inline-bidask", "figure"),
+    Input("backtest-chart-candles-store", "data"),
+)
+def update_inline_bidask(candle_rows):
+    df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
+    return charts.build_bidask_panel(df)
+
+
+# ── Candle detail modal (click on inline chart) ───────────────────────────────
+
+@callback(
+    Output("backtest-candle-modal", "is_open"),
+    Output("backtest-candle-modal-title", "children"),
+    Output("backtest-candle-modal-body", "children"),
+    Input("backtest-inline-candlestick", "clickData"),
+    State("backtest-exchange-dd", "value"),
+    State("backtest-symbol-dd", "value"),
+    State("backtest-tf-dd", "value"),
+    prevent_initial_call=True,
+)
+def open_candle_detail_modal(click_data, exchange, symbol, tf):
+    if not click_data:
+        return False, no_update, no_update
+
+    pts = click_data.get("points", [])
+    if not pts:
+        return False, no_update, no_update
+
+    # Candlestick click gives x = timestamp string
+    ts = pts[0].get("x", "")
+    if not ts:
+        return False, no_update, no_update
+
+    detail = backtest_data.fetch_candle_detail(
+        exchange or "bybit", symbol or "", ts, tf=tf or "1s"
+    )
+
+    title = f"Candle @ {str(ts)[:19].replace('T', ' ')}  ·  {exchange} : {symbol}  ·  {tf}"
+
+    if not detail:
+        body = html.Div("No data found for this candle.", style={"color": "#888"})
+        return True, title, body
+
+    body = _build_candle_detail_table(detail)
+    return True, title, body
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resolve_date(mode: str, sentinel: str, custom: str | None, ts_from_db: str | None) -> str:
-    """Return the ISO date string to use for start/end.
-
-    - If mode matches sentinel ("first"/"last"), use ts_from_db.
-    - Otherwise use the custom input value.
-    """
     if mode == sentinel:
         return (ts_from_db or "")
     return (custom or "")
@@ -324,36 +532,57 @@ def _build_metrics(result: dict, segments: list | None = None) -> object:
         ]),
     ]
 
-    coverage_section = _build_coverage(segments or [])
-    return html.Div([html.Div(sections), coverage_section])
+    # Gap badge — collapsed by default, click opens modal
+    gap_badge = _build_coverage_badge(segments or [])
+
+    return html.Div([html.Div(sections), gap_badge])
 
 
-def _build_coverage(segments: list[dict]) -> object:
-    """Render a Data Coverage section showing valid segments and gaps.
-
-    When there are many segments (fragmented data from a fresh DB), only the
-    largest ones are shown — tiny isolated 1-2 bar segments are folded into a
-    summary count.  No more than 8 segment rows are rendered.
-    """
-    from datetime import datetime as _dt
-
+def _build_coverage_badge(segments: list[dict]) -> object:
+    """Return a compact ⚡ badge if there are gaps; nothing if data is clean."""
     if not segments:
         return html.Div()
 
     total_bars = sum(s["bars"] for s in segments)
+    n_gaps = max(0, len(segments) - 1)
+
+    if n_gaps == 0:
+        # Single contiguous segment — show a small green note
+        return html.Div(
+            html.Span(f"✓ {total_bars:,} bars  ·  no gaps",
+                      style={"color": "#4caf50", "fontSize": "11px"}),
+            style={"marginTop": "6px"},
+        )
+
+    return html.Div(
+        dbc.Button(
+            [
+                html.Span("⚡", style={"marginRight": "4px"}),
+                html.Span(
+                    f"Gap detected ({n_gaps} gap{'s' if n_gaps != 1 else ''}  ·  "
+                    f"{total_bars:,} usable bars)",
+                    style={"fontSize": "11px"},
+                ),
+            ],
+            id="backtest-gap-badge-btn",
+            color="warning",
+            outline=True,
+            size="sm",
+            style={"marginTop": "8px"},
+        ),
+        style={"marginTop": "4px"},
+    )
+
+
+def _build_coverage_detail(segments: list[dict]) -> object:
+    """Full coverage detail for the gap modal."""
+    from datetime import datetime as _dt
+
+    if not segments:
+        return html.Div("No segment data available.", style={"color": "#888"})
+
+    total_bars = sum(s["bars"] for s in segments)
     n_segs = len(segments)
-
-    # Separate "significant" segments (>= 5 bars) from tiny ones.
-    BIG = [s for s in segments if s["bars"] >= 5]
-    tiny_count = n_segs - len(BIG)
-    tiny_bars  = sum(s["bars"] for s in segments if s["bars"] < 5)
-
-    # If even big segments are too many, cap at 8 (first 5 + last 3).
-    display_segs = BIG
-    truncated = 0
-    if len(display_segs) > 8:
-        truncated = len(display_segs) - 8
-        display_segs = display_segs[:5] + display_segs[-3:]
 
     def _fmt_gap(t1_iso: str, t2_iso: str) -> str:
         try:
@@ -366,63 +595,37 @@ def _build_coverage(segments: list[dict]) -> object:
         except Exception:
             return "?"
 
-    _mono = {"fontFamily": "monospace", "fontSize": "11px"}
-    items: list = [
-        html.Div(
-            "Data Coverage",
-            style={"color": "#888", "fontSize": "11px", "marginTop": "10px",
-                   "marginBottom": "4px", "fontWeight": "bold", "letterSpacing": "0.05em"},
-        )
-    ]
+    _mono = {"fontFamily": "monospace", "fontSize": "12px"}
+    items: list = []
 
-    for i, seg in enumerate(display_segs):
+    for i, seg in enumerate(segments):
         start = seg["start"][:19].replace("T", " ")
         end   = seg["end"][:19].replace("T", " ")
         bars  = seg["bars"]
         items.append(
             html.Div([
                 html.Span(f"▶ {start}", style={**_mono, "color": "#4fc3f7"}),
-                html.Span("  →  ", style={"color": "#555", "fontSize": "11px"}),
+                html.Span("  →  ", style={"color": "#555"}),
                 html.Span(end, style={**_mono, "color": "#4fc3f7"}),
                 html.Span(f"  ({bars:,} bars)", style={"color": "#888", "fontSize": "11px"}),
-            ], style={"marginBottom": "2px"})
+            ], style={"marginBottom": "4px"})
         )
-        # Gap indicator between consecutive display segments
-        if i < len(display_segs) - 1:
-            # find the original next significant segment for the gap calc
-            orig_idx = BIG.index(seg)
-            if orig_idx + 1 < len(BIG):
-                next_seg = BIG[orig_idx + 1]
-            else:
-                continue
-            gap_str = _fmt_gap(seg["end"], next_seg["start"])
-            # Show truncation marker before the gap if we skipped segments
-            if truncated and i == 4:
-                items.append(html.Div(
-                    f"  … {truncated} more segment(s) …",
-                    style={"color": "#555", "fontSize": "11px", "fontFamily": "monospace",
-                           "marginBottom": "2px"},
-                ))
+        if i < len(segments) - 1:
+            gap_str = _fmt_gap(seg["end"], segments[i + 1]["start"])
             items.append(html.Div(
                 f"  ⚡ gap  {gap_str}",
-                style={**_mono, "color": "#ff9800", "marginBottom": "2px"},
+                style={**_mono, "color": "#ff9800", "marginBottom": "4px"},
             ))
 
-    # Summary footer
-    footer_parts = [f"{total_bars:,} usable bars in {n_segs} segment{'s' if n_segs != 1 else ''}"]
-    if tiny_count:
-        footer_parts.append(f"({tiny_count} tiny ≤4-bar segment{'s' if tiny_count != 1 else ''} with {tiny_bars} bars not shown)")
+    items.append(html.Hr(style={"borderColor": "#333", "margin": "10px 0"}))
     items.append(html.Div(
-        "  ".join(footer_parts),
-        style={"color": "#666", "fontSize": "11px", "marginTop": "4px"},
+        f"{total_bars:,} usable bars across {n_segs} segment{'s' if n_segs != 1 else ''}",
+        style={"color": "#888", "fontSize": "12px"},
     ))
     return html.Div(items)
 
 
-
-
 def _trade_duration(entry_ts: str, exit_ts: str) -> str:
-    """Human-readable duration between two ISO timestamp strings."""
     try:
         from datetime import datetime as _dt
         delta = _dt.fromisoformat(exit_ts) - _dt.fromisoformat(entry_ts)
@@ -445,7 +648,7 @@ def _build_trades_table(
     symbol: str,
     tf: str,
 ) -> object:
-    """Render the per-trade table.  Each row has a 📊 link to the chart page."""
+    """Render the per-trade table.  Each row has a 📊 button to load the inline chart."""
     if not trades:
         return html.Div("No trades recorded.", style={"color": "#555"})
 
@@ -458,13 +661,8 @@ def _build_trades_table(
         pnl_color = "#4caf50" if pnl_net >= 0 else "#f44336"
         run_color = "#4caf50" if running_pnl >= 0 else "#f44336"
         entry_ts = t.get("entry_ts", "")
-        exit_ts = t.get("exit_ts", "")
+        exit_ts  = t.get("exit_ts", "")
         dur = _trade_duration(entry_ts, exit_ts)
-
-        chart_params = urlencode({
-            "exchange": exchange, "symbol": symbol, "tf": tf,
-            "center_ts": entry_ts, "run_id": run_id, "trade_idx": i,
-        })
 
         rows.append(html.Tr([
             html.Td(str(i + 1), style={"color": "#555"}),
@@ -473,22 +671,27 @@ def _build_trades_table(
                           style={"color": "#80cbc4" if t.get("direction") == "long" else "#ff9800"}),
             ),
             html.Td(entry_ts[:19].replace("T", " "), style=_mono),
-            html.Td(exit_ts[:19].replace("T", " "), style=_mono),
+            html.Td(exit_ts[:19].replace("T", " "),  style=_mono),
             html.Td(dur, style={"color": "#888", "fontSize": "11px"}),
             html.Td(f"{t.get('entry_price', 0):.4f}", style=_mono),
-            html.Td(f"{t.get('exit_price', 0):.4f}", style=_mono),
-            html.Td(f"${pnl_net:+.4f}", style={"color": pnl_color, **_mono}),
+            html.Td(f"{t.get('exit_price', 0):.4f}",  style=_mono),
+            html.Td(f"${pnl_net:+.4f}",    style={"color": pnl_color, **_mono}),
             html.Td(f"${running_pnl:+.4f}", style={"color": run_color, **_mono}),
             html.Td(
-                dcc.Link("📊", href=f"/chart?{chart_params}",
-                         style={"color": "#80cbc4", "fontSize": "14px"}),
+                dbc.Button(
+                    "📊",
+                    id={"type": "trade-chart-btn", "index": i},
+                    color="link",
+                    size="sm",
+                    style={"color": "#80cbc4", "fontSize": "14px", "padding": "0 4px"},
+                ),
             ),
         ], style={"fontSize": "12px",
                   "backgroundColor": "transparent" if i % 2 == 0 else "#1a1a1a"}))
 
     header = html.Thead(html.Tr([
-        html.Th("#", style={"width": "3%"}),
-        html.Th("Dir", style={"width": "3%"}),
+        html.Th("#",        style={"width": "3%"}),
+        html.Th("Dir",      style={"width": "3%"}),
         html.Th("Entry Time"),
         html.Th("Exit Time"),
         html.Th("Dur"),
@@ -508,14 +711,20 @@ def _build_trades_table(
     )
 
 
-def _build_equity_figure(run_id: str) -> go.Figure:
-    df = backtest_data.fetch_equity_curve(run_id)
+def _build_equity_figure(result: dict) -> go.Figure:
+    """Build equity curve figure from the in-memory result dict."""
+    df = backtest_data.build_equity_from_result(result)
+    if df.empty:
+        # Fallback: try QuestDB (handles the case where result was loaded from
+        # history rather than the current in-memory store)
+        run_id = result.get("run_id", "")
+        if run_id:
+            df = backtest_data.fetch_equity_curve(run_id)
     if df.empty:
         fig = go.Figure()
         fig.update_layout(template="plotly_dark", title="No equity data")
         return fig
 
-    # Compute drawdown % from equity curve
     equity = df["portfolio_value"]
     roll_max = equity.cummax()
     dd_pct = (equity - roll_max) / roll_max * 100.0
@@ -578,3 +787,97 @@ def _build_history(df: pd.DataFrame) -> tuple[list[dict], object | None]:
         style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": "#262626"}],
     )
     return hash_opts, tbl
+
+
+def _build_candle_detail_table(detail: dict) -> object:
+    """Render all candle fields grouped by category in a two-column table."""
+    _GROUPS = [
+        ("OHLCV", ["open", "high", "low", "close", "volume", "quote_volume",
+                   "trade_count", "twap"]),
+        ("Mid-price", ["mid_price_open", "mid_price_high", "mid_price_low", "vwmp"]),
+        ("Spread", ["spread_high", "spread_low", "spread_mean", "effective_spread"]),
+        ("OB Best Quotes", ["best_bid_open", "best_ask_open", "best_bid", "best_ask"]),
+        ("Trade Flow", ["buy_volume", "sell_volume", "buy_count",
+                        "block_buy_volume", "block_sell_volume"]),
+        ("Trade Distribution", ["max_trade_size", "large_bid_orders", "large_ask_orders",
+                                 "first_trade_offset_ms", "last_trade_offset_ms",
+                                 "trade_clustering", "max_consecutive_run"]),
+        ("Volatility", ["realized_vol", "realized_skewness", "uptick_count", "downtick_count"]),
+        ("OFI", ["ofi", "ofi_l1"]),
+        ("CVD", ["cum_delta", "cvd_divergence"]),
+        ("OB Activity", ["bid_order_arrivals", "ask_order_arrivals",
+                          "bid_cancel_count", "ask_cancel_count", "ob_modify_count",
+                          "avg_bid_order_size", "avg_ask_order_size",
+                          "best_bid_changes", "best_ask_changes", "quote_stuff_ratio"]),
+        ("Microstructure Signals", ["hawkes_intensity", "microprice", "microprice_mid_delta",
+                                     "cancel_bias", "trade_aggressiveness",
+                                     "trade_sign_autocorr", "inter_trade_interval_std_ms",
+                                     "num_trade_price_levels"]),
+        ("Footprint", ["poc_price", "value_area_high", "value_area_low", "poc_volume",
+                        "imbalance_ratio", "imbalance_buy_count", "imbalance_sell_count",
+                        "imbalance_stack_buy", "imbalance_stack_sell", "single_print_count",
+                        "unfinished_top", "unfinished_bottom", "absorption_detected",
+                        "footprint_delta_divergence"]),
+        ("Iceberg", ["iceberg_bid_detected", "iceberg_ask_detected", "iceberg_price"]),
+        ("VWAP Deviation", ["buy_vwap_deviation_bps", "sell_vwap_deviation_bps"]),
+        ("Quality", ["is_partial", "gap_count", "bar_count"]),
+    ]
+
+    _cell_style = {"padding": "3px 8px", "fontSize": "12px", "borderBottom": "1px solid #2a2a2a"}
+    _label_style = {"color": "#888", "fontFamily": "monospace"}
+    _val_style   = {"color": "#ccc", "fontFamily": "monospace"}
+    _head_style  = {
+        "color": "#555", "fontSize": "10px", "letterSpacing": "0.08em",
+        "textTransform": "uppercase", "padding": "6px 8px 2px",
+        "borderBottom": "1px solid #333",
+    }
+
+    def _fmt(v) -> str:
+        if v is None:
+            return "—"
+        if isinstance(v, bool):
+            return "✓" if v else "✗"
+        if isinstance(v, float):
+            return f"{v:.6g}"
+        if isinstance(v, str) and len(v) > 60:
+            return v[:57] + "…"
+        return str(v)
+
+    sections: list = []
+    for group_name, fields in _GROUPS:
+        rows_in_group = []
+        for field in fields:
+            if field in detail:
+                val = detail[field]
+                rows_in_group.append(html.Tr([
+                    html.Td(field, style={**_cell_style, **_label_style}),
+                    html.Td(_fmt(val), style={**_cell_style, **_val_style}),
+                ]))
+        if rows_in_group:
+            sections.append(html.Tr(
+                html.Td(group_name, colSpan=2, style=_head_style)
+            ))
+            sections.extend(rows_in_group)
+
+    # Also show any fields not covered by the groups above
+    known = {f for _, fields in _GROUPS for f in fields}
+    extras = [
+        html.Tr([
+            html.Td(k, style={**_cell_style, **_label_style}),
+            html.Td(_fmt(v), style={**_cell_style, **_val_style}),
+        ])
+        for k, v in detail.items()
+        if k not in known and k not in ("ts", "exchange", "symbol", "footprint_json",
+                                         "single_print_levels_json")
+    ]
+    if extras:
+        sections.append(html.Tr(html.Td("Other", colSpan=2, style=_head_style)))
+        sections.extend(extras)
+
+    return html.Div(
+        html.Table(
+            sections,
+            style={"width": "100%", "borderCollapse": "collapse"},
+        ),
+        style={"maxHeight": "70vh", "overflowY": "auto"},
+    )

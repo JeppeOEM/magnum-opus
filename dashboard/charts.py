@@ -31,6 +31,65 @@ def build_candlestick(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def add_hover_overlay(
+    fig: go.Figure,
+    df: pd.DataFrame,
+    fields: list[str],
+) -> go.Figure:
+    """Add an invisible scatter trace whose hover shows *fields* from *df*.
+
+    The candlestick's built-in hover is suppressed by placing an invisible
+    Scatter trace at each bar's mid-price with a fully custom hovertemplate.
+    The base candlestick hover still shows OHLCV; this overlay appends the
+    selected profile fields below it via a separate legendgroup.
+
+    Fields not present in the DataFrame are silently skipped.
+    """
+    if df.empty or not fields:
+        return fig
+
+    present = [f for f in fields if f in df.columns]
+    if not present:
+        return fig
+
+    df = df.copy()
+    # Mid price for marker placement (invisible, zero opacity)
+    mid = (pd.to_numeric(df["high"], errors="coerce") +
+           pd.to_numeric(df["low"], errors="coerce")) / 2
+
+    # Build customdata matrix: shape (n_bars, n_fields)
+    custom_cols = []
+    for f in present:
+        col = pd.to_numeric(df[f], errors="coerce")
+        # For non-numeric, fall back to string
+        if col.isna().all():
+            col = df[f].astype(str)
+        custom_cols.append(col)
+
+    import numpy as np
+    customdata = np.column_stack([c.values for c in custom_cols])
+
+    # Build hovertemplate lines
+    ht_lines = []
+    for i, f in enumerate(present):
+        ht_lines.append(f"<b>{f}</b>: %{{customdata[{i}]:.6g}}")
+    hovertemplate = "<br>".join(ht_lines) + "<extra></extra>"
+
+    fig.add_trace(
+        go.Scatter(
+            x=df["ts"],
+            y=mid,
+            mode="markers",
+            marker=dict(size=8, opacity=0, color="rgba(0,0,0,0)"),
+            customdata=customdata,
+            hovertemplate=hovertemplate,
+            name="Hover Profile",
+            showlegend=False,
+        )
+    )
+    return fig
+
+
 def add_volume_levels(fig: go.Figure, df: pd.DataFrame) -> go.Figure:
     df = df.copy()
     price_range = df["high"].max() - df["low"].min()

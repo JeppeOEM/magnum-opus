@@ -14,6 +14,7 @@ from layout_bots import bot_page_layout
 from layout_backtest import backtest_page_layout
 from layout_chart import chart_page_layout
 from layout_ml import ml_page_layout
+from layout_profiles import profiles_page_layout
 from layout_strategies import strategies_browser_layout, strategies_detail_layout
 
 _QUESTDB_URL = os.environ.get("QUESTDB_HTTP_ADDR", "http://questdb:9000")
@@ -37,6 +38,8 @@ def render_page(pathname):
     if pathname and pathname.startswith("/strategies/"):
         strategy_name = pathname.split("/strategies/", 1)[1]
         return strategies_detail_layout(strategy_name)
+    if pathname == "/profiles":
+        return profiles_page_layout
     return _charts_page
 
 
@@ -110,8 +113,10 @@ def live_update(n, candle_rows, last_ts, selected, ob_rows, ob_cursor, ob_cursor
 @callback(
     Output("candlestick-graph", "figure"),
     Input("candle-store", "data"),
+    State("hover-profile-store", "data"),
 )
-def update_candlestick(candle_rows):
+def update_candlestick(candle_rows, hover_profile_store):
+    from layout_profiles import DEFAULT_PROFILES
     df = pd.DataFrame(candle_rows) if candle_rows else pd.DataFrame()
     fig = charts.build_candlestick(df)
     if not df.empty:
@@ -119,6 +124,12 @@ def update_candlestick(candle_rows):
         fig = charts.add_volume_bubbles(fig, df)
         fig = absorption_overlay(fig, df)
         fig = liquidity_overlay(fig, df)
+        # Add hover overlay for active profile fields
+        store = hover_profile_store or DEFAULT_PROFILES
+        active = store.get("active", "")
+        fields = store.get("profiles", {}).get(active, {}).get("fields", [])
+        if fields:
+            fig = charts.add_hover_overlay(fig, df, fields)
     return fig
 
 

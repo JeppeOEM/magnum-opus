@@ -20,6 +20,7 @@ import callbacks_bots  # noqa: F401, E402
 import callbacks_backtest  # noqa: F401, E402
 import callbacks_chart  # noqa: F401, E402
 import callbacks_strategies  # noqa: F401, E402
+import callbacks_profiles  # noqa: F401, E402
 import layout_ml  # noqa: F401, E402  — registers ml component IDs
 import callbacks_ml  # noqa: F401, E402
 

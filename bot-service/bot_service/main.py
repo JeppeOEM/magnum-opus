@@ -379,8 +379,14 @@ async def _run_backtest_task(
             await asyncio.to_thread(_ilp_write_equity, settings.questdb_ilp_addr, result)
         from dataclasses import asdict
         metrics = asdict(result)
-        metrics.pop("equity_curve")
-        metrics["equity_curve_points"] = len(result.equity_curve)
+        # Keep equity_curve in the in-memory result so the dashboard can render
+        # it immediately without waiting for QuestDB WAL to commit.
+        # Downsample to at most 2000 points to keep payload manageable.
+        ec = metrics.get("equity_curve", [])
+        if len(ec) > 2000:
+            step = max(1, len(ec) // 2000)
+            metrics["equity_curve"] = ec[::step]
+        metrics["equity_curve_points"] = len(ec)
         _put_result(run_id, {"status": "done", "result": metrics})
     except Exception as exc:
         log.error("backtest_task_failed", run_id=run_id, error=str(exc))

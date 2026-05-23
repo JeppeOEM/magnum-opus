@@ -194,3 +194,63 @@ def fetch_equity_curve(run_id: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["bar_ts"] = pd.to_datetime(df["bar_ts"], utc=True, errors="coerce")
     return df
+
+
+def build_equity_from_result(result: dict) -> pd.DataFrame:
+    """Build equity curve DataFrame from the in-memory result dict.
+
+    Avoids the QuestDB WAL-commit latency that would cause an empty chart
+    immediately after a run completes.  Falls back to empty DF on bad data.
+    """
+    eq = result.get("equity_curve", [])
+    if not eq:
+        return pd.DataFrame()
+    # equity_curve is [[iso_ts, value], ...] from dataclasses.asdict
+    df = pd.DataFrame(eq, columns=["bar_ts", "portfolio_value"])
+    df["bar_ts"] = pd.to_datetime(df["bar_ts"], utc=True, errors="coerce")
+    df = df.dropna(subset=["bar_ts"])
+    return df
+
+
+def fetch_candle_detail(
+    exchange: str,
+    symbol: str,
+    ts: str,
+    tf: str = "1s",
+) -> dict:
+    """Return all columns for the single candle that contains *ts*.
+
+    Uses the same table mapping as fetch_candles_around.  Returns an empty
+    dict when the row is not found or inputs are invalid.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    if not _SAFE_IDENT.match(exchange) or not _SAFE_IDENT.match(symbol):
+        return {}
+
+    table = _CHART_TABLE.get(tf, "snapshot_1s")
+    bar_sec = _TF_BAR_SECONDS.get(tf, 1)
+
+    try:
+        ts_clean = ts.replace("Z", "+00:00")
+        bar_dt = datetime.fromisoformat(ts_clean)
+        if bar_dt.tzinfo is None:
+            bar_dt = bar_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        logger.warning("fetch_candle_detail: bad ts %r", ts)
+        return {}
+
+    # Widen window slightly to account for sub-second precision mismatches
+    start_dt = bar_dt - timedelta(milliseconds=500)
+    end_dt = bar_dt + timedelta(seconds=bar_sec + 1)
+    start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+    sql = (
+        f"SELECT * FROM {table} "
+        f"WHERE exchange='{exchange}' AND symbol='{symbol}' "
+        f"AND ts >= '{start_str}' AND ts < '{end_str}' "
+        f"LIMIT 1"
+    )
+    rows = _qdb(sql)
+    return rows[0] if rows else {}

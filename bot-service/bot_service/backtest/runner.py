@@ -389,16 +389,22 @@ def run_backtest(
                                 return
                             units = (float(s.broker.getvalue()) * float(req.size)) / price
                             pos = float(s.broker.getposition(s.data).size)
+                            # Determine order type kwargs (limit vs market)
+                            is_limit = getattr(req, "order_type", "market") == "limit"
+                            lp = getattr(req, "limit_price", None)
+                            order_kwargs: dict[str, Any] = {}
+                            if is_limit and lp and not math.isnan(float(lp)):
+                                order_kwargs = {"exectype": bt.Order.Limit, "price": float(lp)}
                             if req.side == "buy":
                                 if req.order_role == "exit" and pos < 0:
-                                    s.buy(size=abs(pos))       # cover short
+                                    s.buy(size=abs(pos), **order_kwargs)   # cover short
                                 elif req.order_role != "exit" and units > 0:
-                                    s.buy(size=units)          # open long
+                                    s.buy(size=units, **order_kwargs)      # open long
                             elif req.side == "sell":
                                 if req.order_role == "exit" and pos > 0:
-                                    s.sell(size=pos)           # close long
+                                    s.sell(size=pos, **order_kwargs)       # close long
                                 elif req.order_role != "exit" and units > 0:
-                                    s.sell(size=units)         # open short
+                                    s.sell(size=units, **order_kwargs)     # open short
                         except Exception:
                             pass
 
@@ -461,6 +467,28 @@ def run_backtest(
                     is_complete=True,
                 )
                 self.on_bar(bar)
+
+                # Pub/sub-only strategies (no register_bar_handler calls) use
+                # _on_candles1s instead of the on_bar dispatch path.  Fire it with
+                # a synthetic payload so they work correctly in backtesting.
+                if not self._bar_handlers:
+                    candles1s_payload = {
+                        "symbol": bt_sym,
+                        "exchange": exchange,
+                        "tf": bt_tf_str,
+                        "ts": ts_ms,
+                        "open": float(self.data.open[0]),
+                        "high": float(self.data.high[0]),
+                        "low": float(self.data.low[0]),
+                        "close": close_val,
+                        "volume": _s("volume"),
+                        "quote_volume": _s("quote_volume"),
+                        "trade_count": int(_s("trade_count")),
+                    }
+                    try:
+                        self._on_candles1s(candles1s_payload)
+                    except Exception:
+                        pass
 
             def notify_order(self, order: Any) -> None:
                 super().notify_order(order)

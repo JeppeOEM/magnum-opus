@@ -38,6 +38,7 @@ _nav = dbc.Nav(
         dbc.NavLink("Backtests",  href="/backtests",  active="exact",    id="nav-backtests"),
         dbc.NavLink("Chart",      href="/chart",      active="partial",  id="nav-chart"),
         dbc.NavLink("ML",         href="/ml",         active="exact",    id="nav-ml"),
+        dbc.NavLink("Profiles",   href="/profiles",   active="exact",    id="nav-profiles"),
     ],
     pills=True,
     style={"marginBottom": "10px"},
@@ -141,6 +142,12 @@ layout = dbc.Container(
         dcc.Location(id="url", refresh=False),
         _nav,
         html.Div(id="page-content"),
+        # Global store: candle hover profiles — persisted in browser localStorage.
+        # Shape: {profiles: {name: {fields: [str, ...]}}, active: str}
+        dcc.Store(
+            id="hover-profile-store",
+            storage_type="local",
+        ),
     ],
     fluid=True,
     style={"padding": "12px"},

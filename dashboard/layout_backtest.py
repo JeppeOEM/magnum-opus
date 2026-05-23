@@ -39,6 +39,16 @@ _EMPTY_EQUITY_FIG.update_layout(
     yaxis_title="Value (USD)",
 )
 
+_EMPTY_CANDLE_FIG = go.Figure()
+_EMPTY_CANDLE_FIG.update_layout(
+    template="plotly_dark",
+    paper_bgcolor="#222222",
+    plot_bgcolor="#222222",
+    margin={"l": 40, "r": 10, "t": 30, "b": 30},
+    xaxis_rangeslider_visible=False,
+    title="Click a trade's 📊 button to load chart",
+)
+
 _label_style = {"color": "#888", "fontSize": "11px", "marginBottom": "2px"}
 
 backtest_page_layout = dbc.Container(
@@ -293,6 +303,58 @@ backtest_page_layout = dbc.Container(
             className="mb-3",
         ),
 
+        # ── Inline chart (shown when a trade's 📊 button is clicked) ──────────
+        dbc.Row(
+            dbc.Col(
+                dbc.Collapse(
+                    [
+                        dbc.Row([
+                            dbc.Col(
+                                html.Div(
+                                    id="backtest-inline-chart-title",
+                                    style={"color": "#aaa", "fontSize": "12px", "marginBottom": "4px"},
+                                ),
+                            ),
+                            dbc.Col(
+                                dbc.Button(
+                                    "✕",
+                                    id="backtest-close-chart-btn",
+                                    color="secondary",
+                                    size="sm",
+                                    style={"float": "right"},
+                                ),
+                                width="auto",
+                            ),
+                        ], align="center", className="mb-1"),
+                        dcc.Graph(
+                            id="backtest-inline-candlestick",
+                            figure=_EMPTY_CANDLE_FIG,
+                            style={"height": "480px"},
+                            config={
+                                "displayModeBar": True,
+                                "scrollZoom": True,
+                                "modeBarButtonsToRemove": ["select2d", "lasso2d"],
+                            },
+                        ),
+                        dbc.Row([
+                            dbc.Col(
+                                dcc.Graph(id="backtest-inline-cvd", figure={}, style={"height": "180px"}),
+                                width=6,
+                            ),
+                            dbc.Col(
+                                dcc.Graph(id="backtest-inline-bidask", figure={}, style={"height": "180px"}),
+                                width=6,
+                            ),
+                        ], className="mt-1"),
+                    ],
+                    id="backtest-chart-collapse",
+                    is_open=False,
+                ),
+                width=12,
+            ),
+            className="mb-3",
+        ),
+
         # ── Run history ────────────────────────────────────────────────────────
         dbc.Row(dbc.Col(html.H6("Run History", className="mb-2"), width=12)),
         dbc.Row(
@@ -308,11 +370,43 @@ backtest_page_layout = dbc.Container(
         ),
         dbc.Row(dbc.Col(html.Div(id="backtest-history-table"), width=12)),
 
+        # ── Gap detail modal ────────────────────────────────────────────────────
+        dbc.Modal(
+            [
+                dbc.ModalHeader(
+                    dbc.ModalTitle("⚡ Data Coverage & Gaps"),
+                    close_button=True,
+                ),
+                dbc.ModalBody(html.Div(id="backtest-gap-modal-body")),
+            ],
+            id="backtest-gap-modal",
+            is_open=False,
+            size="lg",
+        ),
+
+        # ── Candle detail modal ─────────────────────────────────────────────────
+        dbc.Modal(
+            [
+                dbc.ModalHeader(
+                    dbc.ModalTitle("Candle Detail", id="backtest-candle-modal-title"),
+                    close_button=True,
+                ),
+                dbc.ModalBody(html.Div(id="backtest-candle-modal-body")),
+            ],
+            id="backtest-candle-modal",
+            is_open=False,
+            size="xl",
+        ),
+
         # ── Hidden state ───────────────────────────────────────────────────────
         dcc.Store(id="backtest-run-id-store", data=None),
         dcc.Store(id="backtest-symbol-data", data=[]),    # full symbol list with min/max ts
         dcc.Store(id="backtest-date-range", data={}),     # {min_ts, max_ts} for selected symbol
         dcc.Store(id="backtest-trades-store", data=[]),   # per-trade list from last completed run
+        dcc.Store(id="backtest-result-store", data={}),   # full in-memory result dict
+        dcc.Store(id="backtest-gap-segments-store", data=[]),  # data_segments list
+        dcc.Store(id="backtest-chart-candles-store", data=[]), # candles for inline chart
+        dcc.Store(id="backtest-chart-trade-idx", data=None),   # selected trade index for inline chart
         dcc.Interval(id="backtest-poll-interval", interval=2000, n_intervals=0, disabled=True),
     ],
     fluid=True,
