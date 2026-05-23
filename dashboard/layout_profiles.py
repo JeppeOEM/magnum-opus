@@ -1,11 +1,10 @@
-"""Layout for the /profiles page — customise candle hover field profiles."""
+"""Layout for the /profiles page -- customise candle hover field profiles."""
 from __future__ import annotations
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
 # ── All snapshot_1s fields grouped by category ────────────────────────────────
-# Used both for the checklist and for building hovertemplate.
 
 FIELD_GROUPS: list[tuple[str, list[str]]] = [
     ("OHLCV", [
@@ -63,7 +62,6 @@ FIELD_GROUPS: list[tuple[str, list[str]]] = [
     ("Quality", ["is_partial", "gap_count", "bar_count"]),
 ]
 
-# Default fields for the "Default" profile
 DEFAULT_PROFILE_FIELDS: list[str] = [
     "open", "high", "low", "close",
     "volume", "buy_volume", "sell_volume",
@@ -71,7 +69,6 @@ DEFAULT_PROFILE_FIELDS: list[str] = [
     "cum_delta", "imbalance_ratio",
 ]
 
-# Default profiles data structure stored in localStorage
 DEFAULT_PROFILES: dict = {
     "profiles": {
         "Default": {"fields": DEFAULT_PROFILE_FIELDS},
@@ -93,7 +90,6 @@ DEFAULT_PROFILES: dict = {
 
 _label_style = {"color": "#888", "fontSize": "11px", "marginBottom": "2px"}
 
-# ── Build checklist columns ───────────────────────────────────────────────────
 
 def _build_field_checklist() -> list:
     cols: list = []
@@ -146,8 +142,67 @@ profiles_page_layout = dbc.Container(
             dbc.Col(
                 html.Div(
                     "Customise which fields appear in the candle tooltip. "
-                    "Profiles are saved in your browser.",
+                    "Browser storage keeps profiles in this browser; "
+                    "use the file controls to persist across machines.",
                     style={"color": "#888", "fontSize": "12px"},
+                ),
+                width=12,
+            ),
+            className="mb-2",
+        ),
+
+        # ── File persistence controls ──────────────────────────────────────────
+        dbc.Row(
+            dbc.Col(
+                dbc.Card(
+                    dbc.CardBody(
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    html.Div(
+                                        id="profile-file-info",
+                                        style={
+                                            "fontSize": "12px",
+                                            "color": "#aaa",
+                                            "fontFamily": "monospace",
+                                            "lineHeight": "30px",
+                                        },
+                                    ),
+                                ),
+                                dbc.Col(
+                                    dbc.ButtonGroup([
+                                        dbc.Button(
+                                            "Load from file",
+                                            id="profile-load-file-btn",
+                                            color="secondary",
+                                            size="sm",
+                                            outline=True,
+                                            title="Replace browser profiles with profiles.json",
+                                        ),
+                                        dbc.Button(
+                                            "Save to file",
+                                            id="profile-save-file-btn",
+                                            color="primary",
+                                            size="sm",
+                                            title="Write current browser profiles to profiles.json on server",
+                                        ),
+                                        dbc.Button(
+                                            "Export JSON",
+                                            id="profile-export-btn",
+                                            color="secondary",
+                                            size="sm",
+                                            outline=True,
+                                            title="Download profiles as a JSON file to your browser",
+                                        ),
+                                    ]),
+                                    width="auto",
+                                ),
+                            ],
+                            align="center",
+                        ),
+                        style={"padding": "8px 12px"},
+                    ),
+                    style={"backgroundColor": "#1e1e1e", "border": "1px solid #333"},
                 ),
                 width=12,
             ),
@@ -178,7 +233,7 @@ profiles_page_layout = dbc.Container(
                                 size="sm",
                             ),
                             dbc.Button(
-                                "＋ Create",
+                                "+ Create",
                                 id="profile-create-btn",
                                 color="primary",
                                 size="sm",
@@ -189,16 +244,17 @@ profiles_page_layout = dbc.Container(
                 ),
                 dbc.Col(
                     [
-                        html.Div(" ", style=_label_style),  # spacer
+                        html.Div(" ", style=_label_style),
                         dbc.ButtonGroup([
                             dbc.Button(
-                                "💾 Save",
+                                "Save",
                                 id="profile-save-btn",
                                 color="success",
                                 size="sm",
+                                title="Save selected fields into the active profile (browser storage)",
                             ),
                             dbc.Button(
-                                "🗑 Delete",
+                                "Delete",
                                 id="profile-delete-btn",
                                 color="danger",
                                 size="sm",
@@ -211,8 +267,12 @@ profiles_page_layout = dbc.Container(
                 dbc.Col(
                     html.Div(
                         id="profile-status-div",
-                        style={"color": "#80cbc4", "fontSize": "12px",
-                               "lineHeight": "32px", "marginTop": "14px"},
+                        style={
+                            "color": "#80cbc4",
+                            "fontSize": "12px",
+                            "lineHeight": "32px",
+                            "marginTop": "14px",
+                        },
                     ),
                     width=3,
                 ),
@@ -231,18 +291,19 @@ profiles_page_layout = dbc.Container(
                 width=12,
             ),
         ),
-        dbc.Row(
-            _build_field_checklist(),
-            id="profile-checklist-row",
-        ),
+        dbc.Row(_build_field_checklist(), id="profile-checklist-row"),
 
         # ── Preview ────────────────────────────────────────────────────────────
         dbc.Row(
             dbc.Col(
                 [
-                    html.Div("Hover Tooltip Preview",
-                             style={"color": "#888", "fontSize": "11px",
-                                    "marginBottom": "4px", "marginTop": "12px"}),
+                    html.Div(
+                        "Hover Tooltip Preview",
+                        style={
+                            "color": "#888", "fontSize": "11px",
+                            "marginBottom": "4px", "marginTop": "12px",
+                        },
+                    ),
                     html.Div(
                         id="profile-hover-preview",
                         style={
@@ -261,6 +322,9 @@ profiles_page_layout = dbc.Container(
                 width=4,
             ),
         ),
+
+        # ── Hidden: browser download component ────────────────────────────────
+        dcc.Download(id="profile-download"),
     ],
     fluid=True,
     style={"padding": "12px"},

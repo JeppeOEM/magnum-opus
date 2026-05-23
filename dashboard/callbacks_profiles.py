@@ -1,11 +1,46 @@
-"""Callbacks for the /profiles page — candle hover field management."""
+"""Callbacks for the /profiles page -- candle hover field management."""
 from __future__ import annotations
 
 import copy
+import json
 
-from dash import Input, Output, State, callback, html, no_update, ALL, ctx
+from dash import Input, Output, State, callback, html, no_update, ALL
 
+import profile_storage
 from layout_profiles import DEFAULT_PROFILES, FIELD_GROUPS
+
+
+# ── On page open: show file info + auto-load from file when store is empty ────
+
+@callback(
+    Output("hover-profile-store", "data", allow_duplicate=True),
+    Output("profile-file-info", "children"),
+    Input("profile-file-info", "id"),          # fires once when element mounts
+    State("hover-profile-store", "data"),
+    prevent_initial_call=False,
+)
+def init_file_info(_id, store_data):
+    """On profiles page load: show file status; auto-populate store from file
+    the first time (when localStorage is empty / fresh browser)."""
+    path = profile_storage.file_path()
+    file_exists = profile_storage.exists()
+
+    if file_exists:
+        info = f"profiles.json: {path}"
+        color = "#4fc3f7"
+    else:
+        info = f"profiles.json not yet saved  ({path})"
+        color = "#888"
+
+    info_div = html.Span(info, style={"color": color})
+
+    # Auto-load from file only when the browser store is completely empty
+    if store_data is None and file_exists:
+        from_file = profile_storage.load()
+        if from_file:
+            return from_file, info_div
+
+    return no_update, info_div
 
 
 # ── Initialise dropdown from stored profiles ──────────────────────────────────
@@ -15,7 +50,7 @@ from layout_profiles import DEFAULT_PROFILES, FIELD_GROUPS
     Output("profile-active-dd", "value"),
     Input("hover-profile-store", "data"),
 )
-def sync_profile_dropdown(store_data: dict | None):
+def sync_profile_dropdown(store_data):
     data = store_data or DEFAULT_PROFILES
     names = list(data.get("profiles", {}).keys())
     options = [{"label": n, "value": n} for n in names]
@@ -30,7 +65,7 @@ def sync_profile_dropdown(store_data: dict | None):
     Input("profile-active-dd", "value"),
     State("hover-profile-store", "data"),
 )
-def load_profile_fields(active_name: str | None, store_data: dict | None):
+def load_profile_fields(active_name, store_data):
     data = store_data or DEFAULT_PROFILES
     profiles = data.get("profiles", {})
     selected = set(profiles.get(active_name or "", {}).get("fields", []))
@@ -57,18 +92,17 @@ def update_preview(all_values):
     if not selected:
         preview = "No fields selected"
     else:
-        # Simulated hover line
-        preview_lines = [f"ts: 2026-05-23 14:32:00"]
+        lines = ["ts: 2026-05-23 14:32:00"]
         for f in selected[:20]:
-            preview_lines.append(f"{f}: …")
+            lines.append(f"{f}: ...")
         if len(selected) > 20:
-            preview_lines.append(f"… +{len(selected) - 20} more")
-        preview = "\n".join(preview_lines)
+            lines.append(f"... +{len(selected) - 20} more")
+        preview = "\n".join(lines)
 
     return count_msg, preview
 
 
-# ── Save current checklist selection into the active profile ──────────────────
+# ── Save current checklist into active profile (browser store) ────────────────
 
 @callback(
     Output("hover-profile-store", "data", allow_duplicate=True),
@@ -95,7 +129,7 @@ def save_profile(n_clicks, active_name, all_values, store_data):
     data["profiles"][active_name]["fields"] = selected
     data["active"] = active_name
 
-    return data, f"✓ Saved '{active_name}' ({len(selected)} fields)"
+    return data, f"Saved '{active_name}' ({len(selected)} fields)"
 
 
 # ── Create a new profile ──────────────────────────────────────────────────────
@@ -117,24 +151,24 @@ def create_profile(n_clicks, new_name, store_data):
 
     new_name = (new_name or "").strip()
     if not new_name:
-        return no_update, no_update, no_update, no_update, "⚠ Enter a profile name"
+        return no_update, no_update, no_update, no_update, "Enter a profile name"
 
     data = copy.deepcopy(store_data or DEFAULT_PROFILES)
     if "profiles" not in data:
         data["profiles"] = {}
 
     if new_name in data["profiles"]:
-        return no_update, no_update, no_update, no_update, f"⚠ '{new_name}' already exists"
+        return no_update, no_update, no_update, no_update, f"'{new_name}' already exists"
 
     data["profiles"][new_name] = {"fields": []}
     data["active"] = new_name
 
     names = list(data["profiles"].keys())
     options = [{"label": n, "value": n} for n in names]
-    return data, options, new_name, "", f"✓ Created '{new_name}'"
+    return data, options, new_name, "", f"Created '{new_name}'"
 
 
-# ── Delete the active profile ──────────────────────────────────────────────────
+# ── Delete the active profile ─────────────────────────────────────────────────
 
 @callback(
     Output("hover-profile-store", "data", allow_duplicate=True),
@@ -154,11 +188,9 @@ def delete_profile(n_clicks, active_name, store_data):
     profiles = data.get("profiles", {})
 
     if active_name not in profiles:
-        return no_update, no_update, no_update, "⚠ Profile not found"
-
-    # Cannot delete the last profile
+        return no_update, no_update, no_update, "Profile not found"
     if len(profiles) <= 1:
-        return no_update, no_update, no_update, "⚠ Cannot delete the last profile"
+        return no_update, no_update, no_update, "Cannot delete the last profile"
 
     del profiles[active_name]
     data["profiles"] = profiles
@@ -167,7 +199,7 @@ def delete_profile(n_clicks, active_name, store_data):
 
     names = list(profiles.keys())
     options = [{"label": n, "value": n} for n in names]
-    return data, options, new_active, f"✓ Deleted '{active_name}'"
+    return data, options, new_active, f"Deleted '{active_name}'"
 
 
 # ── Switch active profile when dropdown changes ───────────────────────────────
@@ -184,3 +216,87 @@ def switch_active_profile(active_name, store_data):
     data = copy.deepcopy(store_data or DEFAULT_PROFILES)
     data["active"] = active_name
     return data
+
+
+# ── Save to server file ───────────────────────────────────────────────────────
+
+@callback(
+    Output("profile-status-div", "children", allow_duplicate=True),
+    Output("profile-file-info", "children", allow_duplicate=True),
+    Input("profile-save-file-btn", "n_clicks"),
+    State("hover-profile-store", "data"),
+    prevent_initial_call=True,
+)
+def save_to_file(n_clicks, store_data):
+    if not n_clicks:
+        return no_update, no_update
+
+    data = store_data or DEFAULT_PROFILES
+    ok = profile_storage.save(data)
+    path = profile_storage.file_path()
+
+    if ok:
+        n = len(data.get("profiles", {}))
+        return (
+            f"Saved {n} profile(s) to file",
+            html.Span(f"profiles.json: {path}", style={"color": "#4fc3f7"}),
+        )
+    return (
+        "Error: could not write file (check logs)",
+        html.Span(f"profiles.json: {path}  (write failed)", style={"color": "#f44336"}),
+    )
+
+
+# ── Load from server file ─────────────────────────────────────────────────────
+
+@callback(
+    Output("hover-profile-store", "data", allow_duplicate=True),
+    Output("profile-status-div", "children", allow_duplicate=True),
+    Output("profile-file-info", "children", allow_duplicate=True),
+    Input("profile-load-file-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def load_from_file(n_clicks):
+    if not n_clicks:
+        return no_update, no_update, no_update
+
+    path = profile_storage.file_path()
+
+    if not profile_storage.exists():
+        return (
+            no_update,
+            "File not found -- save first",
+            html.Span(f"profiles.json: {path}  (not found)", style={"color": "#f44336"}),
+        )
+
+    data = profile_storage.load()
+    if data is None:
+        return (
+            no_update,
+            "Error reading file (check logs)",
+            html.Span(f"profiles.json: {path}  (read error)", style={"color": "#f44336"}),
+        )
+
+    n = len(data.get("profiles", {}))
+    return (
+        data,
+        f"Loaded {n} profile(s) from file",
+        html.Span(f"profiles.json: {path}", style={"color": "#4fc3f7"}),
+    )
+
+
+# ── Export JSON to browser download ──────────────────────────────────────────
+
+@callback(
+    Output("profile-download", "data"),
+    Input("profile-export-btn", "n_clicks"),
+    State("hover-profile-store", "data"),
+    prevent_initial_call=True,
+)
+def export_json(n_clicks, store_data):
+    if not n_clicks:
+        return no_update
+
+    data = store_data or DEFAULT_PROFILES
+    content = json.dumps(data, indent=2, ensure_ascii=False)
+    return {"content": content, "filename": "profiles.json", "type": "application/json"}
