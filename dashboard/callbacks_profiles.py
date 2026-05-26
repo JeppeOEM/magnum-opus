@@ -10,37 +10,36 @@ import profile_storage
 from layout_profiles import DEFAULT_PROFILES, FIELD_GROUPS
 
 
-# ── On page open: show file info + auto-load from file when store is empty ────
+# ── On page open: show file info ──────────────────────────────────────────────
+
+@callback(
+    Output("profile-file-info", "children"),
+    Input("url", "pathname"),
+)
+def show_file_info(pathname):
+    """Update file info div whenever the URL changes."""
+    path = profile_storage.file_path()
+    if profile_storage.exists():
+        return html.Span(f"profiles.json: {path}", style={"color": "#4fc3f7"})
+    return html.Span(f"profiles.json not yet saved  ({path})", style={"color": "#888"})
+
+
+# ── Auto-load from file when store is empty and user visits /profiles ─────────
 
 @callback(
     Output("hover-profile-store", "data", allow_duplicate=True),
-    Output("profile-file-info", "children"),
-    Input("profile-file-info", "id"),          # fires once when element mounts
+    Input("url", "pathname"),
     State("hover-profile-store", "data"),
-    prevent_initial_call=False,
+    prevent_initial_call=True,
 )
-def init_file_info(_id, store_data):
-    """On profiles page load: show file status; auto-populate store from file
-    the first time (when localStorage is empty / fresh browser)."""
-    path = profile_storage.file_path()
-    file_exists = profile_storage.exists()
-
-    if file_exists:
-        info = f"profiles.json: {path}"
-        color = "#4fc3f7"
-    else:
-        info = f"profiles.json not yet saved  ({path})"
-        color = "#888"
-
-    info_div = html.Span(info, style={"color": color})
-
-    # Auto-load from file only when the browser store is completely empty
-    if store_data is None and file_exists:
-        from_file = profile_storage.load()
-        if from_file:
-            return from_file, info_div
-
-    return no_update, info_div
+def auto_load_on_profiles_visit(pathname, store_data):
+    """Auto-populate store from file the first time (when localStorage is empty)."""
+    if pathname != "/profiles":
+        return no_update
+    if store_data is not None:
+        return no_update
+    from_file = profile_storage.load()
+    return from_file if from_file else no_update
 
 
 # ── Initialise dropdown from stored profiles ──────────────────────────────────

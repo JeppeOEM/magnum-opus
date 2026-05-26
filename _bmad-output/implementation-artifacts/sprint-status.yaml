@@ -384,3 +384,12 @@ development_status:
   40-2-symbol-dropdown: done
   40-3-strategy-dropdown-and-results-display: done
   epic-40-retrospective: optional
+
+
+  # ─── Epic R: Repo Split & Deploy Readiness ───────────────────────────────────
+  epic-R: done
+  R1-harden-deploy-readiness: done
+  R2-pipeline-repo-split: done
+  R3-consumer-repo-skeleton: done
+  R4-contract-validation-script: done
+  epic-R-retrospective: done

@@ -7,7 +7,7 @@ FROM python:3.13.13-slim
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /install /usr/local
-COPY app.py layout.py layout_bots.py layout_backtest.py layout_chart.py layout_ml.py layout_ml_clusters.py layout_ml_data.py layout_ml_live.py layout_ml_models.py layout_strategies.py callbacks.py callbacks_bots.py callbacks_backtest.py callbacks_chart.py callbacks_ml.py callbacks_strategies.py data.py bot_data.py backtest_data.py charts.py ./
+COPY app.py layout.py layout_bots.py layout_backtest.py layout_chart.py layout_ml.py layout_ml_clusters.py layout_ml_data.py layout_ml_live.py layout_ml_models.py layout_strategies.py layout_profiles.py callbacks.py callbacks_bots.py callbacks_backtest.py callbacks_chart.py callbacks_ml.py callbacks_strategies.py callbacks_profiles.py data.py bot_data.py backtest_data.py charts.py profile_storage.py ./
 COPY assets/ ./assets/
 RUN useradd -m -u 1000 dashboard && chown -R dashboard:dashboard /app
 USER dashboard
