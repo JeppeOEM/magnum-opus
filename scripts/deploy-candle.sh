@@ -9,6 +9,7 @@
 # Environment:
 #   DEPLOY_HEALTH_TIMEOUT_S  seconds to wait for new slot shadow_lag=0 (default 60)
 #   SHUTDOWN_TIMEOUT_S       seconds for SIGTERM graceful shutdown (default 10)
+#   QUESTDB_HTTP_PORT        QuestDB HTTP port for write-verification probe (default 9000)
 #   FORCE_SIGKILL            set to "true" to skip SIGTERM and use SIGKILL immediately
 #                            (for integration testing of XAUTOCLAIM recovery path)
 #
@@ -142,6 +143,54 @@ if [ "$post_promote_result" -ne 0 ]; then
 fi
 log "Step 5: post-promotion health OK"
 
+# ── Step 5b: Verify QuestDB is receiving writes ───────────────────────────────
+# Polls snapshot_1s for a fresh row within the last 10 seconds.
+# A healthy candle-service writes a 1s bar every second; if none appear within
+# 15s post-promotion the ILP connection is broken — roll back immediately.
+log "Step 5b: verifying QuestDB writes (up to 15s for a fresh snapshot_1s row)"
+QUESTDB_HTTP_PORT="${QUESTDB_HTTP_PORT:-9000}"
+verify_questdb_writes() {
+  # Graceful no-op if python3 unavailable — QuestDB check skipped rather than blocking deploy.
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "Step 5b WARNING: python3 not found — QuestDB write verification skipped"
+    return 0
+  fi
+  local timeout=15
+  local start
+  start=$(date +%s)
+  while true; do
+    from_us=$(( ($(date +%s) - 10) * 1000000 ))
+    query="SELECT count() FROM snapshot_1s WHERE ts >= ${from_us}"
+    encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$query" 2>/dev/null || true)
+    if [ -n "$encoded" ]; then
+      raw_count=$(curl -sf --max-time 3 \
+        "http://localhost:${QUESTDB_HTTP_PORT}/exec?query=${encoded}" 2>/dev/null \
+        | jq -r '.dataset[0][0] // 0' 2>/dev/null || echo "0")
+      # Strip decimals (QuestDB returns count as float); guard against "null" string.
+      count_int="${raw_count%.*}"
+      if [[ "${count_int}" =~ ^[0-9]+$ ]] && [ "${count_int}" -gt 0 ]; then
+        return 0
+      fi
+    fi
+    now=$(date +%s)
+    if [ $((now - start)) -ge "$timeout" ]; then
+      return 1
+    fi
+    sleep 2
+  done
+}
+qdb_result=0
+verify_questdb_writes || qdb_result=$?
+if [ "$qdb_result" -ne 0 ]; then
+  log "Step 5b FAILED: no rows in snapshot_1s within 15s — rolling back"
+  log "  stopping new slot before restarting old slot to prevent split-brain"
+  docker-compose --profile "candle-${NEW_SLOT}" stop --timeout 5 || true
+  log "  old slot restart IS rollback: XAUTOCLAIM recovers any orphaned messages"
+  docker-compose --profile "candle-${OLD_SLOT}" up -d || true
+  fail "candle-${NEW_SLOT} not writing to QuestDB after promotion"
+fi
+log "Step 5b: QuestDB writes confirmed"
+
 # ── Step 6: Verify new slot is consuming ──────────────────────────────────────
 log "Step 6: verifying candle-${NEW_SLOT} is consuming (30s observation)"
 start_ts=$(date +%s)
@@ -167,7 +216,12 @@ done
 if [ "$converging" = "true" ] || [ "$prev_lag" -le 0 ]; then
   log "Step 6: consumer lag trending down — deployment confirmed"
 else
-  log "Step 6: WARNING — consumer lag not clearly trending down; monitor manually"
+  log "Step 6 FAILED: consumer lag not converging after promotion — rolling back"
+  log "  stopping new slot before restarting old slot to prevent split-brain"
+  docker-compose --profile "candle-${NEW_SLOT}" stop --timeout 5 || true
+  log "  old slot restart IS rollback: XAUTOCLAIM recovers any orphaned messages"
+  docker-compose --profile "candle-${OLD_SLOT}" up -d || true
+  fail "candle-${NEW_SLOT} consumer lag not converging — rolled back to candle-${OLD_SLOT}"
 fi
 
 # ── Step 7: Summary ───────────────────────────────────────────────────────────

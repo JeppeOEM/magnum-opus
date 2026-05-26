@@ -396,6 +396,49 @@ vps-logs:
 check-data-ready:
 	python3 scripts/data_readiness_gate.py --symbol $(SYMBOL) --exchange $(or $(EXCHANGE),bybit)
 
+# ── Pipeline repo (magnum-opus-pipeline) ──────────────────────────────────────
+
+## Start pipeline-only services (aggregator + candle-blue + redis + questdb, no consumers)
+pipeline-up:
+	VERSION=$(VERSION) GIT_SHA=$(GIT_SHA) BUILD_TIME=$(BUILD_TIME) \
+	docker compose -f docker-compose.pipeline.yml --profile candle-blue up -d --build
+	@echo ""
+	@echo "  aggregator   http://localhost:8080/health"
+	@echo "  candle-blue  http://localhost:8081/health"
+	@echo "  questdb      http://localhost:9000"
+	@echo "  redis        localhost:6379"
+	@echo ""
+	@echo "  Consumer repos: REDIS_URL=redis://localhost:6379  QUESTDB_URL=http://localhost:9000"
+
+## Stop pipeline-only services
+pipeline-down:
+	docker compose -f docker-compose.pipeline.yml \
+	  --profile candle-blue --profile candle-green --profile monitoring down
+
+## Validate pipeline ↔ trading contract (requires pipeline running)
+validate-contract:
+	python3 scripts/validate-contract.py
+
+## Tag and release a new pipeline version
+## Usage: make release VERSION=1.1.0
+release:
+	@[ -n "$(VERSION)" ] || (echo "Usage: make release VERSION=x.y.z"; exit 1)
+	@printf "%s\n" "$(VERSION)" > VERSION
+	git add VERSION
+	git commit -m "chore: release pipeline-v$(VERSION)"
+	git tag "pipeline-v$(VERSION)"
+	@echo ""
+	@echo "  ✓ Tagged pipeline-v$(VERSION)"
+	@echo "  Run: git push origin main --tags"
+
+## Extract pipeline repo using git-filter-repo (creates /tmp/magnum-opus-pipeline)
+setup-pipeline-repo:
+	bash scripts/setup-pipeline-repo.sh
+
+## Extract trading repo using git-filter-repo (creates /tmp/magnum-opus-trading)
+setup-trading-repo:
+	bash scripts/setup-trading-repo.sh
+
 ## SSH into the VPS
 vps-ssh:
 	@[ -n "$(VPS)" ] || (echo "VPS not set"; exit 1)

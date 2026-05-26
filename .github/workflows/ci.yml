@@ -121,6 +121,22 @@ jobs:
       - name: Tests
         run: go test -race -count=1 ./...
 
+  validate-contract:
+    name: Contract validation (placeholder — requires running pipeline)
+    runs-on: ubuntu-latest
+    # Enable on a self-hosted runner once Redis + QuestDB are available in CI.
+    # Run locally before deploy: python3 scripts/validate-contract.py
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install redis requests
+      - run: python3 scripts/validate-contract.py
+        env:
+          REDIS_URL: redis://localhost:6379
+          QUESTDB_URL: http://localhost:9000
+
   ml-test:
     name: ML-service tests
     runs-on: ubuntu-latest

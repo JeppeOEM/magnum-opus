@@ -1,0 +1,225 @@
+# docker-compose.pipeline.yml — pipeline repo (magnum-opus-pipeline) standalone compose.
+# Brings up: aggregator, candle-service (blue/green), Redis, QuestDB, and monitoring stack.
+# NO consumer services (bot, gateway, dashboard, ml-service) — those live in magnum-opus-trading.
+#
+# Usage:
+#   docker compose -f docker-compose.pipeline.yml up -d                    # core pipeline
+#   docker compose -f docker-compose.pipeline.yml --profile candle-blue up -d
+#   docker compose -f docker-compose.pipeline.yml --profile monitoring up -d
+#
+# When extracted to the pipeline repo, rename to docker-compose.yml.
+
+services:
+  aggregator:
+    build:
+      context: ./aggregator
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+    environment:
+      CONFIG_FILE: /config.yaml
+      KUCOIN_PUBLIC: "true"
+      REDIS_ADDR: redis:6379
+      QUESTDB_ILP_ADDR: questdb:9009
+      QUESTDB_HTTP_ADDR: questdb:9000
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 600m
+          cpus: "2.0"
+    restart: unless-stopped
+
+  candle-blue:
+    # No profile — candle-blue is the default active slot and starts with bare `docker compose up`.
+    # candle-green stays profiled (only started during blue-green deploys).
+    build:
+      context: ./candle-service
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    env_file:
+      - path: candle-service/.env
+        required: false
+    environment:
+      CANDLE_SLOT: blue
+      CANDLE_SERVICE_PORT: "8081"
+      CANDLE_SHADOW_MODE: ${CANDLE_SHADOW_MODE:-false}
+      REDIS_URL: redis://redis:6379
+      QUESTDB_ILP_ADDR: questdb:9009
+      QUESTDB_HTTP_ADDR: questdb:9000
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 400m
+          cpus: "1.0"
+    restart: unless-stopped
+
+  candle-green:
+    profiles: [candle-green]
+    build:
+      context: ./candle-service
+      args:
+        VERSION: ${VERSION:-dev}
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    env_file:
+      - path: candle-service/.env
+        required: false
+    environment:
+      CANDLE_SLOT: green
+      CANDLE_SERVICE_PORT: "8081"
+      CANDLE_SHADOW_MODE: ${CANDLE_SHADOW_MODE:-false}
+      REDIS_URL: redis://redis:6379
+      QUESTDB_ILP_ADDR: questdb:9009
+      QUESTDB_HTTP_ADDR: questdb:9000
+    ports:
+      - "8082:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 400m
+          cpus: "1.0"
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.6.3-alpine
+    ports:
+      - "127.0.0.1:6379:6379"   # localhost only — prevents unauthenticated Redis exposure on VPS
+    volumes:
+      - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  questdb:
+    image: questdb/questdb:9.3.5
+    ports:
+      - "9000:9000"   # HTTP — exposed to host so trading consumers can query
+      - "9009:9009"   # ILP write port — pipeline-internal, exposed for dev access
+    volumes:
+      - questdb-data:/var/lib/questdb
+      - questdb-conf:/etc/questdb
+    deploy:
+      resources:
+        limits:
+          memory: 8g
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/exec?query=select+1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus:v3.11.1
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - "9090:9090"
+    depends_on:
+      - aggregator
+    restart: unless-stopped
+
+  alertmanager:
+    profiles: [monitoring]
+    image: prom/alertmanager:v0.32.1
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+  loki:
+    profiles: [monitoring]
+    image: grafana/loki:3.7.2
+    command: -config.file=/etc/loki/loki.yaml
+    volumes:
+      - ./monitoring/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    profiles: [monitoring]
+    image: grafana/promtail:2.9.10
+    command: -config.file=/etc/promtail/promtail.yaml
+    volumes:
+      - ./monitoring/promtail/promtail.yaml:/etc/promtail/promtail.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana:13.0.1-security-01
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  questdb-data:
+  questdb-conf:
+  prometheus-data:
+  alertmanager-data:
+  loki-data:
+  grafana-data:
