@@ -13,19 +13,19 @@ try:
 except ImportError:
     sys.exit("ERROR: pip install requests")
 
-DEFAULT_SYMBOLS = [("kucoin", "BTC-USDT"), ("bybit", "BTCUSDT")]
+DEFAULT_SYMBOLS = [("kucoin", "BTC-USDT")]
+# candles:close includes timeframe suffix — check 1m as representative closed-bar stream.
+# candles:ob is currently unused (OB features written to QuestDB snapshot_1s instead).
 STREAM_KEY_PATTERNS = [
     "ticks:{exchange}:{symbol}",
-    "candles:close:{exchange}:{symbol}",
-    "candles:ob:{exchange}:{symbol}",
+    "candles:close:{exchange}:{symbol}:1m",
 ]
 EXPECTED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "snapshot_1s": [
         ("ts", "TIMESTAMP"), ("exchange", "SYMBOL"), ("symbol", "SYMBOL"),
         ("open", "DOUBLE"), ("high", "DOUBLE"), ("low", "DOUBLE"), ("close", "DOUBLE"),
-        ("volume", "DOUBLE"), ("trade_count", "LONG"), ("buy_volume", "DOUBLE"),
-        ("sell_volume", "DOUBLE"), ("vwap", "DOUBLE"), ("gap_count", "INT"),
-        ("is_partial", "BOOLEAN"),
+        ("volume", "DOUBLE"), ("trade_count", "INT"), ("buy_volume", "DOUBLE"),
+        ("sell_volume", "DOUBLE"), ("gap_count", "INT"), ("is_partial", "BOOLEAN"),
     ],
     "snapshot_1m":  [("ts","TIMESTAMP"),("exchange","SYMBOL"),("symbol","SYMBOL"),
                      ("open","DOUBLE"),("high","DOUBLE"),("low","DOUBLE"),("close","DOUBLE"),("volume","DOUBLE")],
@@ -78,7 +78,7 @@ def get_columns(url: str, table: str) -> dict[str, str] | None | str:
     """Returns column dict, None if table missing, or error string on HTTP/network error."""
     try:
         r = requests.get(f"{url}/exec",
-            params={"query": f"SELECT column, type FROM table_columns('{table}')"}, timeout=5)
+            params={"query": f"table_columns('{table}')"}, timeout=5)
         r.raise_for_status()
         data = r.json()
         if "dataset" not in data:
